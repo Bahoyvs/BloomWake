@@ -8,6 +8,7 @@ export const GAME_STATES = {
   PAUSED: 'PAUSED',
   WAVE_COMPLETE: 'WAVE_COMPLETE',
   GAME_OVER: 'GAME_OVER',
+  VICTORY: 'VICTORY',
 };
 
 export const DEFAULT_PLAYER_STATS = {
@@ -20,9 +21,13 @@ export const DEFAULT_PLAYER_STATS = {
 export class GameState {
   /**
    * @param {EventBus} [bus] - EventBus instance
+   * @param {Object} [options]
+   * @param {number} [options.maxWaves] - Run length; clearing this wave wins the run.
+   *   Defaults to Infinity (endless), Phase 1 passes 5.
    */
-  constructor(bus = new EventBus()) {
+  constructor(bus = new EventBus(), options = {}) {
     this.bus = bus;
+    this.maxWaves = options.maxWaves ?? Infinity;
     this.reset();
   }
 
@@ -108,7 +113,12 @@ export class GameState {
       wave: this.wave,
       score: this.score,
       kills: this.kills,
+      isFinalWave: this.wave >= this.maxWaves,
     });
+
+    if (this.wave >= this.maxWaves) {
+      this.triggerVictory();
+    }
   }
 
   /**
@@ -179,6 +189,29 @@ export class GameState {
     if (this.player.hp === 0) {
       this.triggerGameOver();
     }
+  }
+
+  /**
+   * Record an enemy kill and its score contribution
+   * @param {number} [scoreValue] - Points awarded for the kill
+   */
+  registerKill(scoreValue = 0) {
+    this.kills += 1;
+    this.score += scoreValue;
+    this.bus.emit('enemy:killed', { kills: this.kills, score: this.score });
+  }
+
+  /**
+   * Trigger Victory state — the run's final wave was cleared alive
+   */
+  triggerVictory() {
+    this.currentState = GAME_STATES.VICTORY;
+    this.bus.emit('game:victory', {
+      wave: this.wave,
+      score: this.score,
+      kills: this.kills,
+      level: this.player.level,
+    });
   }
 
   /**

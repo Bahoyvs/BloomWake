@@ -24,6 +24,10 @@ export const ENEMIES = {
     spawnWeight: 10,
     color: '#1a1a24',
     radius: 12,
+    contactDamage: 8,
+    xpValue: 4,
+    scoreValue: 10,
+    shape: 'square',
   },
   [ENEMY_TYPES.ASHFISH]: {
     id: ENEMY_TYPES.ASHFISH,
@@ -36,6 +40,10 @@ export const ENEMIES = {
     spawnWeight: 7,
     color: '#4a5568',
     radius: 14,
+    contactDamage: 10,
+    xpValue: 6,
+    scoreValue: 15,
+    shape: 'circle',
   },
   [ENEMY_TYPES.CRACKED_WISP]: {
     id: ENEMY_TYPES.CRACKED_WISP,
@@ -48,6 +56,10 @@ export const ENEMIES = {
     spawnWeight: 8,
     color: '#a0aec0',
     radius: 9,
+    contactDamage: 6,
+    xpValue: 3,
+    scoreValue: 8,
+    shape: 'triangle',
   },
   [ENEMY_TYPES.RUSTBLOOM]: {
     id: ENEMY_TYPES.RUSTBLOOM,
@@ -60,6 +72,10 @@ export const ENEMIES = {
     spawnWeight: 4,
     color: '#7b341e',
     radius: 20,
+    contactDamage: 14,
+    xpValue: 12,
+    scoreValue: 30,
+    shape: 'square',
   },
   [ENEMY_TYPES.SMOGMOTH]: {
     id: ENEMY_TYPES.SMOGMOTH,
@@ -72,6 +88,10 @@ export const ENEMIES = {
     spawnWeight: 5,
     color: '#2d3748',
     radius: 13,
+    contactDamage: 9,
+    xpValue: 8,
+    scoreValue: 20,
+    shape: 'triangle',
   },
   [ENEMY_TYPES.RUSTWHALE]: {
     id: ENEMY_TYPES.RUSTWHALE,
@@ -84,6 +104,10 @@ export const ENEMIES = {
     isBoss: true,
     color: '#321c1c',
     radius: 45,
+    contactDamage: 25,
+    xpValue: 120,
+    scoreValue: 500,
+    shape: 'circle',
   },
 };
 

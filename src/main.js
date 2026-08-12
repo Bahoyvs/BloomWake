@@ -1,62 +1,81 @@
-import { GameState } from './core/game-state.js';
+/**
+ * BloomWake Phase 1 — browser entry point.
+ * Wires the pure simulation to input, renderer and HUD, and drives the loop.
+ */
+
 import { globalBus } from './core/event-bus.js';
-import { ENEMIES } from './data/enemies.js';
-import { CARDS } from './data/cards.js';
+import { GameState, GAME_STATES } from './core/game-state.js';
+import { Simulation } from './core/simulation.js';
+import { PHASE1 } from './core/constants.js';
+import { KeyboardInput } from './input/input.js';
+import { Renderer } from './render/renderer.js';
+import { Hud } from './ui/hud.js';
 
-console.log('🌸 BloomWake — Phase 0 Initialized');
-console.log('Registered enemies:', Object.keys(ENEMIES));
-console.log('Registered cards:', CARDS.map((c) => c.name));
+/** Fixed simulation step keeps physics and damage timing frame-rate independent. */
+const FIXED_DT = 1 / 60;
+/** Cap on catch-up time after a stall (tab switch, breakpoint). */
+const MAX_FRAME_TIME = 0.25;
 
-const gameState = new GameState(globalBus);
-
-// Setup event logging for dev verification
-globalBus.on('state:change', (event) => {
-  console.log(`[State] Transitioned: ${event.from} -> ${event.to}`);
+const state = new GameState(globalBus, { maxWaves: PHASE1.MAX_WAVES });
+const simulation = new Simulation({
+  bus: globalBus,
+  state,
+  seed: Math.floor(Math.random() * 0xffffffff),
 });
 
-globalBus.on('wave:start', (data) => {
-  console.log(`[Wave ${data.wave}] Started. Enemy Cap: ${data.maxEnemies}, HP Mult: ${data.hpMultiplier.toFixed(2)}x`);
-});
-
-// Mount visual placeholder on canvas
 const canvas = document.getElementById('game-canvas');
-if (canvas) {
-  const ctx = canvas.getContext('2d');
-  
-  function resizeCanvas() {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    drawPlaceholder();
-  }
+const uiLayer = document.getElementById('ui-layer');
+const renderer = new Renderer(canvas, simulation);
 
-  function drawPlaceholder() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // Frutiger Aero Gradient
-    const gradient = ctx.createRadialGradient(
-      canvas.width / 2, canvas.height / 2, 50,
-      canvas.width / 2, canvas.height / 2, canvas.width / 1.2
-    );
-    gradient.addColorStop(0, '#0f3443');
-    gradient.addColorStop(1, '#08121e');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+const hud = new Hud(uiLayer, simulation, {
+  onStart: () => startRun(),
+});
 
-    // Title & Status
-    ctx.font = 'bold 36px Outfit, sans-serif';
-    ctx.fillStyle = '#70e0d6';
-    ctx.textAlign = 'center';
-    ctx.fillText('BLOOMWAKE', canvas.width / 2, canvas.height / 2 - 40);
+const input = new KeyboardInput({
+  onConfirm: () => {
+    const status = state.currentState;
+    if (status === GAME_STATES.IDLE || status === GAME_STATES.GAME_OVER || status === GAME_STATES.VICTORY) {
+      startRun();
+    }
+  },
+  onPause: () => {
+    if (state.currentState === GAME_STATES.RUNNING) state.pause();
+    else if (state.currentState === GAME_STATES.PAUSED) state.resume();
+  },
+});
 
-    ctx.font = '18px Outfit, sans-serif';
-    ctx.fillStyle = '#a8e6cf';
-    ctx.fillText('Aeria: Last Bloom — Phase 0 Core Skeleton Active', canvas.width / 2, canvas.height / 2 + 10);
-
-    ctx.font = '14px Outfit, sans-serif';
-    ctx.fillStyle = '#64748b';
-    ctx.fillText('Pure Node simulation ready • Vitest test suites active', canvas.width / 2, canvas.height / 2 + 45);
-  }
-
-  window.addEventListener('resize', resizeCanvas);
-  resizeCanvas();
+function startRun() {
+  hud.hideOverlay();
+  simulation.startRun();
 }
+
+// Losing focus mid-swarm shouldn't cost the player HP.
+window.addEventListener('blur', () => {
+  if (state.currentState === GAME_STATES.RUNNING) state.pause();
+});
+
+// Dev-only inspection handle — used for manual verification and Phase 2 profiling.
+if (import.meta.env.DEV) {
+  window.__bloomwake = { simulation, state, renderer, hud, input };
+}
+
+let accumulator = 0;
+let lastTime = performance.now();
+
+function frame(now) {
+  const frameTime = Math.min((now - lastTime) / 1000, MAX_FRAME_TIME);
+  lastTime = now;
+  accumulator += frameTime;
+
+  const direction = input.getDirection();
+  while (accumulator >= FIXED_DT) {
+    simulation.update(FIXED_DT, direction);
+    accumulator -= FIXED_DT;
+  }
+
+  hud.update(frameTime);
+  renderer.render();
+  requestAnimationFrame(frame);
+}
+
+requestAnimationFrame(frame);
