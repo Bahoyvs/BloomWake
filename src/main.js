@@ -14,6 +14,9 @@ import { claimDailyBloom } from './core/daily-bloom.js';
 import { openSmallCapsule, completeRun } from './core/meta-progression.js';
 import { KeyboardInput } from './input/input.js';
 import { Renderer } from './render/renderer.js';
+import { assets, ASSET_MANIFEST } from './core/assets.js';
+import { createPixiLoader, installPlaceholders } from './render/pixi-loader.js';
+import { reportAssetContrast } from './render/asset-audit.js';
 import { Hud } from './ui/hud.js';
 import { MetaUi } from './ui/meta-ui.js';
 import { loadSave, saveState } from './ui/storage.js';
@@ -32,10 +35,12 @@ const simulation = new Simulation({
 
 const canvas = document.getElementById('game-canvas');
 const uiLayer = document.getElementById('ui-layer');
-const renderer = new Renderer(canvas, simulation, {
-  // Read live so equipping a variant in the shop takes effect immediately.
-  getCosmetic: () => getEquippedCosmetic(metaState),
-});
+/**
+ * Renderer is created after preload, so it is assigned during boot() rather
+ * than at module scope.
+ * @type {Renderer}
+ */
+let renderer;
 
 const hud = new Hud(uiLayer, simulation, {
   onChooseCard: (cardId) => state.chooseCard(cardId),
@@ -153,9 +158,6 @@ if (import.meta.env.DEV) {
   };
 }
 
-// Open on the menu rather than dropping straight into a run.
-metaUi.showMenu();
-
 let accumulator = 0;
 let lastTime = performance.now();
 
@@ -175,4 +177,54 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
-requestAnimationFrame(frame);
+/**
+ * Preload every texture, then build the renderer and start the loop.
+ *
+ * The game deliberately does not render a frame until the manifest resolves.
+ * Missing files do not block boot: they are recorded and replaced with
+ * generated placeholders, so an empty /assets folder still yields a playable
+ * game and dropping the real PNGs in changes nothing but the pixels.
+ */
+const ASSET_MANIFEST_SIZE = ASSET_MANIFEST.length;
+
+async function boot() {
+  const status = document.getElementById('boot-status');
+  const setStatus = (text) => {
+    if (status) status.textContent = text;
+  };
+
+  setStatus('Loading assets…');
+  const result = await assets.load(createPixiLoader(), {
+    onProgress: (loaded, total) => setStatus(`Loading assets… ${loaded}/${total}`),
+  });
+
+  if (result.missing.length > 0) {
+    const filled = installPlaceholders(assets);
+    console.warn(
+      `[BloomWake] ${filled.length} asset(s) missing, using placeholders:`,
+      filled.join(', ')
+    );
+    setStatus(`Running with ${filled.length} placeholder asset(s)`);
+  }
+
+  // Real art can violate the Phase 6 luminance contract in ways a palette test
+  // cannot see, so measure the loaded pixels once art is present.
+  if (import.meta.env.DEV && result.missing.length < ASSET_MANIFEST_SIZE) {
+    reportAssetContrast(assets);
+  }
+
+  renderer = await Renderer.create(canvas, simulation, {
+    // Read live so equipping a variant in the shop takes effect immediately.
+    getCosmetic: () => getEquippedCosmetic(metaState),
+  });
+
+  if (import.meta.env.DEV) window.__bloomwake.renderer = renderer;
+
+  document.getElementById('boot-screen')?.remove();
+  metaUi.showMenu();
+
+  lastTime = performance.now();
+  requestAnimationFrame(frame);
+}
+
+boot();

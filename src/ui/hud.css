@@ -7,15 +7,46 @@
  */
 
 :root {
+  /* Base glass tints */
   --aero-glass: rgba(18, 58, 76, 0.42);
-  --aero-glass-strong: rgba(14, 46, 62, 0.78);
-  --aero-edge: rgba(160, 232, 255, 0.32);
-  --aero-edge-bright: rgba(210, 245, 255, 0.75);
+  --aero-glass-strong: rgba(12, 44, 60, 0.72);
+  --aero-edge: rgba(160, 232, 255, 0.34);
+  --aero-edge-bright: rgba(228, 250, 255, 0.9);
+
+  /* Text */
   --aero-text: #e8fbff;
   --aero-text-dim: #8fb8c9;
+
+  /* Accents */
   --aero-cyan: #7fe6ff;
   --aero-aqua: #5ad6ff;
   --aero-mint: #9bf5c4;
+
+  /*
+   * The Vista Aero "waterline": a bright glossy upper half and a matte lower
+   * half separated by a HARD stop at 50%. This single gradient is what makes a
+   * panel read as curved glass rather than a flat translucent rectangle.
+   */
+  --aero-specular: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.34) 0%,
+    rgba(255, 255, 255, 0.14) 49.9%,
+    rgba(255, 255, 255, 0.03) 50%,
+    rgba(255, 255, 255, 0.09) 100%
+  );
+
+  /* Top highlight line + cyan inner glow + deep outer shadow. */
+  --aero-shadow:
+    inset 0 1px 0 var(--aero-edge-bright),
+    inset 0 0 24px rgba(127, 230, 255, 0.22),
+    0 14px 40px rgba(0, 0, 0, 0.62);
+
+  --aero-shadow-soft:
+    inset 0 1px 0 var(--aero-edge-bright),
+    inset 0 0 16px rgba(127, 230, 255, 0.16),
+    0 8px 24px rgba(0, 0, 0, 0.5);
+
+  --aero-blur: blur(8px);
 }
 
 .hud {
@@ -36,10 +67,11 @@
   justify-content: center;
   gap: 28px;
   padding: 14px 20px;
-  background: linear-gradient(180deg, rgba(7, 30, 42, 0.86), rgba(7, 30, 42, 0));
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: var(--aero-specular), linear-gradient(180deg, rgba(7, 34, 48, 0.9), rgba(7, 30, 42, 0.1));
+  backdrop-filter: var(--aero-blur);
+  -webkit-backdrop-filter: var(--aero-blur);
   border-bottom: 1px solid var(--aero-edge);
+  box-shadow: inset 0 1px 0 var(--aero-edge-bright), 0 6px 22px rgba(0, 0, 0, 0.45);
   font-size: 14px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -75,13 +107,13 @@
 
 .hud__bar {
   position: relative;
-  height: 14px;
+  height: 16px;
   border: 1px solid var(--aero-edge);
-  border-radius: 8px;
-  background: var(--aero-glass);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-  box-shadow: inset 0 1px 0 var(--aero-edge-bright);
+  border-radius: 999px;
+  background: var(--aero-specular), var(--aero-glass);
+  backdrop-filter: var(--aero-blur);
+  -webkit-backdrop-filter: var(--aero-blur);
+  box-shadow: var(--aero-shadow-soft);
   overflow: hidden;
 }
 
@@ -92,8 +124,14 @@
 }
 
 .hud__bar--hp .hud__bar-fill {
-  background: linear-gradient(180deg, #eafcff, #6fd6f0);
-  box-shadow: 0 0 12px rgba(127, 230, 255, 0.55);
+  background:
+    linear-gradient(180deg,
+      rgba(255, 255, 255, 0.75) 0%,
+      rgba(255, 255, 255, 0.28) 49.9%,
+      rgba(255, 255, 255, 0.02) 50%,
+      rgba(255, 255, 255, 0.14) 100%),
+    linear-gradient(180deg, #d8f8ff, #4fc3e8);
+  box-shadow: 0 0 16px rgba(127, 230, 255, 0.65), inset 0 -1px 3px rgba(0, 40, 60, 0.4);
 }
 
 .hud__bar--xp {
@@ -101,8 +139,14 @@
 }
 
 .hud__bar--xp .hud__bar-fill {
-  background: linear-gradient(180deg, #d7fff0, var(--aero-mint));
-  box-shadow: 0 0 10px rgba(155, 245, 196, 0.5);
+  background:
+    linear-gradient(180deg,
+      rgba(255, 255, 255, 0.7) 0%,
+      rgba(255, 255, 255, 0.24) 49.9%,
+      rgba(255, 255, 255, 0.02) 50%,
+      rgba(255, 255, 255, 0.12) 100%),
+    linear-gradient(180deg, #ccffe8, #57d69a);
+  box-shadow: 0 0 14px rgba(155, 245, 196, 0.6);
 }
 
 .hud__bar-text {
@@ -175,9 +219,9 @@
   justify-content: center;
   gap: 22px;
   padding: 24px;
-  background: radial-gradient(circle at 50% 40%, rgba(10, 44, 60, 0.82), rgba(3, 10, 16, 0.94));
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
+  background: radial-gradient(circle at 50% 40%, rgba(10, 48, 66, 0.78), rgba(2, 8, 14, 0.93));
+  backdrop-filter: var(--aero-blur);
+  -webkit-backdrop-filter: var(--aero-blur);
   pointer-events: auto;
 }
 
@@ -209,21 +253,24 @@
   text-align: left;
   color: inherit;
   font: inherit;
-  background: var(--aero-glass-strong);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: var(--aero-specular), var(--aero-glass-strong);
+  backdrop-filter: var(--aero-blur);
+  -webkit-backdrop-filter: var(--aero-blur);
   border: 1px solid var(--aero-edge);
   border-top-width: 3px;
-  border-radius: 10px;
-  box-shadow: inset 0 1px 0 var(--aero-edge-bright), 0 8px 26px rgba(0, 0, 0, 0.45);
+  border-radius: 12px;
+  box-shadow: var(--aero-shadow);
   cursor: pointer;
-  transition: transform 0.12s ease, background 0.12s ease;
+  transition: transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease;
 }
 
 .hud__card:hover {
-  transform: translateY(-3px);
-  background: rgba(24, 68, 88, 0.85);
-  box-shadow: inset 0 1px 0 var(--aero-edge-bright), 0 12px 32px rgba(0, 0, 0, 0.55);
+  transform: translateY(-4px);
+  filter: brightness(1.12);
+  box-shadow:
+    inset 0 1px 0 var(--aero-edge-bright),
+    inset 0 0 30px rgba(127, 230, 255, 0.35),
+    0 20px 48px rgba(0, 0, 0, 0.68);
 }
 
 .hud__card--common { border-top-color: #8fb8c9; }

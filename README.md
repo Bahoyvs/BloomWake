@@ -8,7 +8,7 @@ Spesifikasyon: [`Bloomwake_GDD_v1.md`](Bloomwake_GDD_v1.md) · Plan: [`Bloomwake
 
 ---
 
-## Durum: Faz 6 tamamlandı (Frutiger Aero görsel katmanı)
+## Durum: Faz 6b tamamlandı (PixiJS sprite pipeline)
 
 | Faz | Kapsam | Durum |
 |---|---|---|
@@ -19,7 +19,8 @@ Spesifikasyon: [`Bloomwake_GDD_v1.md`](Bloomwake_GDD_v1.md) · Plan: [`Bloomwake
 | Faz 4 | Tam düşman rosteri (Tarling, Ashfish, Cracked Wisp, Rustbloom, Smogmoth) + Rustwhale Boss & Telegraph | ✅ |
 | Faz 5 | Bloom Capsule + Petal Meta-İlerleme + Daily Bloom | ✅ |
 | Faz 6 | Görsel/tema katmanı (Frutiger Aero/Aqua + Frutevil) | ✅ |
-| Faz 6b | Ses tasarımı (WebAudio) | ⏳ |
+| Faz 6b | PixiJS sprite pipeline + asset preloader | ✅ (asset bekliyor) |
+| Faz 6c | Ses tasarımı (WebAudio) | ⏳ |
 | Faz 7 | Mobil kontrol + cilalama | ⏳ |
 
 Faz 4 kapsamı: 5 Frutevil düşman tipi, 64px Spatial Hash Grid collision optimizasyonu, Rustbloom spor tuzak alanları, Rustwhale Boss & formüle bağlı deterministik Kara Gelgit (Black Tide) telegraph AoE saldırısı.
@@ -62,15 +63,38 @@ bozacak bir değişiklik playtest'te değil, testte yakalanır.
 Ölçüm (200 düşman + 50 mermi, canlı canvas piksel analizi): ekrandaki en parlak
 piksel Dewling'in kendisi, Dewling çevresindeki sürüden **9 kat** daha parlak.
 
-Düşman sprite'ları prosedürel olarak Canvas 2D ile çizilir (görsel asset yok),
-bu da build boyutunu küçük tutar.
+(Faz 6b ile karakter/düşman çizimi sprite'a taşındı — aşağıya bakın. Palet
+kuralı hâlâ geçerli, ama artık gerçek PNG piksellerini de denetlemek gerekiyor.)
+
+### Faz 6b — Sprite pipeline
+
+Prosedürel çizim karakter ve düşmanlar için bırakıldı; artık **PixiJS sprite**
+kullanılıyor. Sadece hazır görseli olmayan efektler (AoE halkaları, ışın,
+bıçaklar, boss telegraph, arena kenarı) vektör olarak `PIXI.Graphics` ile
+çiziliyor.
+
+- `src/core/assets.js` — manifest + preload yaşam döngüsü. Yükleyici **enjekte
+  edilir**, bu yüzden bu dosya PixiJS import etmez ve Node'da test edilebilir;
+  gerçek yükleyici `src/render/pixi-loader.js` içinde.
+- Eksik dosya **boot'u durdurmaz**: `missing` listesine yazılır ve üretilen bir
+  placeholder ile doldurulur. `/assets` boşken bile oyun çalışır.
+- Sprite ölçeği çarpışma yarıçapından türetilir (`scaleForRadius`), yani görsel
+  her çözünürlükte gelebilir; anchor daima (0.5, 0.5).
+- Hasar flaşı ayrı sprite değil, GPU **tint**.
+
+Görselleri `assets/sprites/` ve `assets/ui/` altına bırakmak yeterli — kod
+değişikliği gerekmez. Detaylar: [`assets/README.md`](assets/README.md).
+
+`src/render/asset-audit.js` yüklenen dokümanların gerçek piksellerini ölçüp Faz 6
+parlaklık sözleşmesine uyup uymadığını dev modunda raporlar; palet testi gerçek
+PNG'leri göremediği için bu boşluğu kapatır.
 
 ### Denge simülasyonu & Testler
 
 ```bash
 npm test
 ```
-261 test geçiyor (17 test dosyası).
+282 test geçiyor (18 test dosyası).
 
 ```bash
 node tests/balance-sim.js
@@ -120,13 +144,17 @@ src/core/      simülasyon çekirdeği (saf, testable)
   cosmetics.js   kozmetik sahiplik/kuşanma
   daily-bloom.js yerel-güne bağlı günlük bonus (saf, timestamp parametreli)
   meta-progression.js  run sonucu -> kapsül -> kalıcı state köprüsü
+  assets.js      asset manifesti + preload (yükleyici enjekte edilir)
 src/data/      düşman, kart, ödül, yükseltme ve kozmetik tabloları
-src/render/    Canvas 2D renderer + kamera
+assets/        oyun görselleri (sprites/ + ui/) — bkz. assets/README.md
+src/render/    PixiJS sprite renderer + kamera
   theme.js       Frutiger Aero/Frutevil paleti + kontrast & Z_ORDER kuralları
-  sprites.js     prosedürel Frutevil düşman ve Dewling sprite'ları
-  particles.js   havuzlanmış parçacık sistemi
+  sprites.js     sprite yapılandırması, yarıçaptan ölçek, tint
+  pixi-loader.js PIXI.Assets yükleyici + placeholder üretimi
+  asset-audit.js yüklenen doku parlaklık denetimi (dev)
+  particles.js   havuzlanmış PIXI sprite parçacık sistemi
   screen-shake.js  trauma tabanlı ekran sarsıntısı
-  renderer.js    arka plan, hazard, boss telegraph, çizim sırası
+  renderer.js    Container katmanları, vektör VFX, çizim sırası
 src/ui/        DOM HUD, draft ekranı, meta ekranları (menü/mağaza/sonuç)
   meta-ui.js     Petal mağazası, Bloom Complete, Daily Bloom, toast
   storage.js     localStorage kalıcılığı (tek DOM dokunan katman)

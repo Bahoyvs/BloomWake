@@ -1,61 +1,179 @@
 /**
- * Canvas 2D renderer (Phase 6 — Frutiger Aero/Aqua theme).
+ * PixiJS sprite renderer (Phase 6b).
  *
- * Replaces the Phase 1-5 grey box. Responsibilities:
- *   - Frutiger Aero background: soft aqua gradient, drifting bubbles, light rays
- *   - Frutevil enemy sprites drawn procedurally (src/render/sprites.js)
- *   - Particle effects and trauma-based screen shake
- *   - STRICT layering per Z_ORDER, with the Dewling and its trail always last
+ * Replaces the Phase 6 immediate-mode Canvas 2D renderer. Entities are sprites;
+ * only VFX with no authored art (AoE rings, beam, blades, telegraph, arena
+ * edge) remain vector, drawn as PIXI.Graphics.
  *
- * The Visual Soup mitigation from the Development Plan lives in two places:
- * the palette split enforced by theme.js, and the draw order enforced here.
- * Nothing is permitted to paint over the Dewling.
+ * LAYERING
+ * Z_ORDER from theme.js is realised as real Containers added in order, so the
+ * Visual Soup rule — nothing paints above the Dewling — is now structural
+ * rather than a convention about call order. Adding a draw call in the wrong
+ * place cannot break it; you would have to add it to the wrong container.
+ *
+ * PERFORMANCE
+ * Sprites are pooled per texture key and parked with `visible = false` instead
+ * of being removed, so a wave wipe costs no display-list churn. Pixi batches
+ * same-texture sprites automatically, which is the whole reason for the pivot.
  */
 
+import { Application, Container, Graphics, Sprite, TilingSprite } from 'pixi.js';
 import { WORLD, PLAYER_CFG } from '../core/constants.js';
 import { clamp } from '../core/math.js';
-import { THEME, getEnemyPalette, withAlpha } from './theme.js';
-import { drawEnemy, drawDewling, drawOrb } from './sprites.js';
+import { assets as defaultAssets, ASSET_KEYS } from '../core/assets.js';
+import { THEME, getEnemyPalette } from './theme.js';
+import {
+  makeSprite,
+  scaleForRadius,
+  syncEnemySprite,
+  getEnemySpriteConfig,
+  enemyTextureKey,
+  cosmeticTint,
+  HERO_TEXTURE_KEY,
+  PIXI_TINT,
+  NO_TINT,
+} from './sprites.js';
 import { ParticleSystem } from './particles.js';
 import { ScreenShake, TRAUMA } from './screen-shake.js';
 
-const GRID_SIZE = 140;
 const TRAIL_SAMPLES = 14;
-/** Background bubbles are decorative only and drift in screen space. */
-const BUBBLE_COUNT = 26;
+const GRID_SIZE = 140;
+/** Enemies at or above this radius get a health bar; trash does not. */
+const HEALTH_BAR_MIN_RADIUS = 18;
 
 export class Renderer {
   /**
-   * @param {HTMLCanvasElement} canvas
+   * Construct with an already-initialised Pixi Application.
+   * Use `Renderer.create()` unless you are supplying your own app (tests do).
+   *
+   * @param {Application} app
    * @param {import('../core/simulation.js').Simulation} simulation
    * @param {Object} [options]
-   * @param {() => Object} [options.getCosmetic] - Equipped Dewling cosmetic
    */
-  constructor(canvas, simulation, options = {}) {
-    this.canvas = canvas;
-    this.ctx = canvas.getContext('2d');
+  constructor(app, simulation, options = {}) {
+    this.app = app;
     this.sim = simulation;
+    this.assets = options.assets ?? defaultAssets;
     this.getCosmetic = options.getCosmetic ?? (() => null);
 
-    this.viewWidth = 0;
-    this.viewHeight = 0;
+    this.time = 0;
     this.camera = { x: 0, y: 0 };
     this.trail = [];
-    this.time = 0;
+    /** enemy.id -> { sprite, baseScale, key } */
+    this.enemyViews = new Map();
+    /** texture key -> array of parked sprites */
+    this.spritePools = new Map();
 
-    this.particles = new ParticleSystem();
     this.shake = new ScreenShake();
-    this.bubbles = makeBubbles(BUBBLE_COUNT);
+    this.particles = new ParticleSystem(this.assets);
 
+    this.buildStage();
     this.bindEvents();
     this.resize();
     window.addEventListener('resize', () => this.resize());
   }
 
   /**
-   * Feedback is event-driven so the renderer never has to diff simulation
-   * state to notice something happened.
+   * Async factory — Pixi v8 initialises the renderer asynchronously.
+   *
+   * @param {HTMLCanvasElement} canvas
+   * @param {import('../core/simulation.js').Simulation} simulation
+   * @param {Object} [options]
+   * @returns {Promise<Renderer>}
    */
+  static async create(canvas, simulation, options = {}) {
+    const app = new Application();
+    await app.init({
+      canvas,
+      width: window.innerWidth,
+      height: window.innerHeight,
+      backgroundColor: 0x03080f,
+      antialias: true,
+      resolution: Math.min(window.devicePixelRatio || 1, 2),
+      autoDensity: true,
+      // The game drives its own fixed-step loop; Pixi should not also tick.
+      autoStart: false,
+    });
+    return new Renderer(app, simulation, options);
+  }
+
+  /**
+   * Containers, added in Z_ORDER. The order of these addChild calls IS the
+   * layering contract.
+   */
+  buildStage() {
+    const stage = this.app.stage;
+
+    // Background is screen-space: it must not move with the camera.
+    this.backgroundLayer = new Container();
+    // Everything else lives in the world, which the camera and shake transform.
+    this.world = new Container();
+
+    stage.addChild(this.backgroundLayer, this.world);
+
+    this.layers = {
+      arena: new Container(),
+      hazard: new Container(),
+      telegraph: new Container(),
+      orb: new Container(),
+      enemy: new Container(),
+      projectile: new Container(),
+      cardEffect: new Container(),
+      particle: this.particles.container,
+      playerTrail: new Container(),
+      player: new Container(),
+    };
+
+    for (const layer of Object.values(this.layers)) this.world.addChild(layer);
+
+    this.buildBackground();
+    this.buildArena();
+    this.buildVectorLayers();
+    this.buildPlayer();
+  }
+
+  buildBackground() {
+    const texture = this.assets.get(ASSET_KEYS.BG_AQUA);
+    if (texture) {
+      this.backdrop = new TilingSprite({
+        texture,
+        width: window.innerWidth,
+        height: window.innerHeight,
+      });
+      this.backgroundLayer.addChild(this.backdrop);
+    }
+  }
+
+  buildArena() {
+    this.arenaGfx = new Graphics();
+    this.layers.arena.addChild(this.arenaGfx);
+    this.drawArena();
+  }
+
+  /** One reusable Graphics per vector effect; cleared and redrawn per frame. */
+  buildVectorLayers() {
+    this.hazardGfx = new Graphics();
+    this.telegraphGfx = new Graphics();
+    this.effectGfx = new Graphics();
+    this.beamGfx = new Graphics();
+    this.bladeGfx = new Graphics();
+    this.healthGfx = new Graphics();
+    this.trailGfx = new Graphics();
+    this.shieldGfx = new Graphics();
+
+    this.layers.hazard.addChild(this.hazardGfx);
+    this.layers.telegraph.addChild(this.telegraphGfx);
+    this.layers.cardEffect.addChild(this.effectGfx, this.beamGfx, this.bladeGfx);
+    this.layers.enemy.addChild(this.healthGfx);
+    this.layers.playerTrail.addChild(this.trailGfx);
+    this.layers.player.addChild(this.shieldGfx);
+  }
+
+  buildPlayer() {
+    this.heroSprite = makeSprite(this.assets.get(HERO_TEXTURE_KEY));
+    this.layers.player.addChild(this.heroSprite);
+  }
+
   bindEvents() {
     const bus = this.sim.bus;
 
@@ -67,6 +185,7 @@ export class Renderer {
 
     bus.on('enemy:death', (data) => {
       this.particles.death(data.x, data.y, getEnemyPalette(data.typeId), data.radius);
+      this.releaseEnemyView(data.id);
       if (data.isBoss) this.shake.add(TRAUMA.BOSS_SPAWN);
     });
 
@@ -84,7 +203,7 @@ export class Renderer {
     bus.on('player:level_up', () => {
       const p = this.sim.state.player;
       this.particles.bubbles(p.x, p.y, THEME.hero.rim, 14);
-      this.particles.ring(p.x, p.y, 90, THEME.hero.rim);
+      this.particles.ring(p.x, p.y, 110, THEME.hero.rim);
       this.shake.add(TRAUMA.LEVEL_UP);
     });
 
@@ -99,25 +218,112 @@ export class Renderer {
     });
 
     bus.on('game:over', () => this.shake.add(TRAUMA.DEATH));
-    bus.on('state:reset', () => {
-      this.particles.clear();
-      this.shake.reset();
-      this.trail.length = 0;
-    });
+    bus.on('state:reset', () => this.resetVisuals());
+  }
+
+  resetVisuals() {
+    this.particles.clear();
+    this.shake.reset();
+    this.trail.length = 0;
+    for (const id of [...this.enemyViews.keys()]) this.releaseEnemyView(id);
   }
 
   resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.viewWidth = window.innerWidth;
-    this.viewHeight = window.innerHeight;
-    this.canvas.width = Math.floor(this.viewWidth * dpr);
-    this.canvas.height = Math.floor(this.viewHeight * dpr);
-    this.canvas.style.width = `${this.viewWidth}px`;
-    this.canvas.style.height = `${this.viewHeight}px`;
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    this.app.renderer.resize(width, height);
+    if (this.backdrop) {
+      this.backdrop.width = width;
+      this.backdrop.height = height;
+    }
   }
 
-  /** Camera follows the Dewling, clamped so the arena edge never leaves a gap. */
+  get viewWidth() {
+    return this.app.renderer.width;
+  }
+
+  get viewHeight() {
+    return this.app.renderer.height;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Sprite pooling                                                      */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Take a sprite for a texture key, reusing a parked one when available.
+   * @param {string} key
+   * @returns {Sprite}
+   */
+  acquireSprite(key) {
+    let pool = this.spritePools.get(key);
+    if (!pool) {
+      pool = [];
+      this.spritePools.set(key, pool);
+    }
+
+    const parked = pool.pop();
+    if (parked) {
+      parked.visible = true;
+      return parked;
+    }
+
+    const sprite = makeSprite(this.assets.get(key));
+    this.layers.enemy.addChild(sprite);
+    return sprite;
+  }
+
+  /**
+   * Park a sprite rather than destroying it — no display-list churn on a wipe.
+   * @param {number} id
+   */
+  releaseEnemyView(id) {
+    const view = this.enemyViews.get(id);
+    if (!view) return;
+
+    view.sprite.visible = false;
+    view.sprite.tint = NO_TINT;
+    this.spritePools.get(view.key)?.push(view.sprite);
+    this.enemyViews.delete(id);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Frame                                                               */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * @param {number} dt - Frame time in seconds
+   */
+  render(dt = 1 / 60) {
+    this.time += dt;
+    this.particles.update(dt);
+    this.shake.update(dt);
+    this.updateCamera();
+    this.recordTrail();
+
+    this.syncEnemies();
+    this.syncProjectiles();
+    this.syncOrbs();
+
+    this.drawHazards();
+    this.drawTelegraph();
+    this.drawEffects();
+    this.drawBeam();
+    this.drawBlades();
+    this.drawHealthBars();
+    this.drawTrail();
+    this.drawPlayer();
+    this.drawShield();
+    this.scrollBackdrop();
+
+    // Camera + shake as one transform on the world container.
+    this.world.x = -this.camera.x + this.shake.offsetX;
+    this.world.y = -this.camera.y + this.shake.offsetY;
+    this.world.rotation = this.shake.rotation;
+
+    this.app.render();
+  }
+
   updateCamera() {
     const player = this.sim.state.player;
 
@@ -132,406 +338,269 @@ export class Renderer {
         : clamp(player.y - this.viewHeight / 2, 0, WORLD.HEIGHT - this.viewHeight);
   }
 
+  /** Parallax the backdrop slightly against camera motion. */
+  scrollBackdrop() {
+    if (!this.backdrop) return;
+    this.backdrop.tilePosition.x = -this.camera.x * 0.25;
+    this.backdrop.tilePosition.y = -this.camera.y * 0.25 + Math.sin(this.time * 0.1) * 8;
+  }
+
   recordTrail() {
     const player = this.sim.state.player;
     this.trail.push({ x: player.x, y: player.y });
     if (this.trail.length > TRAIL_SAMPLES) this.trail.shift();
   }
 
-  /**
-   * @param {number} dt - Frame time in seconds
-   */
-  render(dt = 1 / 60) {
-    this.time += dt;
-    this.particles.update(dt);
-    this.shake.update(dt);
-    this.updateCamera();
-    this.recordTrail();
-
-    const ctx = this.ctx;
-    this.drawBackground();
-
-    ctx.save();
-    this.shake.apply(ctx, this.viewWidth / 2, this.viewHeight / 2);
-    ctx.translate(-this.camera.x, -this.camera.y);
-
-    // Z_ORDER, low to high. The last two entries are non-negotiable.
-    this.drawArena();
-    this.drawSporePools();
-    this.drawBossTelegraph();
-    this.drawOrbs();
-    this.drawAoeEffects();
-    this.drawBeam();
-    this.drawEnemies();
-    this.drawProjectiles();
-    this.drawBlades();
-    this.particles.draw(ctx);
-    this.drawTrail();
-    this.drawPlayer();
-    this.drawShield();
-
-    ctx.restore();
-  }
-
-  /* ------------------------------------------------------------------ */
-  /* Frutiger Aero background                                            */
-  /* ------------------------------------------------------------------ */
-
-  /**
-   * Deliberately simple: a two-stop vertical gradient with faint bubbles and
-   * light rays. The Development Plan calls for a SIMPLIFIED background because
-   * detail here is exactly what turns a busy screen into soup.
-   */
-  drawBackground() {
-    const ctx = this.ctx;
-    const gradient = ctx.createLinearGradient(0, 0, 0, this.viewHeight);
-    gradient.addColorStop(0, THEME.background.top);
-    gradient.addColorStop(1, THEME.background.bottom);
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, this.viewWidth, this.viewHeight);
-
-    // Aqua light rays from above.
-    ctx.save();
-    ctx.globalAlpha = 0.06;
-    ctx.fillStyle = THEME.background.ray;
-    for (let i = 0; i < 4; i++) {
-      const x = ((i + 0.5) / 4) * this.viewWidth + Math.sin(this.time * 0.15 + i) * 40;
-      ctx.beginPath();
-      ctx.moveTo(x - 70, 0);
-      ctx.lineTo(x + 70, 0);
-      ctx.lineTo(x + 200, this.viewHeight);
-      ctx.lineTo(x - 200, this.viewHeight);
-      ctx.closePath();
-      ctx.fill();
-    }
-    ctx.restore();
-
-    // Drifting bubbles, screen-space so they read as atmosphere not parallax.
-    ctx.save();
-    for (const bubble of this.bubbles) {
-      const y = (bubble.y - this.time * bubble.speed) % 1;
-      const py = (y < 0 ? y + 1 : y) * this.viewHeight;
-      const px = (bubble.x + Math.sin(this.time * 0.4 + bubble.phase) * 0.02) * this.viewWidth;
-
-      ctx.globalAlpha = bubble.alpha;
-      ctx.strokeStyle = THEME.background.bubble;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(px, py, bubble.size, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  drawArena() {
-    const ctx = this.ctx;
-
-    ctx.strokeStyle = THEME.background.grid;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    const startX = Math.max(0, Math.floor(this.camera.x / GRID_SIZE) * GRID_SIZE);
-    const endX = Math.min(WORLD.WIDTH, this.camera.x + this.viewWidth);
-    for (let x = startX; x <= endX; x += GRID_SIZE) {
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, WORLD.HEIGHT);
-    }
-    const startY = Math.max(0, Math.floor(this.camera.y / GRID_SIZE) * GRID_SIZE);
-    const endY = Math.min(WORLD.HEIGHT, this.camera.y + this.viewHeight);
-    for (let y = startY; y <= endY; y += GRID_SIZE) {
-      ctx.moveTo(0, y);
-      ctx.lineTo(WORLD.WIDTH, y);
-    }
-    ctx.stroke();
-
-    // Glass-edge arena boundary.
-    ctx.strokeStyle = THEME.background.border;
-    ctx.lineWidth = 3;
-    ctx.strokeRect(0, 0, WORLD.WIDTH, WORLD.HEIGHT);
-    ctx.strokeStyle = withAlpha(THEME.hero.rim, 0.18);
-    ctx.lineWidth = 1;
-    ctx.strokeRect(4, 4, WORLD.WIDTH - 8, WORLD.HEIGHT - 8);
-  }
-
-  /* ------------------------------------------------------------------ */
-  /* Hazards                                                             */
-  /* ------------------------------------------------------------------ */
-
-  /** Rustbloom toxic spore pools. */
-  drawSporePools() {
-    const ctx = this.ctx;
-
-    for (const pool of this.sim.sporePools) {
-      if (!pool.alive) continue;
-      const fade = Math.min(1, pool.life / 1.0);
-
-      ctx.globalAlpha = 0.3 * fade;
-      ctx.fillStyle = THEME.frutevil.rust;
-      ctx.beginPath();
-      ctx.arc(pool.x, pool.y, pool.radius, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.globalAlpha = 0.5 * fade;
-      ctx.strokeStyle = THEME.frutevil.rustRim;
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(pool.x, pool.y, pool.radius * (0.55 + Math.sin(this.time * 2) * 0.04), 0, Math.PI * 2);
-      ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
-  }
-
-  /**
-   * Rustwhale "Black Tide" telegraph.
-   * The fill grows to fill the ring exactly as the strike lands, so the player
-   * reads time-remaining from area rather than having to time a flash.
-   */
-  drawBossTelegraph() {
-    const tele = this.sim.bossTelegraph;
-    if (!tele || !tele.active) return;
-
-    const ctx = this.ctx;
-    const progress = Math.min(1, tele.elapsedMs / tele.totalMs);
-
-    ctx.fillStyle = withAlpha(THEME.frutevil.warning, 0.22);
-    ctx.beginPath();
-    ctx.arc(tele.x, tele.y, tele.radius * progress, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Pulsing boundary, faster as the strike approaches.
-    const pulse = 0.55 + Math.sin(this.time * (6 + progress * 14)) * 0.25;
-    ctx.strokeStyle = withAlpha(THEME.frutevil.warning, pulse);
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.arc(tele.x, tele.y, tele.radius, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-
   /* ------------------------------------------------------------------ */
   /* Entities                                                            */
   /* ------------------------------------------------------------------ */
 
-  drawEnemies() {
+  syncEnemies() {
+    const player = this.sim.state.player;
+    const seen = new Set();
+
     for (const enemy of this.sim.enemies) {
       if (!enemy.alive) continue;
-      drawEnemy(this.ctx, enemy, this.time);
-      if (showsHealthBar(enemy)) this.drawHealthBar(enemy);
+      seen.add(enemy.id);
+
+      let view = this.enemyViews.get(enemy.id);
+      if (!view) {
+        const key = enemyTextureKey(enemy.typeId);
+        const sprite = this.acquireSprite(key);
+        const config = getEnemySpriteConfig(enemy.typeId);
+        const baseScale = scaleForRadius(sprite.texture, enemy.radius, config.fit);
+        sprite.scale.set(baseScale);
+        view = { sprite, baseScale, key };
+        this.enemyViews.set(enemy.id, view);
+      }
+
+      syncEnemySprite(view, enemy, this.time, player);
+    }
+
+    // Enemies removed without a death event (wave wipe) still need parking.
+    for (const id of [...this.enemyViews.keys()]) {
+      if (!seen.has(id)) this.releaseEnemyView(id);
     }
   }
 
-  drawHealthBar(enemy) {
-    const ctx = this.ctx;
-    const width = enemy.radius * 2;
-    const ratio = Math.max(0, enemy.hp / enemy.maxHp);
-    const y = enemy.y - enemy.radius - 9;
-
-    ctx.fillStyle = withAlpha(THEME.background.bottom, 0.8);
-    ctx.fillRect(enemy.x - enemy.radius, y, width, 3);
-    ctx.fillStyle = getEnemyPalette(enemy.typeId).rim;
-    ctx.fillRect(enemy.x - enemy.radius, y, width * ratio, 3);
-  }
-
-  drawProjectiles() {
-    const ctx = this.ctx;
+  /**
+   * Projectiles are drawn as a single Graphics batch rather than sprites:
+   * they are tiny, uniform, and there are up to 50+ of them, so one geometry
+   * beats 50 display objects.
+   */
+  syncProjectiles() {
+    if (!this.projectileGfx) {
+      this.projectileGfx = new Graphics();
+      this.layers.projectile.addChild(this.projectileGfx);
+    }
+    const g = this.projectileGfx;
+    g.clear();
 
     for (const p of this.sim.projectiles) {
       if (!p.alive) continue;
-
-      // Motion streak behind the droplet.
-      const speed = Math.hypot(p.vx, p.vy);
-      if (speed > 1) {
-        const len = Math.min(16, speed * 0.03);
-        const angle = Math.atan2(p.vy, p.vx);
-        ctx.save();
-        ctx.translate(p.x, p.y);
-        ctx.rotate(angle);
-        ctx.fillStyle = withAlpha(THEME.offence.dewdrop, 0.35);
-        ctx.fillRect(-len, -p.radius * 0.5, len, p.radius);
-        ctx.restore();
-      }
-
-      ctx.fillStyle = THEME.offence.dewdrop;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-      ctx.fill();
+      g.circle(p.x, p.y, p.radius);
     }
+    g.fill({ color: PIXI_TINT.dewdrop, alpha: 0.95 });
   }
 
-  drawOrbs() {
+  syncOrbs() {
+    if (!this.orbGfx) {
+      this.orbGfx = new Graphics();
+      this.layers.orb.addChild(this.orbGfx);
+    }
+    const g = this.orbGfx;
+    g.clear();
+
     for (const orb of this.sim.orbs) {
       if (!orb.alive) continue;
-      drawOrb(this.ctx, orb, this.time);
+      const pulse = 1 + Math.sin(this.time * 6 + orb.id) * 0.12;
+      g.circle(orb.x, orb.y, orb.radius * pulse * 1.9);
     }
-  }
+    g.fill({ color: PIXI_TINT.orb, alpha: 0.28 });
 
-  /* ------------------------------------------------------------------ */
-  /* Card effects                                                        */
-  /* ------------------------------------------------------------------ */
-
-  drawAoeEffects() {
-    const ctx = this.ctx;
-
-    for (const fx of this.sim.effects) {
-      if (!fx.alive) continue;
-      const progress = 1 - fx.life / fx.maxLife;
-      const color = fx.kind === 'tide' ? THEME.offence.tide : THEME.offence.pulse;
-
-      ctx.strokeStyle = withAlpha(color, (1 - progress) * 0.75);
-      ctx.lineWidth = fx.kind === 'tide' ? 5 : 3;
-      ctx.beginPath();
-      ctx.arc(fx.x, fx.y, fx.radius * (0.55 + progress * 0.45), 0, Math.PI * 2);
-      ctx.stroke();
-
-      ctx.fillStyle = withAlpha(color, (1 - progress) * 0.1);
-      ctx.beginPath();
-      ctx.arc(fx.x, fx.y, fx.radius * (0.55 + progress * 0.45), 0, Math.PI * 2);
-      ctx.fill();
+    for (const orb of this.sim.orbs) {
+      if (!orb.alive) continue;
+      const pulse = 1 + Math.sin(this.time * 6 + orb.id) * 0.12;
+      g.circle(orb.x, orb.y, orb.radius * pulse);
     }
-  }
-
-  drawBeam() {
-    const beam = this.sim.cards.getBeamState();
-    if (!beam) return;
-
-    const ctx = this.ctx;
-    const player = this.sim.state.player;
-    ctx.save();
-    ctx.translate(player.x, player.y);
-    ctx.rotate(Math.atan2(beam.dy, beam.dx));
-
-    const gradient = ctx.createLinearGradient(0, 0, beam.length, 0);
-    gradient.addColorStop(0, withAlpha(THEME.offence.beam, 0.7 * beam.fade));
-    gradient.addColorStop(1, withAlpha(THEME.offence.beam, 0));
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, -beam.width / 2, beam.length, beam.width);
-
-    // Bright core line.
-    ctx.fillStyle = withAlpha(THEME.hero.core, 0.55 * beam.fade);
-    ctx.fillRect(0, -beam.width * 0.12, beam.length, beam.width * 0.24);
-    ctx.restore();
-  }
-
-  drawBlades() {
-    const ctx = this.ctx;
-
-    for (const blade of this.sim.cards.blades) {
-      ctx.fillStyle = withAlpha(THEME.offence.blade, 0.85);
-      ctx.strokeStyle = withAlpha(THEME.hero.core, 0.7);
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.ellipse(blade.x, blade.y, blade.radius, blade.radius * 0.55, this.time * 3, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-    }
-  }
-
-  /* ------------------------------------------------------------------ */
-  /* The Dewling — always last                                           */
-  /* ------------------------------------------------------------------ */
-
-  /**
-   * Motion trail. Not decoration: the GDD calls it out as the readability
-   * device that lets a player find themselves in a crowd, which is why it sits
-   * above every enemy and effect in the draw order.
-   */
-  drawTrail() {
-    const ctx = this.ctx;
-
-    for (let i = 0; i < this.trail.length - 1; i++) {
-      const point = this.trail[i];
-      const t = i / this.trail.length;
-      ctx.fillStyle = withAlpha(THEME.hero.trail, t * 0.4);
-      ctx.beginPath();
-      ctx.arc(point.x, point.y, PLAYER_CFG.RADIUS * t * 0.9, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    g.fill({ color: PIXI_TINT.orb });
   }
 
   drawPlayer() {
     const player = this.sim.state.player;
+    const sprite = this.heroSprite;
 
     // Blink through invulnerability frames so the hit lands visually.
-    if (this.sim.invulnTimer > 0 && Math.floor(this.sim.invulnTimer * 12) % 2 === 0) return;
+    const blinking =
+      this.sim.invulnTimer > 0 && Math.floor(this.sim.invulnTimer * 12) % 2 === 0;
+    sprite.visible = !blinking;
+    if (blinking) return;
 
-    drawDewling(this.ctx, player.x, player.y, PLAYER_CFG.RADIUS, this.time, this.getCosmetic());
+    sprite.x = player.x;
+    sprite.y = player.y;
+    sprite.tint = cosmeticTint(this.getCosmetic());
+
+    const bob = 1 + Math.sin(this.time * 3) * 0.04;
+    sprite.scale.set(scaleForRadius(sprite.texture, PLAYER_CFG.RADIUS, 1.9) * bob);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Vector VFX (no authored art)                                        */
+  /* ------------------------------------------------------------------ */
+
+  drawArena() {
+    const g = this.arenaGfx;
+    g.clear();
+
+    for (let x = 0; x <= WORLD.WIDTH; x += GRID_SIZE) {
+      g.moveTo(x, 0).lineTo(x, WORLD.HEIGHT);
+    }
+    for (let y = 0; y <= WORLD.HEIGHT; y += GRID_SIZE) {
+      g.moveTo(0, y).lineTo(WORLD.WIDTH, y);
+    }
+    g.stroke({ color: PIXI_TINT.grid, width: 1, alpha: 0.5 });
+
+    g.rect(0, 0, WORLD.WIDTH, WORLD.HEIGHT);
+    g.stroke({ color: PIXI_TINT.border, width: 3 });
+    g.rect(4, 4, WORLD.WIDTH - 8, WORLD.HEIGHT - 8);
+    g.stroke({ color: PIXI_TINT.heroRim, width: 1, alpha: 0.18 });
+  }
+
+  drawHazards() {
+    const g = this.hazardGfx;
+    g.clear();
+
+    for (const pool of this.sim.sporePools) {
+      if (!pool.alive) continue;
+      const fade = Math.min(1, pool.life / 1.0);
+      g.circle(pool.x, pool.y, pool.radius);
+      g.fill({ color: PIXI_TINT.rust, alpha: 0.3 * fade });
+      g.circle(pool.x, pool.y, pool.radius * (0.55 + Math.sin(this.time * 2) * 0.04));
+      g.stroke({ color: PIXI_TINT.rustRim, width: 1.5, alpha: 0.5 * fade });
+    }
+  }
+
+  drawTelegraph() {
+    const g = this.telegraphGfx;
+    g.clear();
+
+    const tele = this.sim.bossTelegraph;
+    if (!tele || !tele.active) return;
+
+    const progress = Math.min(1, tele.elapsedMs / tele.totalMs);
+    g.circle(tele.x, tele.y, tele.radius * progress);
+    g.fill({ color: PIXI_TINT.warning, alpha: 0.22 });
+
+    const pulse = 0.55 + Math.sin(this.time * (6 + progress * 14)) * 0.25;
+    g.circle(tele.x, tele.y, tele.radius);
+    g.stroke({ color: PIXI_TINT.warning, width: 3, alpha: pulse });
+  }
+
+  drawEffects() {
+    const g = this.effectGfx;
+    g.clear();
+
+    for (const fx of this.sim.effects) {
+      if (!fx.alive) continue;
+      const progress = 1 - fx.life / fx.maxLife;
+      const color = fx.kind === 'tide' ? PIXI_TINT.tide : PIXI_TINT.pulse;
+      const radius = fx.radius * (0.55 + progress * 0.45);
+
+      g.circle(fx.x, fx.y, radius);
+      g.fill({ color, alpha: (1 - progress) * 0.1 });
+      g.circle(fx.x, fx.y, radius);
+      g.stroke({ color, width: fx.kind === 'tide' ? 5 : 3, alpha: (1 - progress) * 0.75 });
+    }
+  }
+
+  drawBeam() {
+    const g = this.beamGfx;
+    g.clear();
+
+    const beam = this.sim.cards.getBeamState();
+    if (!beam) return;
+
+    const player = this.sim.state.player;
+    g.setTransform?.(1, 0, 0, 1, 0, 0);
+    const angle = Math.atan2(beam.dy, beam.dx);
+
+    // Build the strip in local space then rotate the Graphics object itself.
+    g.rect(0, -beam.width / 2, beam.length, beam.width);
+    g.fill({ color: PIXI_TINT.beam, alpha: 0.55 * beam.fade });
+    g.rect(0, -beam.width * 0.12, beam.length, beam.width * 0.24);
+    g.fill({ color: PIXI_TINT.heroCore, alpha: 0.55 * beam.fade });
+
+    g.position.set(player.x, player.y);
+    g.rotation = angle;
+  }
+
+  drawBlades() {
+    const g = this.bladeGfx;
+    g.clear();
+
+    for (const blade of this.sim.cards.blades) {
+      g.ellipse(blade.x, blade.y, blade.radius, blade.radius * 0.55);
+    }
+    g.fill({ color: PIXI_TINT.blade, alpha: 0.85 });
+  }
+
+  drawHealthBars() {
+    const g = this.healthGfx;
+    g.clear();
+
+    for (const enemy of this.sim.enemies) {
+      if (!enemy.alive || enemy.hp >= enemy.maxHp) continue;
+      if (!enemy.isBoss && enemy.radius < HEALTH_BAR_MIN_RADIUS) continue;
+
+      const width = enemy.radius * 2;
+      const ratio = Math.max(0, enemy.hp / enemy.maxHp);
+      const y = enemy.y - enemy.radius - 9;
+
+      g.rect(enemy.x - enemy.radius, y, width, 3);
+      g.fill({ color: 0x000000, alpha: 0.6 });
+      g.rect(enemy.x - enemy.radius, y, width * ratio, 3);
+      g.fill({ color: PIXI_TINT.warning });
+    }
+  }
+
+  /**
+   * Motion trail. The GDD calls this out as the readability device that lets a
+   * player find themselves in a crowd, which is why it has its own layer above
+   * every enemy and effect.
+   */
+  drawTrail() {
+    const g = this.trailGfx;
+    g.clear();
+
+    for (let i = 0; i < this.trail.length - 1; i++) {
+      const point = this.trail[i];
+      const t = i / this.trail.length;
+      g.circle(point.x, point.y, PLAYER_CFG.RADIUS * t * 0.9);
+      g.fill({ color: PIXI_TINT.heroTrail, alpha: t * 0.35 });
+    }
   }
 
   drawShield() {
+    const g = this.shieldGfx;
+    g.clear();
+
     const charge = this.sim.cards.shieldCharge;
     if (charge <= 0) return;
-
     const stats = this.sim.cards.getStats('bloomshield');
     if (!stats) return;
 
-    const ctx = this.ctx;
     const player = this.sim.state.player;
     const ratio = Math.max(0, Math.min(1, charge / stats.shieldHp));
     const radius = PLAYER_CFG.RADIUS + 13;
 
-    ctx.strokeStyle = withAlpha(THEME.hero.shield, 0.3 + ratio * 0.55);
-    ctx.lineWidth = 2 + ratio * 3;
-    ctx.beginPath();
-    ctx.arc(player.x, player.y, radius, -Math.PI / 2, -Math.PI / 2 + ratio * Math.PI * 2);
-    ctx.stroke();
-
-    // Faint petal ring so the shield reads as flowers, not a HUD gauge.
-    ctx.fillStyle = withAlpha(THEME.hero.shield, 0.25 * ratio);
-    for (let i = 0; i < 6; i++) {
-      const angle = (i / 6) * Math.PI * 2 + this.time * 0.8;
-      ctx.beginPath();
-      ctx.ellipse(
-        player.x + Math.cos(angle) * radius,
-        player.y + Math.sin(angle) * radius,
-        4,
-        2.2,
-        angle,
-        0,
-        Math.PI * 2
-      );
-      ctx.fill();
-    }
+    g.arc(player.x, player.y, radius, -Math.PI / 2, -Math.PI / 2 + ratio * Math.PI * 2);
+    g.stroke({ color: PIXI_TINT.heroShield, width: 2 + ratio * 3, alpha: 0.3 + ratio * 0.55 });
   }
-}
 
-/**
- * Radius at or above which an enemy is tanky enough for its HP to be worth
- * reading. Rustbloom (20) and the Rustwhale (45) qualify; trash does not.
- */
-const HEALTH_BAR_MIN_RADIUS = 18;
-
-/**
- * Should this enemy show a health bar?
- *
- * Trash mobs die in one or two hits, so a bar tells the player nothing they
- * cannot see from the hit flash — but 200 of them is a field of tiny rust
- * ticks competing with the Dewling. Bars are reserved for enemies where the
- * remaining HP is actually a decision input.
- *
- * @param {Object} enemy
- * @returns {boolean}
- */
-function showsHealthBar(enemy) {
-  if (enemy.hp >= enemy.maxHp) return false;
-  return enemy.isBoss || enemy.radius >= HEALTH_BAR_MIN_RADIUS;
-}
-
-/**
- * Background bubble field, in normalised 0..1 screen coordinates so it survives
- * a resize without regeneration.
- * @param {number} count
- */
-function makeBubbles(count) {
-  const bubbles = [];
-  for (let i = 0; i < count; i++) {
-    bubbles.push({
-      x: Math.random(),
-      y: Math.random(),
-      size: 3 + Math.random() * 16,
-      speed: 0.012 + Math.random() * 0.03,
-      alpha: 0.1 + Math.random() * 0.22,
-      phase: Math.random() * Math.PI * 2,
-    });
+  /** Release GPU resources. */
+  destroy() {
+    this.app.destroy(true, { children: true });
   }
-  return bubbles;
 }
 
 export { THEME };

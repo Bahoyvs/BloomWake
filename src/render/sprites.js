@@ -1,309 +1,167 @@
 /**
- * Procedural sprites (Phase 6).
+ * Sprite configuration and factory (Phase 6b).
  *
- * Everything is drawn with Canvas 2D paths rather than image assets. That keeps
- * the build tiny (a Basic Launch conversion benchmark), avoids an asset
- * pipeline, and lets every silhouette be tinted straight from the palette so
- * the contrast rule in theme.js can never be bypassed by a stray PNG.
+ * Replaces the Phase 6 procedural `arc()`/`lineTo()` entity drawing. Every
+ * character and enemy is now a PIXI.Sprite; this module owns how a simulation
+ * entity maps onto one.
  *
- * Each enemy gets a distinct SILHOUETTE, not just a distinct colour: at swarm
- * density the shape is what a player actually reads.
+ * TWO RULES THAT MATTER
+ *
+ * 1. Anchor is always (0.5, 0.5). Simulation entities are circles positioned by
+ *    their centre, so a centre anchor makes the sprite's visual centre and its
+ *    collision centre the same point by construction.
+ *
+ * 2. Scale is DERIVED from the entity's collision radius, never authored per
+ *    asset. `scale = (radius * 2 * SPRITE_FIT) / texture.width` means art can
+ *    ship at any resolution and still line up with the hitbox. Artists change
+ *    the PNG; nobody edits code.
  */
 
-import { THEME, getEnemyPalette, withAlpha } from './theme.js';
+import { Sprite } from 'pixi.js';
+import { getEnemyTextureKey, ASSET_KEYS } from '../core/assets.js';
+import { THEME } from './theme.js';
 
 /**
- * Draw one Frutevil enemy.
+ * Visual diameter as a multiple of the collision diameter.
+ * Slightly over 1 because art usually carries soft edges and glow that should
+ * not count as hitbox.
+ */
+export const SPRITE_FIT = 1.15;
+
+/** Tint applied for one hit-flash frame. Pixi tints multiply, so white = off. */
+export const NO_TINT = 0xffffff;
+export const DAMAGE_TINT = 0xff8a6a;
+
+/**
+ * Per-type visual tweaks that are genuinely about presentation, not gameplay.
+ * `fit` overrides SPRITE_FIT; `spin` rotates with travel; `bob` adds idle sway.
+ */
+export const ENEMY_SPRITE_CONFIG = {
+  tarling: { fit: 1.2, bob: 0.06 },
+  ashfish: { fit: 1.35, faceTravel: true },
+  cracked_wisp: { fit: 1.15, spin: 1.6 },
+  rustbloom: { fit: 1.3, bob: 0.04 },
+  smogmoth: { fit: 1.4, faceTravel: true, bob: 0.1 },
+  rustwhale: { fit: 1.5, faceTravel: true },
+};
+
+/**
+ * @param {string} typeId
+ * @returns {Object}
+ */
+export function getEnemySpriteConfig(typeId) {
+  return ENEMY_SPRITE_CONFIG[typeId] ?? { fit: SPRITE_FIT };
+}
+
+/**
+ * Scale factor that makes a texture render at the requested world diameter.
  *
- * @param {CanvasRenderingContext2D} ctx
+ * @param {{width: number, height: number}} texture
+ * @param {number} radius - Collision radius in world px
+ * @param {number} [fit]
+ * @returns {number}
+ */
+export function scaleForRadius(texture, radius, fit = SPRITE_FIT) {
+  const source = Math.max(texture?.width || 0, 1);
+  return (radius * 2 * fit) / source;
+}
+
+/**
+ * Build a centre-anchored sprite.
+ * @param {import('pixi.js').Texture} texture
+ * @returns {Sprite}
+ */
+export function makeSprite(texture) {
+  const sprite = new Sprite(texture);
+  sprite.anchor.set(0.5, 0.5);
+  return sprite;
+}
+
+/**
+ * Point an existing sprite at an enemy's current state.
+ *
+ * Called every frame for every live enemy, so it allocates nothing and only
+ * touches properties that actually change.
+ *
+ * Facing is derived from the vector to the Dewling rather than from a stored
+ * velocity: enemies always steer at the player, so this needs no new field on
+ * the simulation entity and keeps src/core/ free of render concerns.
+ *
+ * @param {{sprite: Sprite, baseScale: number}} view - Renderer-owned record
  * @param {Object} enemy - Simulation entity
- * @param {number} time - Seconds since run start, for idle animation
+ * @param {number} time - Seconds since run start
+ * @param {{x: number, y: number}} player
  */
-export function drawEnemy(ctx, enemy, time) {
-  const palette = getEnemyPalette(enemy.typeId);
-  const flashing = enemy.hitFlash > 0;
-  const r = enemy.radius;
+export function syncEnemySprite(view, enemy, time, player) {
+  const { sprite } = view;
+  const config = getEnemySpriteConfig(enemy.typeId);
 
-  ctx.save();
-  ctx.translate(enemy.x, enemy.y);
+  sprite.x = enemy.x;
+  sprite.y = enemy.y;
 
-  // A hit blanches the silhouette rather than tinting it, so damage reads even
-  // on the darkest enemies without breaking the luminance rule for long.
-  ctx.fillStyle = flashing ? withAlpha(THEME.frutevil.warning, 0.85) : palette.fill;
-  ctx.strokeStyle = palette.rim;
-  ctx.lineWidth = 1.5;
-
-  switch (enemy.typeId) {
-    case 'ashfish':
-      drawAshfish(ctx, r, time, enemy.id);
-      break;
-    case 'cracked_wisp':
-      drawCrackedWisp(ctx, r, time, enemy.id);
-      break;
-    case 'rustbloom':
-      drawRustbloom(ctx, r, time, enemy.id);
-      break;
-    case 'smogmoth':
-      drawSmogmoth(ctx, r, time, enemy.id);
-      break;
-    case 'rustwhale':
-      drawRustwhale(ctx, r, time);
-      break;
-    case 'tarling':
-    default:
-      drawTarling(ctx, r, time, enemy.id);
-      break;
+  if (config.faceTravel) {
+    sprite.rotation = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+  } else if (config.spin) {
+    sprite.rotation = time * config.spin + enemy.id;
   }
 
-  ctx.restore();
-}
-
-/** Oily black droplet with a greasy sheen. */
-function drawTarling(ctx, r, time, id) {
-  const wobble = Math.sin(time * 4 + id) * 0.08;
-
-  ctx.beginPath();
-  ctx.moveTo(0, -r * (1.15 + wobble));
-  ctx.bezierCurveTo(r * 0.95, -r * 0.35, r * 0.8, r, 0, r);
-  ctx.bezierCurveTo(-r * 0.8, r, -r * 0.95, -r * 0.35, 0, -r * (1.15 + wobble));
-  ctx.fill();
-  ctx.stroke();
-
-  // Oil-slick highlight: the only light on a Frutevil, kept small and dim.
-  ctx.fillStyle = withAlpha(THEME.frutevil.tarRim, 0.55);
-  ctx.beginPath();
-  ctx.ellipse(-r * 0.28, -r * 0.25, r * 0.2, r * 0.32, -0.5, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-/** Ash-grey dead fish, drifting on its side. */
-function drawAshfish(ctx, r, time, id) {
-  const tail = Math.sin(time * 5 + id) * 0.5;
-
-  ctx.beginPath();
-  ctx.ellipse(0, 0, r * 1.25, r * 0.66, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-
-  // Tail fin.
-  ctx.beginPath();
-  ctx.moveTo(-r * 1.15, 0);
-  ctx.lineTo(-r * 1.9, -r * 0.55 + tail * r * 0.2);
-  ctx.lineTo(-r * 1.9, r * 0.55 + tail * r * 0.2);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // Dead eye — a hollow ring, no pupil.
-  ctx.strokeStyle = THEME.frutevil.ashRim;
-  ctx.beginPath();
-  ctx.arc(r * 0.55, -r * 0.12, r * 0.16, 0, Math.PI * 2);
-  ctx.stroke();
-}
-
-/** Cracked glass shard spirit — angular, unlike everything else. */
-function drawCrackedWisp(ctx, r, time, id) {
-  const spin = time * 1.6 + id;
-  ctx.rotate(spin);
-
-  ctx.beginPath();
-  ctx.moveTo(0, -r * 1.3);
-  ctx.lineTo(r * 0.95, -r * 0.15);
-  ctx.lineTo(r * 0.5, r * 1.15);
-  ctx.lineTo(-r * 0.6, r * 1.05);
-  ctx.lineTo(-r, -r * 0.25);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // Fracture lines.
-  ctx.strokeStyle = withAlpha(THEME.frutevil.shardRim, 0.75);
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, -r * 1.1);
-  ctx.lineTo(r * 0.15, r * 0.2);
-  ctx.lineTo(-r * 0.45, r * 0.85);
-  ctx.moveTo(r * 0.15, r * 0.2);
-  ctx.lineTo(r * 0.75, -r * 0.05);
-  ctx.stroke();
-}
-
-/** Rusted, wilting flower that squats in place. */
-function drawRustbloom(ctx, r, time, id) {
-  const breathe = 1 + Math.sin(time * 2 + id) * 0.05;
-  const petals = 6;
-
-  for (let i = 0; i < petals; i++) {
-    const angle = (i / petals) * Math.PI * 2 + Math.sin(time * 0.6 + id) * 0.1;
-    ctx.save();
-    ctx.rotate(angle);
-    ctx.beginPath();
-    // Drooping petal: control points pull downward-outward.
-    ctx.moveTo(0, 0);
-    ctx.quadraticCurveTo(r * 0.55 * breathe, -r * 0.5, r * 1.15 * breathe, r * 0.25);
-    ctx.quadraticCurveTo(r * 0.5 * breathe, r * 0.4, 0, 0);
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
+  if (config.bob) {
+    const wobble = 1 + Math.sin(time * 4 + enemy.id) * config.bob;
+    sprite.scale.set(view.baseScale * wobble);
   }
 
-  // Spore-bearing core.
-  ctx.fillStyle = THEME.frutevil.rustRim;
-  ctx.beginPath();
-  ctx.arc(0, 0, r * 0.36 * breathe, 0, Math.PI * 2);
-  ctx.fill();
-}
-
-/** Soot moth with a torn wing. */
-function drawSmogmoth(ctx, r, time, id) {
-  const flap = Math.abs(Math.sin(time * 9 + id));
-  const span = r * (0.55 + flap * 0.75);
-
-  for (const side of [-1, 1]) {
-    ctx.save();
-    ctx.scale(side, 1);
-    ctx.beginPath();
-    ctx.moveTo(0, -r * 0.15);
-    ctx.quadraticCurveTo(span * 1.5, -r * 1.2, span * 1.7, r * 0.1);
-    // The torn edge: a notch on the trailing side.
-    ctx.lineTo(span * 1.15, r * 0.05);
-    ctx.lineTo(span * 1.3, r * 0.6);
-    ctx.quadraticCurveTo(span * 0.5, r * 0.7, 0, r * 0.25);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  // Body.
-  ctx.beginPath();
-  ctx.ellipse(0, 0, r * 0.26, r * 0.72, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-}
-
-/** The Rustwhale: a corrupted leviathan, drawn big and slow. */
-function drawRustwhale(ctx, r, time) {
-  const surge = Math.sin(time * 1.4) * 0.05;
-
-  // Body.
-  ctx.beginPath();
-  ctx.ellipse(0, 0, r * (1.35 + surge), r * 0.82, 0, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.lineWidth = 2.5;
-  ctx.stroke();
-
-  // Tail flukes.
-  ctx.beginPath();
-  ctx.moveTo(-r * 1.25, 0);
-  ctx.lineTo(-r * 2.15, -r * 0.85);
-  ctx.lineTo(-r * 1.6, 0);
-  ctx.lineTo(-r * 2.15, r * 0.85);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // Rusted plating ridges.
-  ctx.strokeStyle = withAlpha(THEME.frutevil.whaleRim, 0.7);
-  ctx.lineWidth = 1.5;
-  for (let i = -2; i <= 2; i++) {
-    ctx.beginPath();
-    ctx.moveTo(i * r * 0.42, -r * 0.66);
-    ctx.quadraticCurveTo(i * r * 0.42 + r * 0.1, 0, i * r * 0.42, r * 0.66);
-    ctx.stroke();
-  }
-
-  // Single sunken eye.
-  ctx.fillStyle = THEME.frutevil.warning;
-  ctx.beginPath();
-  ctx.arc(r * 0.85, -r * 0.2, r * 0.12, 0, Math.PI * 2);
-  ctx.fill();
+  // Damage flash via GPU tint — no second sprite sheet, no filter allocation.
+  sprite.tint = enemy.hitFlash > 0 ? DAMAGE_TINT : NO_TINT;
 }
 
 /**
- * The Dewling: layered translucent Aqua bubble.
- *
- * Drawn last of everything (Z_ORDER.PLAYER) and built from the brightest
- * colours in the palette, so it stays the visual anchor at any enemy count.
- *
- * @param {CanvasRenderingContext2D} ctx
- * @param {number} x
- * @param {number} y
- * @param {number} radius
- * @param {number} time
- * @param {Object} [cosmetic] - Equipped cosmetic {tint, ring}
+ * Texture key for an enemy type.
+ * @param {string} typeId
+ * @returns {string}
  */
-export function drawDewling(ctx, x, y, radius, time, cosmetic = null) {
-  const body = cosmetic?.tint ?? THEME.hero.body;
-  const rim = cosmetic?.ring ?? THEME.hero.rim;
-  const bob = Math.sin(time * 3) * 0.04;
-  const r = radius * (1 + bob);
+export function enemyTextureKey(typeId) {
+  return getEnemyTextureKey(typeId);
+}
 
-  ctx.save();
-  ctx.translate(x, y);
+/** Texture key for the Dewling. */
+export const HERO_TEXTURE_KEY = ASSET_KEYS.DEWLING;
 
-  // Outer halo — soft, wide, unmistakable at a glance.
-  const halo = ctx.createRadialGradient(0, 0, r * 0.6, 0, 0, r * 3.1);
-  halo.addColorStop(0, withAlpha(rim, 0.42));
-  halo.addColorStop(0.5, withAlpha(rim, 0.12));
-  halo.addColorStop(1, withAlpha(rim, 0));
-  ctx.fillStyle = halo;
-  ctx.beginPath();
-  ctx.arc(0, 0, r * 3.1, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Water body with a vertical light gradient.
-  const bodyFill = ctx.createRadialGradient(-r * 0.3, -r * 0.4, r * 0.1, 0, 0, r);
-  bodyFill.addColorStop(0, THEME.hero.core);
-  bodyFill.addColorStop(0.55, body);
-  bodyFill.addColorStop(1, withAlpha(rim, 0.9));
-  ctx.fillStyle = bodyFill;
-  ctx.beginPath();
-  ctx.arc(0, 0, r, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Refraction ring.
-  ctx.strokeStyle = withAlpha(THEME.hero.core, 0.9);
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.arc(0, 0, r * 0.98, 0, Math.PI * 2);
-  ctx.stroke();
-
-  // Specular highlight — the classic Frutiger Aqua glass dot.
-  ctx.fillStyle = withAlpha(THEME.hero.specular, 0.95);
-  ctx.beginPath();
-  ctx.ellipse(-r * 0.32, -r * 0.38, r * 0.22, r * 0.16, -0.6, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Small secondary glint.
-  ctx.fillStyle = withAlpha(THEME.hero.specular, 0.5);
-  ctx.beginPath();
-  ctx.arc(r * 0.35, r * 0.3, r * 0.09, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.restore();
+/**
+ * Cosmetic variants recolour the hero sprite by tint rather than by shipping a
+ * separate PNG per variant, so a new skin is a palette row.
+ * @param {Object|null} cosmetic
+ * @returns {number} Pixi tint
+ */
+export function cosmeticTint(cosmetic) {
+  if (!cosmetic || !cosmetic.tint) return NO_TINT;
+  return hexToPixi(cosmetic.tint);
 }
 
 /**
- * XP orb: a small Aqua droplet with a bright core.
- * @param {CanvasRenderingContext2D} ctx
+ * '#rrggbb' -> 0xrrggbb
+ * @param {string} hex
+ * @returns {number}
  */
-export function drawOrb(ctx, orb, time) {
-  const pulse = 1 + Math.sin(time * 6 + orb.id) * 0.12;
-  const r = orb.radius * pulse;
-
-  ctx.fillStyle = withAlpha(THEME.pickup.orb, 0.35);
-  ctx.beginPath();
-  ctx.arc(orb.x, orb.y, r * 1.9, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = THEME.pickup.orb;
-  ctx.beginPath();
-  ctx.arc(orb.x, orb.y, r, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.fillStyle = THEME.pickup.orbCore;
-  ctx.beginPath();
-  ctx.arc(orb.x - r * 0.25, orb.y - r * 0.25, r * 0.35, 0, Math.PI * 2);
-  ctx.fill();
+export function hexToPixi(hex) {
+  return parseInt(String(hex).replace('#', ''), 16);
 }
+
+/** Pixi tints for palette entries the renderer needs on Graphics/particles. */
+export const PIXI_TINT = {
+  heroCore: hexToPixi(THEME.hero.core),
+  heroRim: hexToPixi(THEME.hero.rim),
+  heroTrail: hexToPixi(THEME.hero.trail),
+  heroShield: hexToPixi(THEME.hero.shield),
+  dewdrop: hexToPixi(THEME.offence.dewdrop),
+  petal: hexToPixi(THEME.offence.petal),
+  beam: hexToPixi(THEME.offence.beam),
+  blade: hexToPixi(THEME.offence.blade),
+  pulse: hexToPixi(THEME.offence.pulse),
+  tide: hexToPixi(THEME.offence.tide),
+  orb: hexToPixi(THEME.pickup.orb),
+  warning: hexToPixi(THEME.frutevil.warning),
+  rust: hexToPixi(THEME.frutevil.rust),
+  rustRim: hexToPixi(THEME.frutevil.rustRim),
+  border: hexToPixi(THEME.background.border),
+  grid: hexToPixi(THEME.background.grid),
+};

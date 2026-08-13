@@ -57,12 +57,48 @@
     #ui-layer * {
       pointer-events: auto;
     }
+
+    /* Boot overlay — shown until every texture has resolved. */
+    #boot-screen {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      background: linear-gradient(180deg, #071a24, #03080f);
+      z-index: 10;
+    }
+
+    #boot-mark {
+      font-size: clamp(28px, 7vw, 54px);
+      font-weight: 800;
+      letter-spacing: 0.22em;
+      background: linear-gradient(180deg, #f2fdff, #6fd6f0);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      filter: drop-shadow(0 0 26px rgba(127, 230, 255, 0.5));
+    }
+
+    #boot-status {
+      font-size: 12px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: #6f97a8;
+    }
   </style>
 </head>
 <body>
   <div id="app-container">
     <canvas id="game-canvas"></canvas>
     <div id="ui-layer"></div>
+    <!-- Removed by boot() once the texture manifest resolves. -->
+    <div id="boot-screen">
+      <div id="boot-mark">BLOOMWAKE</div>
+      <div id="boot-status">Loading assets…</div>
+    </div>
   </div>
   <script type="module" src="/src/main.js"></script>
 </body>
