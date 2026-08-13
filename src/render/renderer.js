@@ -1,10 +1,7 @@
 /**
- * Canvas 2D grey-box renderer for BloomWake Phase 1.
- *
- * Deliberately unthemed: the Development Plan puts the Frutiger Aero / Frutevil
- * visual layer in Phase 6, after the loop is proven fun in grey box. Everything
- * here is neutral greyscale plus one accent for the Dewling so readability can
- * be judged on shape and motion alone.
+ * Canvas 2D renderer for BloomWake Phase 4.
+ * Render Frutevil enemy roster, spore hazard pools, Boss telegraph warning circles,
+ * and card visual effects.
  */
 
 import { WORLD, PLAYER_CFG } from '../core/constants.js';
@@ -24,6 +21,17 @@ export const PALETTE = {
   trail: '#7fd4ff',
   projectile: '#eaf6ff',
   orb: '#b9f3c8',
+  blade: '#cfe8ff',
+  beam: '#fff3c4',
+  pulse: '#a9d8ff',
+  tide: '#8fe4d0',
+  shield: '#ffd9a0',
+  spore: '#854d0e',
+  sporeInner: '#ca8a04',
+  telegraph: '#ef4444',
+  telegraphFill: 'rgba(239, 68, 68, 0.25)',
+  bossHpBg: '#1f2937',
+  bossHpFill: '#dc2626',
 };
 
 const GRID_SIZE = 100;
@@ -73,7 +81,7 @@ export class Renderer {
         : clamp(player.y - this.viewHeight / 2, 0, WORLD.HEIGHT - this.viewHeight);
   }
 
-  /** Record the Dewling's recent path — a readability aid, not the Phase 6 trail VFX. */
+  /** Record the Dewling's recent path */
   recordTrail() {
     const player = this.sim.state.player;
     this.trail.push({ x: player.x, y: player.y });
@@ -92,12 +100,128 @@ export class Renderer {
     ctx.translate(-this.camera.x, -this.camera.y);
 
     this.drawArena();
+    this.drawSporePools();
+    this.drawBossTelegraph();
     this.drawOrbs();
+    this.drawAoeEffects();
+    this.drawBeam();
     this.drawEnemies();
     this.drawProjectiles();
+    this.drawBlades();
     this.drawPlayer();
+    this.drawShield();
 
     ctx.restore();
+  }
+
+  /** Render toxic spore hazard pools from Rustbloom */
+  drawSporePools() {
+    const ctx = this.ctx;
+
+    for (const pool of this.sim.sporePools) {
+      if (!pool.alive) continue;
+      const fade = Math.min(1, pool.life / 1.0);
+      ctx.globalAlpha = 0.35 * fade;
+      ctx.fillStyle = PALETTE.spore;
+      ctx.beginPath();
+      ctx.arc(pool.x, pool.y, pool.radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.globalAlpha = 0.6 * fade;
+      ctx.fillStyle = PALETTE.sporeInner;
+      ctx.beginPath();
+      ctx.arc(pool.x, pool.y, pool.radius * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /** Render deterministic Boss Telegraph warning circle */
+  drawBossTelegraph() {
+    const tele = this.sim.bossTelegraph;
+    if (!tele || !tele.active) return;
+
+    const ctx = this.ctx;
+    const progress = Math.min(1, tele.elapsedMs / tele.totalMs);
+
+    // Expanding fill ring
+    ctx.fillStyle = PALETTE.telegraphFill;
+    ctx.beginPath();
+    ctx.arc(tele.x, tele.y, tele.radius * progress, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Outer warning border
+    ctx.strokeStyle = PALETTE.telegraph;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(tele.x, tele.y, tele.radius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  /** Expanding rings left by Aurora Pulse and Tidewave. */
+  drawAoeEffects() {
+    const ctx = this.ctx;
+
+    for (const fx of this.sim.effects) {
+      if (!fx.alive) continue;
+      const progress = 1 - fx.life / fx.maxLife;
+      ctx.globalAlpha = (1 - progress) * 0.7;
+      ctx.strokeStyle = fx.kind === 'tide' ? PALETTE.tide : PALETTE.pulse;
+      ctx.lineWidth = fx.kind === 'tide' ? 5 : 3;
+      ctx.beginPath();
+      ctx.arc(fx.x, fx.y, fx.radius * (0.55 + progress * 0.45), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /** Sunbeam Lance strip */
+  drawBeam() {
+    const beam = this.sim.cards.getBeamState();
+    if (!beam) return;
+
+    const ctx = this.ctx;
+    const player = this.sim.state.player;
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    ctx.rotate(Math.atan2(beam.dy, beam.dx));
+    ctx.globalAlpha = 0.25 + beam.fade * 0.45;
+    ctx.fillStyle = PALETTE.beam;
+    ctx.fillRect(0, -beam.width / 2, beam.length, beam.width);
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
+  /** Glasswing blades orbiting the Dewling. */
+  drawBlades() {
+    const ctx = this.ctx;
+    ctx.fillStyle = PALETTE.blade;
+
+    for (const blade of this.sim.cards.blades) {
+      ctx.beginPath();
+      ctx.arc(blade.x, blade.y, blade.radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  /** Bloomshield charge ring */
+  drawShield() {
+    const charge = this.sim.cards.shieldCharge;
+    if (charge <= 0) return;
+
+    const stats = this.sim.cards.getStats('bloomshield');
+    if (!stats) return;
+
+    const ctx = this.ctx;
+    const player = this.sim.state.player;
+    const ratio = Math.max(0, Math.min(1, charge / stats.shieldHp));
+    ctx.strokeStyle = PALETTE.shield;
+    ctx.globalAlpha = 0.35 + ratio * 0.5;
+    ctx.lineWidth = 2 + ratio * 3;
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, PLAYER_CFG.RADIUS + 11, -Math.PI / 2, -Math.PI / 2 + ratio * Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 
   drawArena() {
@@ -105,7 +229,6 @@ export class Renderer {
     ctx.fillStyle = PALETTE.floor;
     ctx.fillRect(0, 0, WORLD.WIDTH, WORLD.HEIGHT);
 
-    // Grid gives the otherwise featureless arena a sense of speed and place.
     ctx.strokeStyle = PALETTE.grid;
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -133,17 +256,25 @@ export class Renderer {
 
     for (const enemy of this.sim.enemies) {
       if (!enemy.alive) continue;
-      const def = ENEMIES[enemy.typeId];
+      const def = ENEMIES[enemy.typeId] || ENEMIES.tarling;
       const flashing = enemy.hitFlash > 0;
 
-      ctx.fillStyle = flashing ? PALETTE.enemyFlash : PALETTE.enemy;
-      ctx.strokeStyle = PALETTE.enemyOutline;
-      ctx.lineWidth = 2;
+      ctx.fillStyle = flashing ? PALETTE.enemyFlash : (def.color || PALETTE.enemy);
+      ctx.strokeStyle = enemy.isBoss ? '#ef4444' : PALETTE.enemyOutline;
+      ctx.lineWidth = enemy.isBoss ? 4 : 2;
 
       if (def.shape === 'square') {
         const size = enemy.radius * 2;
         ctx.fillRect(enemy.x - enemy.radius, enemy.y - enemy.radius, size, size);
         ctx.strokeRect(enemy.x - enemy.radius, enemy.y - enemy.radius, size, size);
+      } else if (def.shape === 'triangle') {
+        ctx.beginPath();
+        ctx.moveTo(enemy.x, enemy.y - enemy.radius);
+        ctx.lineTo(enemy.x + enemy.radius, enemy.y + enemy.radius);
+        ctx.lineTo(enemy.x - enemy.radius, enemy.y + enemy.radius);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
       } else {
         ctx.beginPath();
         ctx.arc(enemy.x, enemy.y, enemy.radius, 0, Math.PI * 2);
@@ -151,14 +282,15 @@ export class Renderer {
         ctx.stroke();
       }
 
-      // Damage readout: enemies take multiple hits once wave HP scaling kicks in.
+      // Damage bar overlay for enemies & Boss
       if (enemy.hp < enemy.maxHp) {
-        const barWidth = enemy.radius * 2;
+        const barWidth = enemy.radius * (enemy.isBoss ? 3 : 2);
+        const barHeight = enemy.isBoss ? 6 : 3;
         const ratio = Math.max(0, enemy.hp / enemy.maxHp);
-        ctx.fillStyle = '#3b4049';
-        ctx.fillRect(enemy.x - enemy.radius, enemy.y - enemy.radius - 8, barWidth, 3);
-        ctx.fillStyle = '#e5eaf2';
-        ctx.fillRect(enemy.x - enemy.radius, enemy.y - enemy.radius - 8, barWidth * ratio, 3);
+        ctx.fillStyle = PALETTE.bossHpBg;
+        ctx.fillRect(enemy.x - barWidth / 2, enemy.y - enemy.radius - 10, barWidth, barHeight);
+        ctx.fillStyle = enemy.isBoss ? PALETTE.bossHpFill : '#e5eaf2';
+        ctx.fillRect(enemy.x - barWidth / 2, enemy.y - enemy.radius - 10, barWidth * ratio, barHeight);
       }
     }
   }

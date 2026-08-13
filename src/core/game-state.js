@@ -7,6 +7,8 @@ export const GAME_STATES = {
   RUNNING: 'RUNNING',
   PAUSED: 'PAUSED',
   WAVE_COMPLETE: 'WAVE_COMPLETE',
+  /** Card draft open; the simulation is frozen until a card is chosen. */
+  LEVEL_UP: 'LEVEL_UP',
   GAME_OVER: 'GAME_OVER',
   VICTORY: 'VICTORY',
 };
@@ -56,6 +58,10 @@ export class GameState {
     this.activeCards = new Map();
     // Default starter weapon card: Dewdrop Barrage Level 1
     this.activeCards.set('dewdrop_barrage', 1);
+
+    // Card IDs currently on offer, null when no draft is open.
+    this.pendingDraft = null;
+    this.stateBeforeDraft = null;
 
     this.bus.emit('state:reset', this.getStateSummary());
   }
@@ -166,13 +172,46 @@ export class GameState {
     const newLevel = currentLevel + 1;
     this.activeCards.set(cardId, newLevel);
 
-    // Apply passive modifiers if Buddy Boost
-    if (cardId === 'buddy_boost') {
-      const levelData = cardDef.levels[newLevel - 1];
-      this.player.moveSpeed = DEFAULT_PLAYER_STATS.moveSpeed * (1 + levelData.moveSpeedBonus);
-    }
-
+    // Passive stat modifiers are owned by the card system (src/core/cards.js),
+    // which reads them live rather than baking them into player stats here.
     this.bus.emit('card:selected', { cardId, level: newLevel });
+    return true;
+  }
+
+  /**
+   * Open a card draft, freezing the run until a choice is made.
+   * @param {Array<string>} cardIds - Cards on offer
+   */
+  offerDraft(cardIds) {
+    if (!cardIds || cardIds.length === 0) return false;
+
+    this.pendingDraft = [...cardIds];
+    this.stateBeforeDraft = this.currentState;
+    this.currentState = GAME_STATES.LEVEL_UP;
+    this.bus.emit('draft:offer', {
+      cards: this.pendingDraft,
+      level: this.player.level,
+    });
+    return true;
+  }
+
+  /**
+   * Take a card from the open draft and resume whatever was running before.
+   * @param {string} cardId - Must be one of the offered cards
+   * @returns {boolean} Whether the choice was accepted
+   */
+  chooseCard(cardId) {
+    if (this.currentState !== GAME_STATES.LEVEL_UP) return false;
+    if (!this.pendingDraft || !this.pendingDraft.includes(cardId)) return false;
+    if (!this.selectCard(cardId)) return false;
+
+    this.pendingDraft = null;
+    this.currentState = this.stateBeforeDraft ?? GAME_STATES.RUNNING;
+    this.stateBeforeDraft = null;
+    this.bus.emit('draft:choice', {
+      cardId,
+      level: this.activeCards.get(cardId),
+    });
     return true;
   }
 

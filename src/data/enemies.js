@@ -1,6 +1,6 @@
 /**
  * Enemy data definitions for BloomWake.
- * Source: Bloomwake_GDD_v1.md Section 4
+ * Source: Bloomwake_GDD_v1.md Section 4 & Development Plan Section 1
  */
 
 export const ENEMY_TYPES = {
@@ -97,7 +97,7 @@ export const ENEMIES = {
     id: ENEMY_TYPES.RUSTWHALE,
     name: 'Rustwhale',
     description: 'Boss: Monstrous corrupted leviathan with telegraph Black Tide AoE.',
-    baseHp: 400, // Formula applied dynamically in wave logic
+    baseHp: 400, // Dynamic HP formula applied in wave logic
     baseSpeed: 1.0,
     behavior: 'BOSS_TELEGRAPH_AOE',
     minWave: 5,
@@ -108,8 +108,24 @@ export const ENEMIES = {
     xpValue: 120,
     scoreValue: 500,
     shape: 'circle',
+    telegraphRadius: 130,
+    telegraphCooldown: 6.0,
+    telegraphDamage: 40,
   },
 };
+
+/**
+ * Calculates deterministic telegraph duration for Rustwhale Boss AoE
+ * Formula: telegraph_ms = (AoE_radius / dewling_speed) * 1000 + 300ms_safety_margin
+ * @param {number} aoeRadius - Radius of AoE telegraph circle in pixels
+ * @param {number} dewlingSpeedPxPerSec - Dewling player speed in pixels per second
+ * @param {number} [safetyMarginMs=300] - Safety margin in milliseconds
+ * @returns {number} Duration in milliseconds
+ */
+export function calculateTelegraphMs(aoeRadius, dewlingSpeedPxPerSec, safetyMarginMs = 300) {
+  if (dewlingSpeedPxPerSec <= 0) return 1500;
+  return (aoeRadius / dewlingSpeedPxPerSec) * 1000 + safetyMarginMs;
+}
 
 /**
  * Returns available enemy types unlocked for a given wave (excluding bosses)

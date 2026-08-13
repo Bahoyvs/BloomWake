@@ -61,6 +61,61 @@ export const ORB_CFG = {
 };
 
 /**
+ * Card mechanics the GDD leaves unspecified — tick rates, hit gating, reach.
+ *
+ * SINGLE SOURCE OF TRUTH: tests/balance-sim.js imports these to score the card
+ * table. If the balance model and the implementation each kept their own copy,
+ * the published balance numbers would quietly stop describing the shipped game.
+ * Change a value here and the balance table changes with it.
+ */
+export const CARD_MODEL = {
+  /** Sunbeam Lance damages everything in its strip this often while active. */
+  BEAM_TICK_SEC: 0.25,
+  /** Sunbeam Lance strip length in px. */
+  BEAM_LENGTH: 620,
+
+  /**
+   * An enemy cannot be re-hit by Glasswing faster than this. Set to 0.35s so
+   * levels 4 and 5 still buy something; at 0.5s the cap was reached by level 4.
+   */
+  ORBIT_HIT_COOLDOWN: 0.35,
+  /** Radial thickness of the blade sweep, i.e. blade diameter, in px. */
+  ORBIT_BAND: 44,
+
+  /** How far a Petal Storm petal travels before expiring, in px. */
+  PETAL_RANGE: 420,
+  /** Petal travel speed in px/s; range / speed gives its lifetime. */
+  PETAL_SPEED: 360,
+  /**
+   * Effective sweep width of a petal against an enemy hitbox, in px.
+   * Equals 2 x (petal radius 5 + mean enemy radius 12).
+   */
+  PETAL_SWEEP_WIDTH: 34,
+
+  /** How long an AoE ring (Aurora Pulse, Tidewave) stays visible, in seconds. */
+  AOE_EFFECT_SEC: 0.35,
+};
+
+/** Level-up draft rules (GDD Section 7). */
+export const DRAFT_CFG = {
+  /** Cards offered per level-up. A 4th slot is a Phase 5 meta-upgrade. */
+  OFFER_COUNT: 3,
+  /** Draw weight by rarity. */
+  RARITY_WEIGHT: {
+    Common: 100,
+    Uncommon: 60,
+    Rare: 30,
+    Legendary: 10,
+  },
+  /**
+   * Owned cards are multiplied by this before drawing, per GDD Section 7:
+   * "zaten sahip olunanlar öncelik kazanır" — the build-around feel depends on
+   * upgrades showing up more often than brand-new cards.
+   */
+  OWNED_WEIGHT_MULTIPLIER: 2.5,
+};
+
+/**
  * Phase 1 scope: single enemy type, fixed 5-wave run, no cards, no boss.
  * Wave 5 is a boss wave by the GDD formula, but the Rustwhale lands in Phase 4 —
  * here wave 5 is simply the final (hardest) standard wave.
@@ -70,6 +125,4 @@ export const PHASE1 = {
   ENEMY_TYPE: 'tarling',
   /** Breather between waves (seconds). */
   WAVE_BREAK_SEC: 2.5,
-  /** Bonus max HP granted per level once the starter weapon is maxed. */
-  OVERFLOW_LEVEL_HP: 5,
 };

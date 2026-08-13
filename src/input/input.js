@@ -15,11 +15,20 @@ const MOVE_KEYS = {
   ArrowRight: [1, 0],
 };
 
+/** Draft picks. A 4th slot exists for the Phase 5 meta-upgrade. */
+const SLOT_KEYS = {
+  Digit1: 0,
+  Digit2: 1,
+  Digit3: 2,
+  Digit4: 3,
+};
+
 export class KeyboardInput {
   /**
    * @param {Object} [handlers]
    * @param {() => void} [handlers.onConfirm] - Enter/Space: start or restart
    * @param {() => void} [handlers.onPause] - Escape/P
+   * @param {(index: number) => void} [handlers.onSlot] - Digit keys 1-4, zero-based
    * @param {EventTarget} [target]
    */
   constructor(handlers = {}, target = window) {
@@ -37,6 +46,12 @@ export class KeyboardInput {
       }
       if (event.code === 'Enter' || event.code === 'Space') {
         this.handlers.onConfirm?.();
+        event.preventDefault();
+        return;
+      }
+      const slot = SLOT_KEYS[event.code];
+      if (slot !== undefined) {
+        this.handlers.onSlot?.(slot);
         event.preventDefault();
         return;
       }

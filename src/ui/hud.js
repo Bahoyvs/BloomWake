@@ -7,6 +7,8 @@
 import './hud.css';
 import { GAME_STATES } from '../core/game-state.js';
 import { PHASE1 } from '../core/constants.js';
+import { describeOffer } from '../core/draft.js';
+import { getCardById } from '../data/cards.js';
 
 export class Hud {
   /**
@@ -47,7 +49,13 @@ export class Hud {
         </div>
 
         <div class="hud__banner" data-hud="banner"></div>
-        <div class="hud__phase">Phase 1 — grey box core loop</div>
+        <div class="hud__cards" data-hud="owned"></div>
+        <div class="hud__phase">Phase 4 — Frutevil Roster & Boss Rustwhale</div>
+
+        <div class="hud__draft" data-hud="draft">
+          <div class="hud__draft-title" data-hud="draft-title">Level up</div>
+          <div class="hud__draft-options" data-hud="draft-options"></div>
+        </div>
 
         <div class="hud__overlay hud__overlay--visible" data-hud="overlay">
           <div class="hud__title" data-hud="overlay-title">BloomWake</div>
@@ -76,6 +84,10 @@ export class Hud {
       if (data.wave > 1) this.showBanner(`Wave ${data.wave}`);
     });
 
+    bus.on('boss:spawned', () => {
+      this.showBanner('⚠️ BOSS: Rustwhale Arrives!', 3.0);
+    });
+
     bus.on('wave:complete', (data) => {
       if (!data.isFinalWave) this.showBanner(`Wave ${data.wave} cleared`);
     });
@@ -83,6 +95,56 @@ export class Hud {
     bus.on('player:level_up', (data) => this.showBanner(`Level ${data.level}`));
     bus.on('game:over', (data) => this.showEnd('The Stain wins', data, false));
     bus.on('game:victory', (data) => this.showEnd('Bloom Complete', data, true));
+
+    bus.on('draft:offer', (data) => this.showDraft(data));
+    bus.on('draft:choice', () => this.hideDraft());
+    bus.on('card:selected', () => this.renderOwnedCards());
+    bus.on('state:reset', () => {
+      this.hideDraft();
+      this.renderOwnedCards();
+    });
+  }
+
+  /**
+   * Render the level-up card draft.
+   * @param {{cards: Array<string>, level: number}} data
+   */
+  showDraft(data) {
+    const offers = data.cards.map((id) => describeOffer(id, this.sim.state.activeCards));
+
+    this.el['draft-title'].textContent = `Level ${data.level} — choose a bloom`;
+    this.el['draft-options'].innerHTML = offers
+      .map(
+        (offer, index) => `
+        <button class="hud__card hud__card--${offer.rarity.toLowerCase()}" data-card="${offer.id}" type="button">
+          <span class="hud__card-key">${index + 1}</span>
+          <span class="hud__card-name">${offer.name}</span>
+          <span class="hud__card-meta">${offer.rarity} · ${offer.type}</span>
+          <span class="hud__card-level">${
+            offer.isNew ? 'NEW' : `Lv ${offer.currentLevel} → ${offer.nextLevel}`
+          }</span>
+          <span class="hud__card-desc">${offer.description}</span>
+        </button>`
+      )
+      .join('');
+
+    for (const button of this.el['draft-options'].querySelectorAll('[data-card]')) {
+      button.addEventListener('click', () => this.handlers.onChooseCard?.(button.dataset.card));
+    }
+
+    this.el.draft.classList.add('hud__draft--visible');
+  }
+
+  hideDraft() {
+    this.el.draft.classList.remove('hud__draft--visible');
+  }
+
+  /** Compact list of owned cards and their levels. */
+  renderOwnedCards() {
+    const owned = [...this.sim.state.activeCards.entries()];
+    this.el.owned.innerHTML = owned
+      .map(([id, level]) => `<span class="hud__owned"><b>${getCardById(id).name}</b> ${level}</span>`)
+      .join('');
   }
 
   /**
@@ -145,7 +207,10 @@ export class Hud {
 
     const hpRatio = Math.max(0, player.hp / player.maxHp) * 100;
     this.el['hp-fill'].style.width = `${hpRatio}%`;
-    this.el['hp-text'].textContent = `${Math.ceil(player.hp)} / ${player.maxHp}`;
+    const shield = this.sim.cards.shieldCharge;
+    this.el['hp-text'].textContent =
+      `${Math.ceil(player.hp)} / ${player.maxHp}` +
+      (shield > 0 ? ` (+${Math.ceil(shield)})` : '');
 
     const xpRatio = Math.min(1, player.xp / player.xpToNextLevel) * 100;
     this.el['xp-fill'].style.width = `${xpRatio}%`;

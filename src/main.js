@@ -29,6 +29,7 @@ const renderer = new Renderer(canvas, simulation);
 
 const hud = new Hud(uiLayer, simulation, {
   onStart: () => startRun(),
+  onChooseCard: (cardId) => state.chooseCard(cardId),
 });
 
 const input = new KeyboardInput({
@@ -41,6 +42,12 @@ const input = new KeyboardInput({
   onPause: () => {
     if (state.currentState === GAME_STATES.RUNNING) state.pause();
     else if (state.currentState === GAME_STATES.PAUSED) state.resume();
+  },
+  // Number keys pick from the level-up draft without reaching for the mouse.
+  onSlot: (index) => {
+    if (state.currentState !== GAME_STATES.LEVEL_UP) return;
+    const cardId = state.pendingDraft?.[index];
+    if (cardId) state.chooseCard(cardId);
   },
 });
 

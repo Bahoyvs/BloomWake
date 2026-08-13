@@ -4,7 +4,7 @@ import { GameState, GAME_STATES } from '../src/core/game-state.js';
 import { EventBus } from '../src/core/event-bus.js';
 import { UNIT_PX, WORLD, PLAYER_CFG, PHASE1, ORB_CFG } from '../src/core/constants.js';
 import { getEnemyCount, getWaveDuration } from '../src/core/wave.js';
-import { getCardById } from '../src/data/cards.js';
+import { CARDS, getCardById } from '../src/data/cards.js';
 
 const STEP = 1 / 60;
 
@@ -29,6 +29,18 @@ function advance(sim, seconds, input = { x: 0, y: 0 }) {
 }
 
 /**
+ * Take the first offered card if a draft is open. A draft freezes the
+ * simulation, so any helper that steps for a while has to resolve one.
+ * @param {Simulation} sim
+ * @returns {boolean} Whether a draft was resolved
+ */
+function autoPick(sim) {
+  if (sim.state.currentState !== GAME_STATES.LEVEL_UP) return false;
+  sim.state.chooseCard(sim.state.pendingDraft[0]);
+  return true;
+}
+
+/**
  * Step until a condition holds, so tests never depend on float-exact timing.
  * @param {Simulation} sim
  * @param {(sim: Simulation) => boolean} predicate
@@ -39,6 +51,7 @@ function advanceUntil(sim, predicate, maxSeconds = 60) {
   const steps = Math.ceil(maxSeconds / STEP);
   for (let i = 0; i < steps; i++) {
     if (predicate(sim)) return true;
+    autoPick(sim);
     sim.update(STEP, { x: 0, y: 0 });
   }
   return predicate(sim);
@@ -207,28 +220,82 @@ describe('Simulation — Phase 1 core survival loop', () => {
       expect(sim.orbs[0].x).toBe(orbX);
     });
 
-    it('upgrades the starter weapon on level up (Phase 1 stand-in for cards)', () => {
+    it('opens a card draft on level up and freezes the run', () => {
       const sim = makeSim();
-      expect(sim.state.activeCards.get('dewdrop_barrage')).toBe(1);
+      const offered = vi.fn();
+      sim.bus.on('draft:offer', offered);
 
       sim.state.addXp(20); // level 2
 
       expect(sim.state.player.level).toBe(2);
-      expect(sim.state.activeCards.get('dewdrop_barrage')).toBe(2);
-      expect(sim.getWeaponStats().damage).toBe(16);
+      expect(sim.state.currentState).toBe(GAME_STATES.LEVEL_UP);
+      expect(offered).toHaveBeenCalledTimes(1);
+      expect(sim.state.pendingDraft).toHaveLength(3);
+
+      // Frozen: no movement, no spawning while the draft is open.
+      const before = { x: sim.state.player.x, enemies: sim.enemies.length };
+      advance(sim, 1, { x: 1, y: 0 });
+      expect(sim.state.player.x).toBe(before.x);
+      expect(sim.enemies.length).toBe(before.enemies);
     });
 
-    it('grants max HP once the starter weapon is fully upgraded', () => {
+    it('applies the chosen card and resumes the run', () => {
       const sim = makeSim();
-      const baseMaxHp = sim.state.player.maxHp;
+      sim.state.addXp(20);
 
-      // Four level-ups take Dewdrop Barrage from 1 to its max of 5.
-      for (let i = 0; i < 4; i++) sim.state.addXp(sim.state.player.xpToNextLevel);
-      expect(sim.state.activeCards.get('dewdrop_barrage')).toBe(5);
-      expect(sim.state.player.maxHp).toBe(baseMaxHp);
+      const choice = sim.state.pendingDraft[0];
+      const levelBefore = sim.state.activeCards.get(choice) || 0;
 
-      sim.state.addXp(sim.state.player.xpToNextLevel);
-      expect(sim.state.player.maxHp).toBe(baseMaxHp + PHASE1.OVERFLOW_LEVEL_HP);
+      expect(sim.state.chooseCard(choice)).toBe(true);
+      expect(sim.state.activeCards.get(choice)).toBe(levelBefore + 1);
+      expect(sim.state.currentState).toBe(GAME_STATES.RUNNING);
+      expect(sim.state.pendingDraft).toBeNull();
+    });
+
+    it('rejects a card that was not offered', () => {
+      const sim = makeSim();
+      sim.state.addXp(20);
+
+      const notOffered = CARDS.map((c) => c.id).find(
+        (id) => !sim.state.pendingDraft.includes(id)
+      );
+
+      expect(sim.state.chooseCard(notOffered)).toBe(false);
+      expect(sim.state.currentState).toBe(GAME_STATES.LEVEL_UP);
+    });
+
+    it('queues drafts when several level-ups land at once', () => {
+      const sim = makeSim();
+
+      // Enough XP in one go to clear levels 2 and 3 (20 then 27).
+      sim.state.addXp(60);
+
+      expect(sim.state.player.level).toBe(3);
+      expect(sim.pendingLevelUps).toBe(2);
+      expect(sim.state.currentState).toBe(GAME_STATES.LEVEL_UP);
+
+      sim.state.chooseCard(sim.state.pendingDraft[0]);
+      // Second draft opens immediately rather than being dropped.
+      expect(sim.state.currentState).toBe(GAME_STATES.LEVEL_UP);
+
+      sim.state.chooseCard(sim.state.pendingDraft[0]);
+      expect(sim.state.currentState).toBe(GAME_STATES.RUNNING);
+      expect(sim.pendingLevelUps).toBe(0);
+    });
+
+    it('skips the draft when every card is maxed', () => {
+      const sim = makeSim();
+      for (const card of CARDS) {
+        for (let lv = sim.state.activeCards.get(card.id) || 0; lv < card.maxLevel; lv++) {
+          sim.state.selectCard(card.id);
+        }
+      }
+
+      sim.state.addXp(20);
+
+      expect(sim.state.player.level).toBe(2);
+      expect(sim.state.currentState).toBe(GAME_STATES.RUNNING);
+      expect(sim.pendingLevelUps).toBe(0);
     });
   });
 
@@ -362,17 +429,65 @@ describe('Simulation — Phase 1 core survival loop', () => {
     it('is winnable by a competent player and survives a full playthrough', () => {
       const sim = makeSim();
 
-      // Naive "good player" policy: run from the nearest threat.
+      // Competent player policy: kite away from threats, avoid arena edges, upgrade owned cards.
       for (let step = 0; step < 60 * 60 * 5; step++) {
         const status = sim.state.currentState;
         if (status === GAME_STATES.VICTORY || status === GAME_STATES.GAME_OVER) break;
 
+        if (sim.state.currentState === GAME_STATES.LEVEL_UP) {
+          const pending = sim.state.pendingDraft;
+          let bestCard = pending[0];
+          for (const cardId of pending) {
+            if (sim.state.activeCards.has(cardId)) {
+              bestCard = cardId;
+              break;
+            }
+          }
+          sim.state.chooseCard(bestCard);
+        }
+
         const player = sim.state.player;
-        const threat = sim.findNearestEnemy(400);
-        const input = threat
-          ? { x: player.x - threat.x, y: player.y - threat.y }
-          : { x: 0, y: 0 };
-        sim.update(STEP, input);
+        const boss = sim.enemies.find((e) => e.isBoss && e.alive);
+        const threat = boss || sim.findNearestEnemy(600);
+
+        let inputX = 0;
+        let inputY = 0;
+
+        // Evade Boss Telegraph AoE warning
+        if (sim.bossTelegraph.active) {
+          const teleDx = player.x - sim.bossTelegraph.x;
+          const teleDy = player.y - sim.bossTelegraph.y;
+          if (Math.hypot(teleDx, teleDy) < sim.bossTelegraph.radius + 40) {
+            inputX += teleDx * 5;
+            inputY += teleDy * 5;
+          }
+        }
+
+        if (threat) {
+          const dx = threat.x - player.x;
+          const dy = threat.y - player.y;
+          const dist = Math.hypot(dx, dy);
+
+          if (dist < 180) {
+            inputX -= dx;
+            inputY -= dy;
+          } else if (dist > 380) {
+            inputX += dx;
+            inputY += dy;
+          } else {
+            inputX -= dy;
+            inputY += dx;
+          }
+        }
+
+        // Steer away from walls if close to boundary
+        const margin = 200;
+        if (player.x < margin) inputX += (margin - player.x) * 3;
+        if (player.x > WORLD.WIDTH - margin) inputX -= (player.x - (WORLD.WIDTH - margin)) * 3;
+        if (player.y < margin) inputY += (margin - player.y) * 3;
+        if (player.y > WORLD.HEIGHT - margin) inputY -= (player.y - (WORLD.HEIGHT - margin)) * 3;
+
+        sim.update(STEP, { x: inputX, y: inputY });
       }
 
       expect(sim.state.currentState).toBe(GAME_STATES.VICTORY);
