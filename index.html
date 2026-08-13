@@ -18,14 +18,15 @@
       touch-action: none;
     }
 
-    /* Phase 1 runs in neutral grey box; the Frutiger Aero pass lands in Phase 6. */
+    /* Phase 6: Frutiger Aero. Page background matches the canvas gradient's
+       darkest stop so any overscroll or letterbox blends in. */
     body, html {
       width: 100%;
       height: 100%;
       overflow: hidden;
-      background-color: #0d0f12;
+      background-color: #03080f;
       font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
-      color: #dbe2ec;
+      color: #e8fbff;
     }
 
     #app-container {
@@ -41,7 +42,7 @@
       width: 100%;
       height: 100%;
       display: block;
-      background: #0d0f12;
+      background: linear-gradient(180deg, #071a24, #03080f);
     }
 
     #ui-layer {

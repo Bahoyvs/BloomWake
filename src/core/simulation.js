@@ -11,7 +11,8 @@
  */
 
 import { EventBus } from './event-bus.js';
-import { GameState, GAME_STATES } from './game-state.js';
+import { GameState, GAME_STATES, DEFAULT_PLAYER_STATS } from './game-state.js';
+import { applyMetaUpgradesToRunStart, getDraftOfferCount } from './meta-shop.js';
 import { WaveSpawner } from './spawner.js';
 import { CardSystem } from './cards.js';
 import { drawDraft } from './draft.js';
@@ -109,10 +110,28 @@ export class Simulation {
     this.pendingLevelUps = 0;
   }
 
-  /** Begin a fresh run: reset state, centre the Dewling, open wave 1. */
-  startRun() {
+  /**
+   * Begin a fresh run: reset state, centre the Dewling, open wave 1.
+   *
+   * @param {Object} [metaState] - Persistent meta-state. When supplied, its
+   *   purchased upgrades are folded into the Dewling's starting stats and the
+   *   draft width. Omitted in tests and Phase 1-4 call sites, which run with
+   *   unmodified base stats.
+   */
+  startRun(metaState = null) {
     this.resetEntities();
     this.state.startRun();
+
+    if (metaState) {
+      Object.assign(
+        this.state.player,
+        applyMetaUpgradesToRunStart(metaState, DEFAULT_PLAYER_STATS)
+      );
+      this.offerCount = getDraftOfferCount(metaState, DRAFT_CFG.OFFER_COUNT);
+    } else {
+      this.offerCount = DRAFT_CFG.OFFER_COUNT;
+    }
+
     this.state.player.x = WORLD.WIDTH / 2;
     this.state.player.y = WORLD.HEIGHT / 2;
     this.cards.onCardChanged(STARTER_CARD_ID);
@@ -200,7 +219,7 @@ export class Simulation {
       const offer = drawDraft(
         this.rng,
         this.state.activeCards,
-        DRAFT_CFG.OFFER_COUNT,
+        this.offerCount ?? DRAFT_CFG.OFFER_COUNT,
         this.state.player.level
       );
       if (offer.length === 0) {
@@ -618,7 +637,15 @@ export class Simulation {
   damageEnemy(enemy, amount) {
     enemy.hp -= amount;
     enemy.hitFlash = 0.1;
-    this.bus.emit('enemy:damaged', { id: enemy.id, damage: amount, remainingHp: enemy.hp });
+    // Position travels with the event so the renderer can place hit particles
+    // without reaching back into simulation entities.
+    this.bus.emit('enemy:damaged', {
+      id: enemy.id,
+      damage: amount,
+      remainingHp: enemy.hp,
+      x: enemy.x,
+      y: enemy.y,
+    });
 
     if (enemy.hp <= 0) this.killEnemy(enemy);
   }
@@ -627,6 +654,14 @@ export class Simulation {
     enemy.alive = false;
     this.state.registerKill(enemy.scoreValue);
     this.spawnOrb(enemy.x, enemy.y, enemy.xpValue);
+    this.bus.emit('enemy:death', {
+      id: enemy.id,
+      typeId: enemy.typeId,
+      x: enemy.x,
+      y: enemy.y,
+      radius: enemy.radius,
+      isBoss: Boolean(enemy.isBoss),
+    });
 
     // If boss is killed on boss wave, complete wave
     if (enemy.isBoss && isBossWave(this.state.wave)) {

@@ -7,9 +7,16 @@ import { globalBus } from './core/event-bus.js';
 import { GameState, GAME_STATES } from './core/game-state.js';
 import { Simulation } from './core/simulation.js';
 import { PHASE1 } from './core/constants.js';
+import { mulberry32 } from './core/math.js';
+import { purchaseUpgrade } from './core/meta-shop.js';
+import { purchaseCosmetic, equipCosmetic, getEquippedCosmetic } from './core/cosmetics.js';
+import { claimDailyBloom } from './core/daily-bloom.js';
+import { openSmallCapsule, completeRun } from './core/meta-progression.js';
 import { KeyboardInput } from './input/input.js';
 import { Renderer } from './render/renderer.js';
 import { Hud } from './ui/hud.js';
+import { MetaUi } from './ui/meta-ui.js';
+import { loadSave, saveState } from './ui/storage.js';
 
 /** Fixed simulation step keeps physics and damage timing frame-rate independent. */
 const FIXED_DT = 1 / 60;
@@ -25,12 +32,82 @@ const simulation = new Simulation({
 
 const canvas = document.getElementById('game-canvas');
 const uiLayer = document.getElementById('ui-layer');
-const renderer = new Renderer(canvas, simulation);
+const renderer = new Renderer(canvas, simulation, {
+  // Read live so equipping a variant in the shop takes effect immediately.
+  getCosmetic: () => getEquippedCosmetic(metaState),
+});
 
 const hud = new Hud(uiLayer, simulation, {
-  onStart: () => startRun(),
   onChooseCard: (cardId) => state.chooseCard(cardId),
 });
+
+/* ------------------------------------------------------------------------ */
+/* Meta-progression (Phase 5)                                                */
+/* ------------------------------------------------------------------------ */
+
+/** Persistent across runs; every core action returns a new one. */
+let metaState = loadSave();
+
+/** Capsule RNG. Seeded per session so rewards are not replayable by reload. */
+const rewardRng = mulberry32((Date.now() ^ 0x9e3779b9) >>> 0);
+
+/**
+ * Commit a new meta-state and persist it.
+ * @param {Object} next
+ */
+function commitMeta(next) {
+  metaState = next;
+  saveState(metaState);
+}
+
+const metaUi = new MetaUi(uiLayer, {
+  getState: () => metaState,
+  onPlay: () => startRun(),
+  onBuyUpgrade: (id) => {
+    const result = purchaseUpgrade(metaState, id);
+    if (result.ok) commitMeta(result.state);
+    metaUi.renderShop();
+  },
+  onBuyCosmetic: (id) => {
+    const result = purchaseCosmetic(metaState, id);
+    if (result.ok) commitMeta(result.state);
+    metaUi.renderShop();
+  },
+  onEquipCosmetic: (id) => {
+    const result = equipCosmetic(metaState, id);
+    if (result.ok) commitMeta(result.state);
+    metaUi.renderShop();
+  },
+  onClaimDaily: () => {
+    const result = claimDailyBloom(metaState, Date.now(), rewardRng);
+    if (result.ok) {
+      commitMeta(result.state);
+      metaUi.showToast({ ...result.reward, tier: result.reward.tier });
+    }
+    metaUi.renderMenu();
+  },
+});
+
+// Small capsule per wave cleared: a toast, never a pause.
+globalBus.on('wave:complete', () => {
+  const { state: next, reward } = openSmallCapsule(metaState, rewardRng);
+  commitMeta(next);
+  metaUi.showToast(reward);
+});
+
+/**
+ * End of run: open the large capsule and show Bloom Complete.
+ * @param {Object} data - Payload from game:over / game:victory
+ * @param {boolean} won
+ */
+function finishRun(data, won) {
+  const outcome = completeRun(metaState, { wave: data.wave }, rewardRng);
+  commitMeta(outcome.state);
+  metaUi.showResults({ ...data, won }, outcome);
+}
+
+globalBus.on('game:over', (data) => finishRun(data, false));
+globalBus.on('game:victory', (data) => finishRun(data, true));
 
 const input = new KeyboardInput({
   onConfirm: () => {
@@ -52,8 +129,9 @@ const input = new KeyboardInput({
 });
 
 function startRun() {
-  hud.hideOverlay();
-  simulation.startRun();
+  metaUi.hide();
+  // Purchased upgrades are folded into the Dewling's starting stats here.
+  simulation.startRun(metaState);
 }
 
 // Losing focus mid-swarm shouldn't cost the player HP.
@@ -61,10 +139,22 @@ window.addEventListener('blur', () => {
   if (state.currentState === GAME_STATES.RUNNING) state.pause();
 });
 
-// Dev-only inspection handle — used for manual verification and Phase 2 profiling.
+// Dev-only inspection handle — used for manual verification and profiling.
 if (import.meta.env.DEV) {
-  window.__bloomwake = { simulation, state, renderer, hud, input };
+  window.__bloomwake = {
+    simulation,
+    state,
+    renderer,
+    hud,
+    input,
+    metaUi,
+    getMeta: () => metaState,
+    setMeta: (next) => commitMeta(next),
+  };
 }
+
+// Open on the menu rather than dropping straight into a run.
+metaUi.showMenu();
 
 let accumulator = 0;
 let lastTime = performance.now();
@@ -81,7 +171,7 @@ function frame(now) {
   }
 
   hud.update(frameTime);
-  renderer.render();
+  renderer.render(frameTime);
   requestAnimationFrame(frame);
 }
 

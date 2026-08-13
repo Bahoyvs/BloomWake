@@ -1,14 +1,29 @@
 /*
- * Phase 1 grey-box HUD.
- * Neutral on purpose — the Frutiger Aero interface pass is Phase 6.
+ * Phase 6 HUD — Frutiger Aero glass.
+ *
+ * Panels are translucent aqua glass with a bright top edge and a soft blur, the
+ * signature Aero treatment. Everything sits at low opacity so the playfield
+ * stays readable underneath: the HUD must never compete with the Dewling.
  */
+
+:root {
+  --aero-glass: rgba(18, 58, 76, 0.42);
+  --aero-glass-strong: rgba(14, 46, 62, 0.78);
+  --aero-edge: rgba(160, 232, 255, 0.32);
+  --aero-edge-bright: rgba(210, 245, 255, 0.75);
+  --aero-text: #e8fbff;
+  --aero-text-dim: #8fb8c9;
+  --aero-cyan: #7fe6ff;
+  --aero-aqua: #5ad6ff;
+  --aero-mint: #9bf5c4;
+}
 
 .hud {
   position: absolute;
   inset: 0;
   pointer-events: none;
   font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
-  color: #dbe2ec;
+  color: var(--aero-text);
 }
 
 .hud__top {
@@ -21,7 +36,10 @@
   justify-content: center;
   gap: 28px;
   padding: 14px 20px;
-  background: linear-gradient(180deg, rgba(10, 12, 15, 0.85), rgba(10, 12, 15, 0));
+  background: linear-gradient(180deg, rgba(7, 30, 42, 0.86), rgba(7, 30, 42, 0));
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border-bottom: 1px solid var(--aero-edge);
   font-size: 14px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -34,7 +52,7 @@
 }
 
 .hud__stat-label {
-  color: #78828f;
+  color: var(--aero-text-dim);
   font-size: 11px;
 }
 
@@ -58,9 +76,12 @@
 .hud__bar {
   position: relative;
   height: 14px;
-  border: 1px solid #3a4048;
-  border-radius: 3px;
-  background: #14171c;
+  border: 1px solid var(--aero-edge);
+  border-radius: 8px;
+  background: var(--aero-glass);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  box-shadow: inset 0 1px 0 var(--aero-edge-bright);
   overflow: hidden;
 }
 
@@ -71,7 +92,8 @@
 }
 
 .hud__bar--hp .hud__bar-fill {
-  background: #d8dee8;
+  background: linear-gradient(180deg, #eafcff, #6fd6f0);
+  box-shadow: 0 0 12px rgba(127, 230, 255, 0.55);
 }
 
 .hud__bar--xp {
@@ -79,7 +101,8 @@
 }
 
 .hud__bar--xp .hud__bar-fill {
-  background: #7fd4ff;
+  background: linear-gradient(180deg, #d7fff0, var(--aero-mint));
+  box-shadow: 0 0 10px rgba(155, 245, 196, 0.5);
 }
 
 .hud__bar-text {
@@ -106,86 +129,14 @@
   letter-spacing: 0.12em;
   text-transform: uppercase;
   text-align: center;
+  color: var(--aero-text);
+  text-shadow: 0 0 18px rgba(127, 230, 255, 0.65), 0 2px 10px rgba(0, 0, 0, 0.7);
   opacity: 0;
   transition: opacity 0.25s ease;
 }
 
 .hud__banner--visible {
   opacity: 1;
-}
-
-.hud__overlay {
-  position: absolute;
-  inset: 0;
-  display: none;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  padding: 24px;
-  text-align: center;
-  background: rgba(8, 10, 13, 0.86);
-  pointer-events: auto;
-}
-
-.hud__overlay--visible {
-  display: flex;
-}
-
-.hud__title {
-  font-size: clamp(32px, 7vw, 56px);
-  font-weight: 800;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
-.hud__subtitle {
-  font-size: 15px;
-  color: #96a0ad;
-  max-width: 460px;
-  line-height: 1.6;
-}
-
-.hud__summary {
-  display: flex;
-  gap: 26px;
-  margin-top: 6px;
-  font-variant-numeric: tabular-nums;
-}
-
-.hud__summary-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.hud__summary-value {
-  font-size: 26px;
-  font-weight: 700;
-}
-
-.hud__summary-label {
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: #78828f;
-}
-
-.hud__hint {
-  margin-top: 18px;
-  font-size: 13px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #cfd7e2;
-  border: 1px solid #3a4048;
-  border-radius: 4px;
-  padding: 10px 18px;
-  background: #171b21;
-  cursor: pointer;
-}
-
-.hud__hint:hover {
-  background: #1f242c;
 }
 
 .hud__phase {
@@ -206,11 +157,11 @@
   flex-direction: column;
   gap: 3px;
   font-size: 11px;
-  color: #8b95a3;
+  color: var(--aero-text-dim);
 }
 
 .hud__owned b {
-  color: #cfd7e2;
+  color: var(--aero-text);
   font-weight: 600;
 }
 
@@ -224,7 +175,9 @@
   justify-content: center;
   gap: 22px;
   padding: 24px;
-  background: rgba(8, 10, 13, 0.82);
+  background: radial-gradient(circle at 50% 40%, rgba(10, 44, 60, 0.82), rgba(3, 10, 16, 0.94));
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
   pointer-events: auto;
 }
 
@@ -256,23 +209,27 @@
   text-align: left;
   color: inherit;
   font: inherit;
-  background: #171b21;
-  border: 1px solid #333a44;
+  background: var(--aero-glass-strong);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--aero-edge);
   border-top-width: 3px;
-  border-radius: 5px;
+  border-radius: 10px;
+  box-shadow: inset 0 1px 0 var(--aero-edge-bright), 0 8px 26px rgba(0, 0, 0, 0.45);
   cursor: pointer;
   transition: transform 0.12s ease, background 0.12s ease;
 }
 
 .hud__card:hover {
   transform: translateY(-3px);
-  background: #1f242c;
+  background: rgba(24, 68, 88, 0.85);
+  box-shadow: inset 0 1px 0 var(--aero-edge-bright), 0 12px 32px rgba(0, 0, 0, 0.55);
 }
 
-.hud__card--common { border-top-color: #7b8794; }
-.hud__card--uncommon { border-top-color: #6fb98f; }
-.hud__card--rare { border-top-color: #6aa6e8; }
-.hud__card--legendary { border-top-color: #e0b354; }
+.hud__card--common { border-top-color: #8fb8c9; }
+.hud__card--uncommon { border-top-color: var(--aero-mint); }
+.hud__card--rare { border-top-color: var(--aero-cyan); }
+.hud__card--legendary { border-top-color: #ffd98a; }
 
 .hud__card-key {
   position: absolute;
@@ -297,11 +254,11 @@
 .hud__card-level {
   font-size: 12px;
   font-weight: 600;
-  color: #7fd4ff;
+  color: var(--aero-cyan);
 }
 
 .hud__card-desc {
   font-size: 12px;
   line-height: 1.5;
-  color: #9aa4b2;
+  color: var(--aero-text-dim);
 }

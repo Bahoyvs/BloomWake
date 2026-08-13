@@ -50,31 +50,21 @@ export class Hud {
 
         <div class="hud__banner" data-hud="banner"></div>
         <div class="hud__cards" data-hud="owned"></div>
-        <div class="hud__phase">Phase 4 — Frutevil Roster & Boss Rustwhale</div>
+        <div class="hud__phase">Phase 5 — Bloom Capsules & Petal meta-progression</div>
 
         <div class="hud__draft" data-hud="draft">
           <div class="hud__draft-title" data-hud="draft-title">Level up</div>
           <div class="hud__draft-options" data-hud="draft-options"></div>
         </div>
-
-        <div class="hud__overlay hud__overlay--visible" data-hud="overlay">
-          <div class="hud__title" data-hud="overlay-title">BloomWake</div>
-          <div class="hud__subtitle" data-hud="overlay-subtitle">
-            Move with WASD or the arrow keys. The Dewling fires on its own —
-            survive ${PHASE1.MAX_WAVES} waves and collect the drops to level up.
-          </div>
-          <div class="hud__summary" data-hud="overlay-summary" hidden></div>
-          <button class="hud__hint" data-hud="overlay-action" type="button">Press Enter to bloom</button>
-        </div>
       </div>
     `;
 
+    // Full-screen states (menu, shop, Bloom Complete) belong to MetaUi as of
+    // Phase 5; the HUD now only owns in-run chrome.
     this.el = {};
     for (const node of this.root.querySelectorAll('[data-hud]')) {
       this.el[node.dataset.hud] = node;
     }
-
-    this.el['overlay-action'].addEventListener('click', () => this.handlers.onStart?.());
   }
 
   bindEvents() {
@@ -96,8 +86,7 @@ export class Hud {
     });
 
     bus.on('player:level_up', (data) => this.showBanner(`Level ${data.level}`));
-    bus.on('game:over', (data) => this.showEnd('The Stain wins', data, false));
-    bus.on('game:victory', (data) => this.showEnd('Bloom Complete', data, true));
+    // game:over / game:victory are handled by MetaUi's Bloom Complete screen.
 
     bus.on('draft:offer', (data) => this.showDraft(data));
     bus.on('draft:choice', () => this.hideDraft());
@@ -158,40 +147,6 @@ export class Hud {
     this.el.banner.textContent = text;
     this.el.banner.classList.add('hud__banner--visible');
     this.bannerTimer = duration;
-  }
-
-  showEnd(title, data, won) {
-    this.el['overlay-title'].textContent = title;
-    this.el['overlay-subtitle'].textContent = won
-      ? `All ${PHASE1.MAX_WAVES} waves survived. The core loop held.`
-      : 'The Dewling faded before the last wave.';
-
-    this.el['overlay-summary'].hidden = false;
-    this.el['overlay-summary'].innerHTML = `
-      <div class="hud__summary-item">
-        <span class="hud__summary-value">${data.wave}</span>
-        <span class="hud__summary-label">Wave</span>
-      </div>
-      <div class="hud__summary-item">
-        <span class="hud__summary-value">${data.kills}</span>
-        <span class="hud__summary-label">Kills</span>
-      </div>
-      <div class="hud__summary-item">
-        <span class="hud__summary-value">${data.score}</span>
-        <span class="hud__summary-label">Score</span>
-      </div>
-      <div class="hud__summary-item">
-        <span class="hud__summary-value">${this.sim.state.player.level}</span>
-        <span class="hud__summary-label">Level</span>
-      </div>
-    `;
-
-    this.el['overlay-action'].textContent = 'Press Enter to run again';
-    this.el.overlay.classList.add('hud__overlay--visible');
-  }
-
-  hideOverlay() {
-    this.el.overlay.classList.remove('hud__overlay--visible');
   }
 
   /**
