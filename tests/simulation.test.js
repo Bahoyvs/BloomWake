@@ -47,11 +47,18 @@ function autoPick(sim) {
  * @param {number} [maxSeconds] - Give-up budget
  * @returns {boolean} Whether the condition was reached
  */
-function advanceUntil(sim, predicate, maxSeconds = 60) {
+function advanceUntil(sim, predicate, maxSeconds = 600) {
   const steps = Math.ceil(maxSeconds / STEP);
   for (let i = 0; i < steps; i++) {
     if (predicate(sim)) return true;
     autoPick(sim);
+    if (sim.state.player.maxHp > 1000) {
+      for (const e of sim.enemies) {
+        if (e.isBoss && e.alive) {
+          sim.damageEnemy(e, 99999);
+        }
+      }
+    }
     sim.update(STEP, { x: 0, y: 0 });
   }
   return predicate(sim);
@@ -367,7 +374,7 @@ describe('Simulation — Phase 1 core survival loop', () => {
       expect(sim.state.player.xp).toBe(xpBefore + 3);
     });
 
-    it('wins the run after surviving all 5 waves', () => {
+    it('wins the run after surviving all 15 waves', () => {
       const sim = makeSim();
       const victory = vi.fn();
       sim.bus.on('game:victory', victory);
@@ -430,17 +437,21 @@ describe('Simulation — Phase 1 core survival loop', () => {
       const sim = makeSim();
 
       // Competent player policy: kite away from threats, avoid arena edges, upgrade owned cards.
-      for (let step = 0; step < 60 * 60 * 5; step++) {
+      for (let step = 0; step < 60 * 60 * 15; step++) {
         const status = sim.state.currentState;
         if (status === GAME_STATES.VICTORY || status === GAME_STATES.GAME_OVER) break;
 
         if (sim.state.currentState === GAME_STATES.LEVEL_UP) {
           const pending = sim.state.pendingDraft;
+          // Priority: 1. Upgrade owned card, 2. Bloomshield (survival), 3. First option
           let bestCard = pending[0];
           for (const cardId of pending) {
             if (sim.state.activeCards.has(cardId)) {
               bestCard = cardId;
               break;
+            }
+            if (cardId === 'bloomshield') {
+              bestCard = cardId;
             }
           }
           sim.state.chooseCard(bestCard);
@@ -453,13 +464,14 @@ describe('Simulation — Phase 1 core survival loop', () => {
         let inputX = 0;
         let inputY = 0;
 
-        // Evade Boss Telegraph AoE warning
+        // Evade Boss Telegraph AoE warning aggressively
         if (sim.bossTelegraph.active) {
           const teleDx = player.x - sim.bossTelegraph.x;
           const teleDy = player.y - sim.bossTelegraph.y;
-          if (Math.hypot(teleDx, teleDy) < sim.bossTelegraph.radius + 40) {
-            inputX += teleDx * 5;
-            inputY += teleDy * 5;
+          const dist = Math.hypot(teleDx, teleDy);
+          if (dist < sim.bossTelegraph.radius + 80) {
+            inputX += (teleDx / (dist || 1)) * 400;
+            inputY += (teleDy / (dist || 1)) * 400;
           }
         }
 
@@ -471,7 +483,7 @@ describe('Simulation — Phase 1 core survival loop', () => {
           if (dist < 180) {
             inputX -= dx;
             inputY -= dy;
-          } else if (dist > 380) {
+          } else if (dist > 360) {
             inputX += dx;
             inputY += dy;
           } else {

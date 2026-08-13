@@ -84,8 +84,11 @@ export class Hud {
       if (data.wave > 1) this.showBanner(`Wave ${data.wave}`);
     });
 
-    bus.on('boss:spawned', () => {
-      this.showBanner('⚠️ BOSS: Rustwhale Arrives!', 3.0);
+    bus.on('boss:spawned', (data) => {
+      const wave = data?.wave || this.sim.state.wave;
+      const tier = Math.floor(wave / 5);
+      const title = wave >= 15 ? '⚠️ FINAL BOSS: Rustwhale (Tier 3)' : `⚠️ BOSS ${tier}: Rustwhale Arrives!`;
+      this.showBanner(title, 3.5);
     });
 
     bus.on('wave:complete', (data) => {

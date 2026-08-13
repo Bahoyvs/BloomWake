@@ -121,7 +121,7 @@ export const DRAFT_CFG = {
  * here wave 5 is simply the final (hardest) standard wave.
  */
 export const PHASE1 = {
-  MAX_WAVES: 5,
+  MAX_WAVES: 15,
   ENEMY_TYPE: 'tarling',
   /** Breather between waves (seconds). */
   WAVE_BREAK_SEC: 2.5,

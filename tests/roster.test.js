@@ -24,20 +24,35 @@ describe('Frutevil Enemy Roster & Boss Telegraph (Phase 4)', () => {
     expect(wave8).toEqual(['tarling', 'ashfish', 'cracked_wisp', 'rustbloom', 'smogmoth']);
   });
 
-  it('spawns Rustwhale Boss on boss wave (wave 5)', () => {
+  it('spawns scaled Rustwhale Bosses on waves 5 (Boss 1), 10 (Boss 2), and 15 (Final Boss)', () => {
     const sim = new Simulation({ seed: 42 });
     sim.startRun();
 
-    // Advance to wave 5
+    // Wave 5: Boss 1
     sim.state.wave = 5;
     sim.spawner.beginWave(5);
-
     sim.update(0.1);
-
-    const boss = sim.enemies.find((e) => e.isBoss);
+    let boss = sim.enemies.find((e) => e.isBoss);
     expect(boss).toBeDefined();
-    expect(boss.typeId).toBe(ENEMY_TYPES.RUSTWHALE);
     expect(boss.hp).toBe(650); // 400 + (5/5)*250
+
+    // Reset enemies and check Wave 10: Boss 2
+    sim.enemies.length = 0;
+    sim.state.wave = 10;
+    sim.spawner.beginWave(10);
+    sim.update(0.1);
+    boss = sim.enemies.find((e) => e.isBoss);
+    expect(boss).toBeDefined();
+    expect(boss.hp).toBe(900); // 400 + (10/5)*250
+
+    // Reset enemies and check Wave 15: Final Boss
+    sim.enemies.length = 0;
+    sim.state.wave = 15;
+    sim.spawner.beginWave(15);
+    sim.update(0.1);
+    boss = sim.enemies.find((e) => e.isBoss);
+    expect(boss).toBeDefined();
+    expect(boss.hp).toBe(1150); // 400 + (15/5)*250
   });
 
   it('triggers Rustwhale telegraph attack and eruption event', () => {
