@@ -61,7 +61,10 @@ const HANDLERS = {
       }
 
       rt.cooldown = stats.cooldown;
-      sys.bus.emit('weapon:fire', { cardId: 'dewdrop_barrage', count });
+      // baseAngle travels with the event so the renderer can aim the muzzle
+      // spray and the recoil without reaching back into simulation entities —
+      // the same reason enemy:damaged carries its position.
+      sys.bus.emit('weapon:fire', { cardId: 'dewdrop_barrage', count, angle: baseAngle });
     },
   },
 

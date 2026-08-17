@@ -152,6 +152,93 @@ export class ParticleSystem {
   }
 
   /**
+   * Directional cone spray — a muzzle blast rather than an explosion.
+   *
+   * `burst` throws particles in every direction, which reads as "something
+   * happened here" but says nothing about WHERE the shot went. Aiming the cone
+   * down the firing angle is what makes an attack read as an attack.
+   *
+   * @param {number} x
+   * @param {number} y
+   * @param {number} angle - Centre of the cone, radians
+   * @param {string} color - Hex string
+   * @param {Object} [options]
+   * @param {number} [options.count]
+   * @param {number} [options.spread] - Cone half-width in radians
+   * @param {number} [options.speed] - Base speed px/s
+   * @param {number} [options.spawnOffset] - Push the origin along the angle
+   * @param {string} [options.kind]
+   */
+  spray(x, y, angle, color, options = {}) {
+    const {
+      count = 8,
+      spread = 0.5,
+      speed = 150,
+      spawnOffset = 0,
+      kind = PARTICLE_KINDS.SPARK,
+    } = options;
+
+    const tint = hexToPixi(color);
+    const originX = x + Math.cos(angle) * spawnOffset;
+    const originY = y + Math.sin(angle) * spawnOffset;
+
+    for (let i = 0; i < count; i++) {
+      // Bias toward the cone centre so the spray has a dense core and soft
+      // edges instead of a flat, fan-shaped wall.
+      const bias = (Math.random() + Math.random() - 1);
+      const a = angle + bias * spread;
+      const v = speed * (0.55 + Math.random() * 0.85);
+
+      this.spawn({
+        x: originX + (Math.random() - 0.5) * 6,
+        y: originY + (Math.random() - 0.5) * 6,
+        vx: Math.cos(a) * v,
+        vy: Math.sin(a) * v,
+        life: 0.16 + Math.random() * 0.22,
+        size: 1.6 + Math.random() * 2.6,
+        tint,
+        kind,
+        drag: 0.86,
+      });
+    }
+  }
+
+  /**
+   * Droplets shed behind a moving Dewling.
+   *
+   * Thrown BACKWARD along travel with a little lateral scatter, so the swarm
+   * reads the player's heading from the wake alone. Deliberately cheap and
+   * short-lived: this fires continuously while moving, unlike the one-shot
+   * bursts, so it must not compete for the particle budget.
+   *
+   * @param {number} x
+   * @param {number} y
+   * @param {number} angle - Direction of TRAVEL; the wake goes opposite
+   * @param {string} color
+   * @param {number} [count]
+   */
+  wake(x, y, angle, color, count = 2) {
+    const tint = hexToPixi(color);
+    const back = angle + Math.PI;
+
+    for (let i = 0; i < count; i++) {
+      const a = back + (Math.random() - 0.5) * 1.1;
+      const v = 24 + Math.random() * 46;
+      this.spawn({
+        x: x + (Math.random() - 0.5) * 10,
+        y: y + (Math.random() - 0.5) * 10,
+        vx: Math.cos(a) * v,
+        vy: Math.sin(a) * v - 8,
+        life: 0.28 + Math.random() * 0.26,
+        size: 1.4 + Math.random() * 2.4,
+        tint,
+        kind: PARTICLE_KINDS.BUBBLE,
+        drag: 0.9,
+      });
+    }
+  }
+
+  /**
    * Frutevil dissolving: dark motes plus a rim flash.
    * @param {number} x
    * @param {number} y

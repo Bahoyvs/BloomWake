@@ -180,7 +180,7 @@ describe('applyMetaUpgradesToRunStart', () => {
 
     const result = applyMetaUpgradesToRunStart(state, DEFAULT_PLAYER_STATS);
     expect(result.maxHp).toBe(150);
-    expect(result.moveSpeed).toBeCloseTo(3.2 * 1.12, 6);
+    expect(result.moveSpeed).toBeCloseTo(DEFAULT_PLAYER_STATS.moveSpeed * 1.12, 6);
     expect((result.pickupRadius - 0.8) * UNIT_PX).toBeCloseTo(60, 6);
   });
 

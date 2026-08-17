@@ -72,14 +72,13 @@ describe('Simulation — Phase 1 core survival loop', () => {
       expect(sim.state.player.y).toBe(WORLD.HEIGHT / 2);
     });
 
-    it('moves at the GDD speed of 3.2 units/sec', () => {
+    it('moves at the configured speed in units/sec', () => {
       const sim = makeSim();
       const startX = sim.state.player.x;
 
       advance(sim, 1.0, { x: 1, y: 0 });
 
-      // 3.2 units/s * 32 px/unit = 102.4 px/s
-      expect(sim.state.player.x - startX).toBeCloseTo(3.2 * UNIT_PX, 0);
+      expect(sim.state.player.x - startX).toBeCloseTo(sim.state.player.moveSpeed * UNIT_PX, 0);
     });
 
     it('normalizes diagonal input so it is no faster than cardinal', () => {

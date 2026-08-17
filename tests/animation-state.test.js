@@ -239,6 +239,28 @@ describe('AnimationDirector emits on the event bus', () => {
     expect(events.map((e) => e.state)).toEqual([ANIM_STATES.IDLE, ANIM_STATES.DEATH]);
   });
 
+  it('emits death when the run ends, which polling alone cannot catch', () => {
+    // Simulation.update() returns early once the state leaves RUNNING, so the
+    // director stops being ticked at exactly the moment the Dewling dies.
+    const director = new AnimationDirector(bus);
+    const sim = fakeSim({ playerMoving: true });
+
+    director.update(sim);
+    bus.emit(EVENTS.GAME_OVER, { wave: 3 });
+
+    expect(events[events.length - 1].state).toBe(ANIM_STATES.DEATH);
+    expect(director.getState(DEWLING_ENTITY_ID)).toBe(ANIM_STATES.DEATH);
+  });
+
+  it('does not re-emit death if game:over fires twice', () => {
+    const director = new AnimationDirector(bus);
+    director.update(fakeSim());
+    bus.emit(EVENTS.GAME_OVER, {});
+    bus.emit(EVENTS.GAME_OVER, {});
+
+    expect(events.filter((e) => e.state === ANIM_STATES.DEATH)).toHaveLength(1);
+  });
+
   it('tracks a boss and emits phaseUp when it crosses a tier threshold', () => {
     const director = new AnimationDirector(bus);
     const boss = { id: 7, isBoss: true, hp: 1000, maxHp: 1000, alive: true };
@@ -340,6 +362,20 @@ describe('AnimationDirector inside the real simulation', () => {
     sim.update(1 / 60, { x: -1, y: 0 });
 
     expect(seen).toContain(ANIM_STATES.MOVE);
+  });
+
+  it('emits death for the Dewling when the player actually dies', () => {
+    const sim = makeSim();
+    const seen = [];
+    sim.bus.on(EVENTS.ANIMATION_STATE, (data) => {
+      if (data.entityId === DEWLING_ENTITY_ID) seen.push(data.state);
+    });
+
+    sim.update(1 / 60, { x: 1, y: 0 });
+    sim.damagePlayer(9999);
+    sim.update(1 / 60, { x: 0, y: 0 });
+
+    expect(seen[seen.length - 1]).toBe(ANIM_STATES.DEATH);
   });
 
   it('emits death for a boss killed by damage', () => {

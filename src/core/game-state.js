@@ -14,7 +14,7 @@ export const GAME_STATES = {
 };
 
 export const DEFAULT_PLAYER_STATS = {
-  moveSpeed: 3.2,
+  moveSpeed: 4.8,
   maxHp: 100,
   hp: 100,
   pickupRadius: 0.8,

@@ -38,11 +38,11 @@ export const DAMAGE_TINT = 0xff8a6a;
  */
 export const ENEMY_SPRITE_CONFIG = {
   tarling: { fit: 1.2, bob: 0.06 },
-  ashfish: { fit: 1.35, faceTravel: true },
-  cracked_wisp: { fit: 1.15, spin: 1.6 },
-  rustbloom: { fit: 1.3, bob: 0.04 },
-  smogmoth: { fit: 1.4, faceTravel: true, bob: 0.1 },
-  rustwhale: { fit: 1.5, faceTravel: true },
+  ashfish: { fit: 3.0, faceTravel: true },
+  cracked_wisp: { fit: 3.15, spin: 1.6 },
+  rustbloom: { fit: 2.3, bob: 0.04 },
+  smogmoth: { fit: 2.4, faceTravel: true, bob: 0.1 },
+  rustwhale: { fit: 2.5, faceTravel: true },
 };
 
 /**

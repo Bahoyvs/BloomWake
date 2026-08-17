@@ -81,11 +81,34 @@ export class SpriteAnimator {
    *   Returns a per-frame texture. Omitted in tests.
    * @param {(message: string) => void} [options.warn]
    */
-  constructor(clips, { priority = [], initialState = ANIM_STATES.IDLE, slice = null, warn = null } = {}) {
+  constructor(
+    clips,
+    {
+      priority = [],
+      initialState = ANIM_STATES.IDLE,
+      slice = null,
+      warn = null,
+      fallbackDurations = null,
+    } = {}
+  ) {
     this.clips = clips ?? {};
     this.priority = priority;
     this.slice = slice;
     this.warn = warn ?? ((message) => console.warn(message));
+    /**
+     * How long each state is held when it has NO sheet, in seconds.
+     *
+     * Without this a transient state lasts one simulation tick — core emits
+     * `hit` for exactly one tick by design, so with no clip to play the
+     * animator flipped straight back and the player saw a 16ms flicker. The
+     * procedural FX in state-fx.js need a state to still be current when they
+     * are drawn, so the minimum display time lives here.
+     *
+     * `{ state: seconds }`; 0 or absent means "hold until core changes it".
+     */
+    this.fallbackDurations = fallbackDurations ?? {};
+    /** Runtime override of a fallback duration — the boss telegraph uses it. */
+    this.fallbackOverride = 0;
 
     this.state = initialState;
     this.elapsed = 0;
@@ -118,6 +141,28 @@ export class SpriteAnimator {
   }
 
   /**
+   * True when the current state's art is a SINGLE image rather than a strip.
+   *
+   * This is a first-class authoring mode, not a degraded one. One drawing per
+   * state ("dewling_hit.png" as a single 373x373 pose) is far less work than a
+   * frame sequence, and combined with the procedural FX in state-fx.js it reads
+   * as animation: the artwork supplies the shape, the squash-stretch, flash,
+   * particles and trail supply the motion.
+   *
+   * It matters here because a pose has no intrinsic duration. Timing it as a
+   * 1-frame clip at its nominal fps gave `hit` a lifetime of 1/16s — the state
+   * was technically correct and visually a flicker. A pose is held for its FX
+   * duration instead.
+   *
+   * @param {string} [state]
+   * @returns {boolean}
+   */
+  isStaticPose(state = this.state) {
+    const clip = this.getClip(state);
+    return clip !== null && clip.frames <= 1;
+  }
+
+  /**
    * Effective playback rate for the current clip.
    * @returns {number}
    */
@@ -142,6 +187,10 @@ export class SpriteAnimator {
     const clip = this.getClip(ANIM_STATES.TELEGRAPH);
     this.fpsOverride = clip ? telegraphFps(clip.frames, durationMs) : 0;
     this.forceState(ANIM_STATES.TELEGRAPH);
+    // With no sheet the procedural swell must still last exactly the fairness
+    // window, so the same durationMs drives it. The A2 guarantee holds on both
+    // paths: sprite frames stretch to the window, and so does the FX.
+    this.fallbackOverride = durationMs / 1000;
   }
 
   /** How long the current clip lasts at its current rate, in ms. */
@@ -172,7 +221,10 @@ export class SpriteAnimator {
    * @param {string} state
    */
   forceState(state) {
-    if (state !== ANIM_STATES.TELEGRAPH) this.fpsOverride = 0;
+    if (state !== ANIM_STATES.TELEGRAPH) {
+      this.fpsOverride = 0;
+      this.fallbackOverride = 0;
+    }
     this.state = state;
     this.elapsed = 0;
     this.frameIndex = 0;
@@ -180,10 +232,33 @@ export class SpriteAnimator {
     this.warnIfMissing(state);
   }
 
-  /** True while a non-looping clip is mid-playback. */
+  /**
+   * How long the current state is held when there is no sheet for it.
+   * @returns {number} Seconds; 0 means "until core says otherwise"
+   */
+  get fallbackDuration() {
+    if (this.fallbackOverride > 0) return this.fallbackOverride;
+    return this.fallbackDurations[this.state] ?? 0;
+  }
+
+  /**
+   * True while the current state must not be replaced by a lower-priority one.
+   *
+   * Covers both paths: a non-looping CLIP still playing, and — when no sheet
+   * exists — a procedural state still inside its minimum display time. The
+   * second case is what stops a one-tick `hit` from vanishing before it is seen.
+   */
   isBlocking() {
     const clip = this.getClip(this.state);
-    if (!clip || clip.loop) return false;
+
+    // No sheet at all, or a single-image pose: there are no frames to time
+    // against, so the FX duration is the authority on how long it is shown.
+    if (!clip || clip.frames <= 1) {
+      const duration = this.fallbackDuration;
+      return duration > 0 && this.elapsed < duration;
+    }
+
+    if (clip.loop) return false;
     return !isClipFinished(this.elapsed, this.fps, clip.frames);
   }
 
@@ -223,20 +298,25 @@ export class SpriteAnimator {
    * @returns {number} Current frame index
    */
   update(dt) {
-    const clip = this.getClip(this.state);
-    if (!clip) {
-      // No sheet: nothing to advance. The renderer draws the static sprite and
-      // any queued state still needs to be picked up.
-      if (this.queuedState) this.forceState(this.queuedState);
-      return 0;
-    }
-
+    // The clock advances in EVERY path, including fallback. It used to return
+    // before this line when no sheet existed, which left the procedural FX with
+    // a permanently-zero time-in-state — they would draw their first instant
+    // forever and never progress.
     this.elapsed += dt;
-    this.frameIndex = computeFrameIndex(this.elapsed, this.fps, clip.frames, clip.loop);
 
-    if (!clip.loop && isClipFinished(this.elapsed, this.fps, clip.frames)) {
-      if (this.queuedState) this.forceState(this.queuedState);
-    }
+    const clip = this.getClip(this.state);
+    // Only a real strip has frames to step through. A single-image pose and a
+    // missing sheet both sit on index 0 and let the FX layer do the animating.
+    this.frameIndex =
+      clip && clip.frames > 1
+        ? computeFrameIndex(this.elapsed, this.fps, clip.frames, clip.loop)
+        : 0;
+
+    // ONE release rule for every path — strip, pose, or no art at all. Whatever
+    // isBlocking() treats as "still playing" is what holds a queued state back,
+    // so the three cases cannot disagree about when a state ends.
+    if (this.queuedState && !this.isBlocking()) this.forceState(this.queuedState);
+
     return this.frameIndex;
   }
 

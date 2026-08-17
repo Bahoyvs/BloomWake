@@ -30,7 +30,20 @@ import {
 } from '../core/animation.js';
 import { SpriteAnimator } from './spriteAnimator.js';
 import { createSlicer, formatMissingSheetReport, loadAnimationManifests } from './sheet-probe.js';
-import { applyJuice, createTransform, sharedCycleFrame, DEATH_DISSOLVE_SEC } from './juice.js';
+import { applyJuice, createTransform, resetTransform, sharedCycleFrame, DEATH_DISSOLVE_SEC } from './juice.js';
+import {
+  AFTERIMAGE,
+  BOSS_FX,
+  HERO_FX,
+  MOVE_WAKE,
+  attackRecoil,
+  bossStateTransform,
+  heroStateTransform,
+  stateBurst,
+  trailIntensity,
+  wakeDue,
+} from './state-fx.js';
+import { Background } from './background.js';
 import { THEME, getEnemyPalette } from './theme.js';
 import {
   makeSprite,
@@ -49,6 +62,17 @@ import { ScreenShake, TRAUMA } from './screen-shake.js';
 
 const TRAIL_SAMPLES = 14;
 const GRID_SIZE = 140;
+
+/**
+ * Pull the minimum display times out of an FX table for the animator.
+ * @param {Object} table - HERO_FX or BOSS_FX
+ * @returns {Object} state -> seconds
+ */
+function toDurations(table) {
+  const durations = {};
+  for (const [state, config] of Object.entries(table)) durations[state] = config.duration;
+  return durations;
+}
 /** Enemies at or above this radius get a health bar; trash does not. */
 const HEALTH_BAR_MIN_RADIUS = 18;
 
@@ -93,17 +117,28 @@ export class Renderer {
      */
     this.juiceTransform = createTransform();
 
+    /**
+     * Transform for Tier A entities. Separate from juiceTransform because the
+     * hero is drawn after the swarm loop and would otherwise stomp it.
+     */
+    this.stateTransform = createTransform();
+
     /** Tier A: exactly two possible animators, ever. */
     this.heroAnimator = new SpriteAnimator(this.tierA?.dewling ?? {}, {
       priority: DEWLING_PRIORITY,
       slice: this.slice,
+      fallbackDurations: toDurations(HERO_FX),
     });
     this.bossAnimator = null;
     /** Boss entity id currently bound to bossAnimator. */
     this.bossId = null;
-    /** Last non-zero horizontal travel of the Dewling, for the sprite flip. */
+    /** Last non-zero travel of the Dewling, for the sprite flip and the wake. */
     this.lastPlayerDx = 0;
+    this.lastPlayerDy = 0;
     this.lastPlayerX = undefined;
+    this.lastPlayerY = undefined;
+    /** Direction of the most recent shot, for the muzzle spray and recoil. */
+    this.lastFireAngle = 0;
 
     /**
      * Views of enemies that have died but are still dissolving. The simulation
@@ -189,15 +224,8 @@ export class Renderer {
   }
 
   buildBackground() {
-    const texture = this.assets.get(ASSET_KEYS.BG_AQUA);
-    if (texture) {
-      this.backdrop = new TilingSprite({
-        texture,
-        width: window.innerWidth,
-        height: window.innerHeight,
-      });
-      this.backgroundLayer.addChild(this.backdrop);
-    }
+    this.backgroundSystem = new Background(this.app);
+    this.backgroundLayer.addChild(this.backgroundSystem.container);
   }
 
   buildArena() {
@@ -226,8 +254,71 @@ export class Renderer {
   }
 
   buildPlayer() {
+    // Ghosts live in the trail layer so they always sit BEHIND the Dewling —
+    // an afterimage drawn over the character reads as a rendering fault.
+    this.afterimages = [];
+    for (let i = 0; i < AFTERIMAGE.poolSize; i++) {
+      const sprite = makeSprite(this.assets.get(HERO_TEXTURE_KEY));
+      sprite.visible = false;
+      this.layers.playerTrail.addChild(sprite);
+      this.afterimages.push({ sprite, life: 0, baseX: 1, baseY: 1 });
+    }
+    /** Seconds banked toward the next ghost and the next wake droplet. */
+    this.afterimageTimer = 0;
+    this.wakeTimer = 0;
+
     this.heroSprite = makeSprite(this.assets.get(HERO_TEXTURE_KEY));
     this.layers.player.addChild(this.heroSprite);
+  }
+
+  /**
+   * Stamp a ghost of the Dewling's current pose at its current position.
+   *
+   * Reuses the oldest slot rather than allocating, so the effect is bounded at
+   * AFTERIMAGE.poolSize sprites no matter how long the player runs.
+   */
+  placeAfterimage() {
+    let slot = this.afterimages[0];
+    for (const candidate of this.afterimages) {
+      if (candidate.life < slot.life) slot = candidate;
+    }
+
+    const hero = this.heroSprite;
+    slot.sprite.texture = hero.texture;
+    slot.sprite.x = hero.x;
+    slot.sprite.y = hero.y;
+    slot.sprite.rotation = hero.rotation;
+    // The pose is captured ONCE here. updateAfterimages must scale from this
+    // baseline rather than from the sprite's live scale, or the per-frame
+    // shrink compounds and the ghost collapses to nothing in a few frames.
+    slot.baseX = hero.scale.x;
+    slot.baseY = hero.scale.y;
+    slot.sprite.scale.set(slot.baseX, slot.baseY);
+    slot.sprite.tint = PIXI_TINT.heroTrail;
+    slot.sprite.visible = true;
+    slot.life = AFTERIMAGE.life;
+  }
+
+  /**
+   * Fade every live ghost and park the expired ones.
+   * @param {number} dt
+   */
+  updateAfterimages(dt) {
+    for (const slot of this.afterimages) {
+      if (slot.life <= 0) continue;
+      slot.life -= dt;
+
+      if (slot.life <= 0) {
+        slot.sprite.visible = false;
+        continue;
+      }
+
+      const t = slot.life / AFTERIMAGE.life;
+      slot.sprite.alpha = t * AFTERIMAGE.alpha;
+      // Shrink slightly as it fades so the ghosts recede rather than just dim.
+      const shrink = 0.82 + t * 0.18;
+      slot.sprite.scale.set(slot.baseX * shrink, slot.baseY * shrink);
+    }
   }
 
   bindEvents() {
@@ -252,7 +343,12 @@ export class Renderer {
      */
     bus.on(EVENTS.ANIMATION_STATE, ({ entityId, state }) => {
       if (entityId === DEWLING_ENTITY_ID) {
+        const before = this.heroAnimator.state;
         this.heroAnimator.requestState(state);
+        // Burst only when the state actually took effect. A request that got
+        // queued behind a still-playing reaction must not fire its particles
+        // early, or the flash would arrive before the pose.
+        if (this.heroAnimator.state !== before) this.emitStateBurst(state);
       } else if (entityId === this.bossId && this.bossAnimator) {
         // The telegraph clip is started by boss:telegraph_start instead, which
         // is the only event carrying the duration its fps must be derived from.
@@ -278,6 +374,12 @@ export class Renderer {
       const p = this.sim.state.player;
       this.particles.burst(p.x, p.y, THEME.frutevil.warning, 10);
       this.shake.add(TRAUMA.PLAYER_DAMAGE);
+    });
+
+    // Captured before the animation state arrives, so the muzzle spray and the
+    // recoil both know which way the shot went.
+    bus.on(EVENTS.WEAPON_FIRE, (data) => {
+      if (typeof data?.angle === 'number') this.lastFireAngle = data.angle;
     });
 
     bus.on('orb:collected', () => {
@@ -313,6 +415,10 @@ export class Renderer {
     for (const id of [...this.enemyViews.keys()]) this.releaseEnemyView(id);
     for (const view of this.dyingViews) this.parkSprite(view);
     this.dyingViews.length = 0;
+    for (const slot of this.afterimages) {
+      slot.sprite.visible = false;
+      slot.life = 0;
+    }
     this.bossId = null;
     this.bossAnimator = null;
     this.heroAnimator.forceState(ANIM_STATES.IDLE);
@@ -322,9 +428,8 @@ export class Renderer {
     const width = window.innerWidth;
     const height = window.innerHeight;
     this.app.renderer.resize(width, height);
-    if (this.backdrop) {
-      this.backdrop.width = width;
-      this.backdrop.height = height;
+    if (this.backgroundSystem) {
+      this.backgroundSystem.resize(width, height);
     }
   }
 
@@ -420,8 +525,12 @@ export class Renderer {
     this.drawHealthBars();
     this.drawTrail();
     this.drawPlayer(dt);
+    // Ghosts fade on their own clock, outside drawPlayer — which returns early
+    // during the invulnerability blink and would otherwise freeze them
+    // mid-fade for the whole 0.7s window.
+    this.updateAfterimages(dt);
     this.drawShield();
-    this.scrollBackdrop();
+    this.scrollBackdrop(dt);
 
     // Camera + shake as one transform on the world container.
     this.world.x = -this.camera.x + this.shake.offsetX;
@@ -445,11 +554,69 @@ export class Renderer {
         : clamp(player.y - this.viewHeight / 2, 0, WORLD.HEIGHT - this.viewHeight);
   }
 
-  /** Parallax the backdrop slightly against camera motion. */
-  scrollBackdrop() {
-    if (!this.backdrop) return;
-    this.backdrop.tilePosition.x = -this.camera.x * 0.25;
-    this.backdrop.tilePosition.y = -this.camera.y * 0.25 + Math.sin(this.time * 0.1) * 8;
+  /** Parallax the backdrop & caustics, and update background visual system. */
+  scrollBackdrop(dt = 1 / 60) {
+    if (this.backgroundSystem) {
+      this.backgroundSystem.update(
+        dt,
+        this.camera.x,
+        this.camera.y,
+        this.viewWidth,
+        this.viewHeight
+      );
+    }
+  }
+
+  /**
+   * Fire the one-shot particle burst that belongs to a hero state.
+   *
+   * state-fx.js describes these as data so it never touches a rendering API;
+   * turning that data into ParticleSystem calls is this method's whole job.
+   *
+   * @param {string} state
+   */
+  emitStateBurst(state) {
+    const spec = stateBurst(state);
+    if (!spec) return;
+
+    const player = this.sim.state.player;
+
+    switch (spec.kind) {
+      case 'burst': {
+        // Muzzle blast: a cone down the firing line, thrown from the Dewling's
+        // edge rather than its centre so it leaves the body instead of
+        // erupting out of it. A radial burst here said "something happened";
+        // an aimed cone says "the shot went THAT way".
+        const angle = this.lastFireAngle;
+        this.particles.spray(player.x, player.y, angle, THEME.offence.dewdrop, {
+          count: spec.count,
+          spread: 0.42,
+          speed: 190,
+          spawnOffset: PLAYER_CFG.RADIUS * 0.9,
+        });
+        // A small flash at the muzzle gives the cone an origin to come from.
+        this.particles.ring(
+          player.x + Math.cos(angle) * PLAYER_CFG.RADIUS,
+          player.y + Math.sin(angle) * PLAYER_CFG.RADIUS,
+          PLAYER_CFG.RADIUS * 1.5,
+          THEME.hero.core
+        );
+        break;
+      }
+      case 'impact':
+        this.particles.burst(player.x, player.y, THEME.frutevil.warning, spec.count);
+        this.particles.ring(player.x, player.y, PLAYER_CFG.RADIUS * 3.4, THEME.frutevil.warning);
+        break;
+      case 'dissolve':
+        this.particles.bubbles(player.x, player.y, THEME.hero.rim, spec.count);
+        this.particles.ring(player.x, player.y, PLAYER_CFG.RADIUS * 6, THEME.hero.rim);
+        break;
+      case 'ring':
+        this.particles.ring(player.x, player.y, PLAYER_CFG.RADIUS * 5, THEME.frutevil.warning);
+        break;
+      default:
+        break;
+    }
   }
 
   /**
@@ -462,12 +629,20 @@ export class Renderer {
    * that stops does not snap back to facing right.
    */
   trackPlayerFacing() {
-    const x = this.sim.state.player.x;
+    const { x, y } = this.sim.state.player;
+
     if (this.lastPlayerX !== undefined) {
       const dx = x - this.lastPlayerX;
+      const dy = y - this.lastPlayerY;
+      // Both axes: dx drives the sprite flip and the lean, and the pair gives
+      // the wake a real travel heading so droplets trail the actual path
+      // rather than always shedding horizontally.
       if (dx !== 0) this.lastPlayerDx = dx;
+      if (dx !== 0 || dy !== 0) this.lastPlayerDy = dy;
     }
+
     this.lastPlayerX = x;
+    this.lastPlayerY = y;
   }
 
   recordTrail() {
@@ -565,6 +740,7 @@ export class Renderer {
       this.bossAnimator = new SpriteAnimator(this.tierA?.rustwhale ?? {}, {
         priority: RUSTWHALE_PRIORITY,
         slice: this.slice,
+        fallbackDurations: toDurations(BOSS_FX),
       });
     }
 
@@ -576,16 +752,28 @@ export class Renderer {
 
     this.bossAnimator.update(dt);
     this.bossAnimator.setFacing(boss.vx);
-    if (this.bossAnimator.isFallback) {
-      // Step A5 — no sheet for this state: keep the existing static sprite,
-      // rotated to face travel as Phase 6b did.
-      sprite.rotation = Math.atan2(boss.vy, boss.vx);
-      sprite.scale.set(view.baseScale);
-      return;
+
+    const fx = resetTransform(this.stateTransform);
+    bossStateTransform(this.bossAnimator.state, this.bossAnimator.elapsed, this.time, fx, {
+      duration: this.bossAnimator.fallbackDuration,
+    });
+
+    if (!this.bossAnimator.isFallback) {
+      const texture = this.bossAnimator.currentTexture();
+      if (texture) sprite.texture = texture;
     }
 
-    sprite.rotation = 0;
-    this.bossAnimator.applyTo(sprite, view.baseScale);
+    // Facing travel is the boss's baseline pose; the FX rotation is a lean on
+    // top of it, not a replacement. A multi-frame strip is authored facing +X
+    // and uses the flip instead, so it keeps rotation at 0.
+    const usesStrip = !this.bossAnimator.isFallback && !this.bossAnimator.isStaticPose();
+    const facing = usesStrip ? 0 : Math.atan2(boss.vy, boss.vx);
+
+    sprite.rotation = facing + fx.rotation;
+    sprite.scale.x = view.baseScale * fx.scaleX;
+    sprite.scale.y = view.baseScale * fx.scaleY;
+    sprite.alpha = fx.alpha;
+    if (fx.flash) sprite.tint = DAMAGE_TINT;
   }
 
   /**
@@ -728,9 +916,22 @@ export class Renderer {
     const player = this.sim.state.player;
     const sprite = this.heroSprite;
 
-    // Blink through invulnerability frames so the hit lands visually.
+    // The animator ticks BEFORE the blink check. It used to sit after the early
+    // return, which froze the state clock for the whole 0.7s invulnerability
+    // window — i.e. starting exactly when `hit` fires, so the hit reaction
+    // could never play out.
+    this.heroAnimator.update(dt);
+    // Flip rather than mirrored frames: the sheet is authored facing +X only.
+    this.heroAnimator.setFacing(this.lastPlayerDx);
+
+    // Blink through invulnerability frames so the hit lands visually — but
+    // never while dying. On game over the simulation stops stepping, which
+    // freezes invulnTimer mid-blink; if that frozen value happened to land on
+    // an "off" frame the Dewling stayed hidden and the death dissolve was never
+    // drawn at all. A dying Dewling dissolves instead of blinking.
+    const dying = this.heroAnimator.state === ANIM_STATES.DEATH;
     const blinking =
-      this.sim.invulnTimer > 0 && Math.floor(this.sim.invulnTimer * 12) % 2 === 0;
+      !dying && this.sim.invulnTimer > 0 && Math.floor(this.sim.invulnTimer * 12) % 2 === 0;
     sprite.visible = !blinking;
     if (blinking) return;
 
@@ -738,21 +939,83 @@ export class Renderer {
     sprite.y = player.y;
     sprite.tint = cosmeticTint(this.getCosmetic());
 
-    this.heroAnimator.update(dt);
-    // Flip rather than mirrored frames: the sheet is authored facing +X only.
-    this.heroAnimator.setFacing(this.lastPlayerDx);
-
+    // Texture FIRST, then scale. Each state's art may differ in pixel size
+    // (dewling_death.png is 369px where the others are 373px), and baseScale is
+    // derived from the texture — measuring before the swap would mis-scale the
+    // sprite for one frame on every state change.
     if (this.heroAnimator.isFallback) {
-      // Step A5 — no sheet for this state, so the Phase 6b idle bob stands in.
-      const bob = 1 + Math.sin(this.time * 3) * 0.04;
-      sprite.scale.set(scaleForRadius(sprite.texture, PLAYER_CFG.RADIUS, 1.9) * bob);
-      return;
+      sprite.texture = this.assets.get(HERO_TEXTURE_KEY) ?? sprite.texture;
+    } else {
+      const texture = this.heroAnimator.currentTexture();
+      if (texture) sprite.texture = texture;
     }
 
-    this.heroAnimator.applyTo(
-      sprite,
-      scaleForRadius(sprite.texture, PLAYER_CFG.RADIUS, 1.9)
-    );
+    const baseScale = scaleForRadius(sprite.texture, PLAYER_CFG.RADIUS, 1.9);
+
+    // Procedural pose for the current state. This runs on every path: with a
+    // single-image pose per state it IS the animation, with a multi-frame strip
+    // it layers on top of the frames as squash-and-stretch.
+    const fx = resetTransform(this.stateTransform);
+    heroStateTransform(this.heroAnimator.state, this.heroAnimator.elapsed, this.time, fx, {
+      dx: this.lastPlayerDx,
+    });
+
+    const flip = this.heroAnimator.flipX ? -1 : 1;
+    sprite.scale.x = baseScale * fx.scaleX * flip;
+    sprite.scale.y = baseScale * fx.scaleY;
+    sprite.rotation = fx.rotation;
+    sprite.alpha = fx.alpha;
+    if (fx.flash) sprite.tint = DAMAGE_TINT;
+
+    // Recoil shoves the Dewling off its own shot. Applied to the SPRITE only,
+    // never to the simulation position — the hitbox must not move because of a
+    // visual effect.
+    if (this.heroAnimator.state === ANIM_STATES.ATTACK) {
+      const kick = attackRecoil(this.heroAnimator.elapsed);
+      sprite.x -= Math.cos(this.lastFireAngle) * kick;
+      sprite.y -= Math.sin(this.lastFireAngle) * kick;
+    }
+
+    this.emitContinuousFx(dt);
+  }
+
+  /**
+   * Emit the FX that run WHILE a state is held, rather than once on entry.
+   *
+   * Movement is the state the player spends almost all their time in, so it is
+   * the one that most needs continuous motion cues: ghosts of the silhouette
+   * displaced through space, and droplets left behind in world space.
+   *
+   * @param {number} dt
+   */
+  emitContinuousFx(dt) {
+    const moving = this.heroAnimator.state === ANIM_STATES.MOVE;
+    const speedFactor = Math.min(1, Math.abs(this.lastPlayerDx) / 3);
+
+    if (moving) {
+      this.afterimageTimer += dt;
+      if (this.afterimageTimer >= AFTERIMAGE.interval) {
+        this.afterimageTimer = 0;
+        this.placeAfterimage();
+      }
+
+      this.wakeTimer += dt;
+      if (wakeDue(this.wakeTimer, speedFactor)) {
+        this.wakeTimer = 0;
+        const player = this.sim.state.player;
+        this.particles.wake(
+          player.x,
+          player.y,
+          Math.atan2(this.lastPlayerDy, this.lastPlayerDx),
+          THEME.hero.trail,
+          MOVE_WAKE.count
+        );
+      }
+    } else {
+      // Bank a little so the first ghost lands promptly on the next step off.
+      this.afterimageTimer = AFTERIMAGE.interval;
+      this.wakeTimer = 0;
+    }
   }
 
   /* ------------------------------------------------------------------ */
@@ -883,11 +1146,16 @@ export class Renderer {
     const g = this.trailGfx;
     g.clear();
 
+    // The trail thickens and brightens on the states that matter. It is already
+    // drawn every frame, so reacting to state costs one multiply and gives the
+    // Dewling a sense of weight that a static sprite cannot.
+    const intensity = trailIntensity(this.heroAnimator.state, this.heroAnimator.elapsed);
+
     for (let i = 0; i < this.trail.length - 1; i++) {
       const point = this.trail[i];
       const t = i / this.trail.length;
-      g.circle(point.x, point.y, PLAYER_CFG.RADIUS * t * 0.9);
-      g.fill({ color: PIXI_TINT.heroTrail, alpha: t * 0.35 });
+      g.circle(point.x, point.y, PLAYER_CFG.RADIUS * t * 0.9 * intensity);
+      g.fill({ color: PIXI_TINT.heroTrail, alpha: Math.min(0.85, t * 0.35 * intensity) });
     }
   }
 

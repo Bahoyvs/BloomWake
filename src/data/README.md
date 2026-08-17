@@ -5,16 +5,39 @@ Plain data, no logic beyond pure lookups. `enemies.js`, `cards.js`, `rewards.js`
 
 ---
 
-## ❓ Open question for the artist: sprite-sheet format
+## Two ways to author a state's art
 
 **`src/data/animations.js` never hardcodes frame counts** — it measures the real
-image at load time. To do that it has to know how your sheets are laid out, and
-that cannot be inferred from the files currently in `assets/sprites/` because
-**no sprite sheets have been placed yet** (only the static `dewling.png` and
-`tarling.png` are there).
+image at load time and adapts. Both of the modes below are fully supported, and
+you can mix them freely: one state can be a single drawing while another is a
+multi-frame strip.
 
-So the code assumes the format below. **If your sheets differ, say so and this
-is a one-line change** — nothing else needs touching.
+### Mode 1 — one image per state (what is in `assets/sprites/` today)
+
+A single square PNG per state, e.g. `dewling_hit.png` at 373x373. The loader
+measures it as **one frame** and the animator treats it as a **pose**, not a
+one-frame animation.
+
+This is a first-class mode, not a degraded one. The artwork supplies the shape;
+the motion comes from `src/render/state-fx.js` — squash-and-stretch, a damage
+flash, a particle burst and a trail boost, all procedural. A hit reads as a real
+reaction with a single drawing behind it.
+
+> **Why this needed a fix.** A pose has no intrinsic duration. It was originally
+> timed as a 1-frame clip at the state's nominal fps, which gave `hit` a
+> lifetime of 1/16s — one image, gone in four frames. Poses are now held for
+> their FX duration (`HERO_FX` / `BOSS_FX` in `state-fx.js`) instead: 220ms for
+> a hit, 170ms for an attack, 750ms for a death. **Those tables are where you
+> tune how long a reaction is felt.**
+
+### Mode 2 — a multi-frame strip
+
+If you do want frame-by-frame animation, use the strip format below. The FX layer
+still applies on top, so frames and squash-and-stretch compose rather than
+compete.
+
+**If your strips differ from this convention, say so and it is a one-line
+change** — nothing else needs touching.
 
 ### Assumed default: horizontal strip of square frames
 
@@ -77,9 +100,16 @@ only**):
 | ashfish  | `ashfish_swim.png`  | 8 fps, loops  |
 | smogmoth | `smogmoth_flap.png` | 12 fps, loops |
 
-**Every one of these is optional and every one is currently absent.** A missing
-sheet logs one warning and falls back to the existing static sprite — the game
-runs unchanged. Place them one at a time in any order.
+**Every one of these is optional.** A missing file logs one warning and falls
+back to the static sprite — the game runs unchanged. Place them one at a time in
+any order, as single poses or as strips.
+
+Currently present: the five `dewling_*` poses. Still absent: all six
+`rustwhale_*` states and both optional swarm cycles. Note that `dewling.png`
+(the plain static hero texture in `src/core/assets.js`) has been **removed** in
+favour of the per-state poses — the animator covers every hero state, so this
+only matters if a state's file is ever deleted, in which case that state would
+fall back to a generated placeholder.
 
 ### The telegraph sheet is the special one
 

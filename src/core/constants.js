@@ -5,7 +5,7 @@
  * in pixels, so UNIT_PX is the single conversion point between the two.
  */
 
-/** Pixels per GDD movement unit (player 3.2 units/s => 102.4 px/s). */
+/** Pixels per GDD movement unit (player 4.8 units/s => 153.6 px/s). */
 export const UNIT_PX = 32;
 
 /**
@@ -56,7 +56,7 @@ export const ORB_CFG = {
   RADIUS: 6,
   /** Distance at which an orb starts flying toward the Dewling (px). */
   ATTRACT_RADIUS: 110,
-  MAGNET_SPEED: 520,
+  MAGNET_SPEED: 750,
   LIFETIME_SEC: 30,
 };
 

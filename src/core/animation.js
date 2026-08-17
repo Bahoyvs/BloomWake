@@ -190,6 +190,14 @@ export class AnimationDirector {
         // There is exactly one boss alive at a time by design.
         for (const id of this.bossTiers.keys()) this.eruptedIds.add(id);
       }),
+      /**
+       * The run ending is the ONE state change the polling path cannot see.
+       * Simulation.update() returns early once the state leaves RUNNING, so by
+       * the time the Dewling's HP is zero the director is no longer being
+       * ticked and `death` would never be emitted at all.
+       */
+      bus.on(EVENTS.GAME_OVER, () => this.setState(DEWLING_ENTITY_ID, ANIM_STATES.DEATH)),
+
       bus.on(EVENTS.STATE_RESET, () => this.reset()),
     ];
   }
