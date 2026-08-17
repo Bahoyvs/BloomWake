@@ -85,5 +85,49 @@ export class EventBus {
   }
 }
 
+/**
+ * Canonical event names.
+ *
+ * Every name here was already in use as a string literal; this catalog does not
+ * rename anything, it just gives the strings one home so a typo becomes a
+ * missing import instead of a listener that silently never fires.
+ *
+ * ANIMATION_STATE is the Phase 7 addition: core decides which semantic
+ * animation state an entity is in and announces it here. The payload is
+ * `{ entityId, state, previous }` and deliberately carries no frame index, no
+ * sheet coordinate and no fps — core does not know those things exist.
+ */
+export const EVENTS = {
+  ANIMATION_STATE: 'animation:state',
+
+  STATE_CHANGE: 'state:change',
+  STATE_RESET: 'state:reset',
+
+  WAVE_START: 'wave:start',
+  WAVE_COMPLETE: 'wave:complete',
+
+  PLAYER_DAMAGE: 'player:damage',
+  PLAYER_LEVEL_UP: 'player:level_up',
+  PLAYER_XP_GAIN: 'player:xp_gain',
+
+  ENEMY_DAMAGED: 'enemy:damaged',
+  ENEMY_DEATH: 'enemy:death',
+  ENEMY_KILLED: 'enemy:killed',
+
+  BOSS_SPAWNED: 'boss:spawned',
+  BOSS_TELEGRAPH_START: 'boss:telegraph_start',
+  BOSS_TELEGRAPH_ERUPT: 'boss:telegraph_erupt',
+
+  WEAPON_FIRE: 'weapon:fire',
+  CARD_SELECTED: 'card:selected',
+
+  DRAFT_OFFER: 'draft:offer',
+  DRAFT_CHOICE: 'draft:choice',
+
+  ORB_COLLECTED: 'orb:collected',
+  GAME_OVER: 'game:over',
+  GAME_VICTORY: 'game:victory',
+};
+
 // Global default singleton instance
 export const globalBus = new EventBus();

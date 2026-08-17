@@ -21,6 +21,16 @@ import { Application, Container, Graphics, Sprite, TilingSprite } from 'pixi.js'
 import { WORLD, PLAYER_CFG } from '../core/constants.js';
 import { clamp } from '../core/math.js';
 import { assets as defaultAssets, ASSET_KEYS } from '../core/assets.js';
+import { EVENTS } from '../core/event-bus.js';
+import {
+  ANIM_STATES,
+  DEWLING_ENTITY_ID,
+  DEWLING_PRIORITY,
+  RUSTWHALE_PRIORITY,
+} from '../core/animation.js';
+import { SpriteAnimator } from './spriteAnimator.js';
+import { createSlicer, formatMissingSheetReport, loadAnimationManifests } from './sheet-probe.js';
+import { applyJuice, createTransform, sharedCycleFrame, DEATH_DISSOLVE_SEC } from './juice.js';
 import { THEME, getEnemyPalette } from './theme.js';
 import {
   makeSprite,
@@ -32,6 +42,7 @@ import {
   HERO_TEXTURE_KEY,
   PIXI_TINT,
   NO_TINT,
+  DAMAGE_TINT,
 } from './sprites.js';
 import { ParticleSystem } from './particles.js';
 import { ScreenShake, TRAUMA } from './screen-shake.js';
@@ -64,6 +75,43 @@ export class Renderer {
     /** texture key -> array of parked sprites */
     this.spritePools = new Map();
 
+    /* ---- Phase 7 animation ---- */
+
+    /**
+     * Resolved sheet manifests. Absent in tests and before the probe runs, in
+     * which case every entity renders its static sprite — the same path a
+     * developer sees while art is still being placed.
+     */
+    const animation = options.animation ?? null;
+    this.tierA = animation?.tierA ?? null;
+    this.swarmCycles = animation?.swarm ?? null;
+    this.slice = animation?.sheets ? createSlicer(animation.sheets) : null;
+
+    /**
+     * ONE transform reused for every enemy in the frame. Allocating per enemy
+     * would be 200 objects a frame; this is the single object Tier B mutates.
+     */
+    this.juiceTransform = createTransform();
+
+    /** Tier A: exactly two possible animators, ever. */
+    this.heroAnimator = new SpriteAnimator(this.tierA?.dewling ?? {}, {
+      priority: DEWLING_PRIORITY,
+      slice: this.slice,
+    });
+    this.bossAnimator = null;
+    /** Boss entity id currently bound to bossAnimator. */
+    this.bossId = null;
+    /** Last non-zero horizontal travel of the Dewling, for the sprite flip. */
+    this.lastPlayerDx = 0;
+    this.lastPlayerX = undefined;
+
+    /**
+     * Views of enemies that have died but are still dissolving. The simulation
+     * entity is recycled inside the same tick it dies, so the view carries its
+     * own snapshot of the fields deathDissolve needs.
+     */
+    this.dyingViews = [];
+
     this.shake = new ScreenShake();
     this.particles = new ParticleSystem(this.assets);
 
@@ -82,6 +130,14 @@ export class Renderer {
    * @returns {Promise<Renderer>}
    */
   static async create(canvas, simulation, options = {}) {
+    // Probe the sheets before the first frame so the animators know which
+    // clips exist. Missing sheets are the expected case, not a failure.
+    let animation = options.animation;
+    if (animation === undefined) {
+      animation = await loadAnimationManifests();
+      console.info(formatMissingSheetReport(animation.missing));
+    }
+
     const app = new Application();
     await app.init({
       canvas,
@@ -94,7 +150,7 @@ export class Renderer {
       // The game drives its own fixed-step loop; Pixi should not also tick.
       autoStart: false,
     });
-    return new Renderer(app, simulation, options);
+    return new Renderer(app, simulation, { ...options, animation });
   }
 
   /**
@@ -185,8 +241,37 @@ export class Renderer {
 
     bus.on('enemy:death', (data) => {
       this.particles.death(data.x, data.y, getEnemyPalette(data.typeId), data.radius);
-      this.releaseEnemyView(data.id);
+      this.beginDissolve(data);
       if (data.isBoss) this.shake.add(TRAUMA.BOSS_SPAWN);
+    });
+
+    /**
+     * Core decided an entity changed semantic state. The renderer is the only
+     * side that turns that into frames, fps and textures — core never learns
+     * those exist.
+     */
+    bus.on(EVENTS.ANIMATION_STATE, ({ entityId, state }) => {
+      if (entityId === DEWLING_ENTITY_ID) {
+        this.heroAnimator.requestState(state);
+      } else if (entityId === this.bossId && this.bossAnimator) {
+        // The telegraph clip is started by boss:telegraph_start instead, which
+        // is the only event carrying the duration its fps must be derived from.
+        if (state !== ANIM_STATES.TELEGRAPH) this.bossAnimator.requestState(state);
+      }
+    });
+
+    /**
+     * Step A2 — the telegraph animation is bound to the fairness window here.
+     *
+     * durationMs is the value the simulation already computed with
+     * calculateTelegraphMs; the renderer never recomputes it. Handing it
+     * straight to the animator is what makes the wind-up finish exactly as the
+     * AoE resolves, whatever the frame count of the sheet turns out to be.
+     */
+    bus.on(EVENTS.BOSS_TELEGRAPH_START, (data) => {
+      if (this.bossAnimator && data?.durationMs > 0) {
+        this.bossAnimator.playTelegraph(data.durationMs);
+      }
     });
 
     bus.on('player:damage', () => {
@@ -226,6 +311,11 @@ export class Renderer {
     this.shake.reset();
     this.trail.length = 0;
     for (const id of [...this.enemyViews.keys()]) this.releaseEnemyView(id);
+    for (const view of this.dyingViews) this.parkSprite(view);
+    this.dyingViews.length = 0;
+    this.bossId = null;
+    this.bossAnimator = null;
+    this.heroAnimator.forceState(ANIM_STATES.IDLE);
   }
 
   resize() {
@@ -275,15 +365,31 @@ export class Renderer {
 
   /**
    * Park a sprite rather than destroying it — no display-list churn on a wipe.
+   *
+   * Every property the animation layer may have changed is reset here, because
+   * the next enemy to take this sprite inherits whatever it is left in. A
+   * dissolved corpse parked at alpha 0 would come back as an invisible enemy.
+   *
+   * @param {Object} view
+   */
+  parkSprite(view) {
+    const sprite = view.sprite;
+    sprite.visible = false;
+    sprite.tint = NO_TINT;
+    sprite.alpha = 1;
+    sprite.rotation = 0;
+    sprite.scale.set(view.baseScale);
+    this.spritePools.get(view.key)?.push(sprite);
+  }
+
+  /**
    * @param {number} id
    */
   releaseEnemyView(id) {
     const view = this.enemyViews.get(id);
     if (!view) return;
 
-    view.sprite.visible = false;
-    view.sprite.tint = NO_TINT;
-    this.spritePools.get(view.key)?.push(view.sprite);
+    this.parkSprite(view);
     this.enemyViews.delete(id);
   }
 
@@ -299,9 +405,10 @@ export class Renderer {
     this.particles.update(dt);
     this.shake.update(dt);
     this.updateCamera();
+    this.trackPlayerFacing();
     this.recordTrail();
 
-    this.syncEnemies();
+    this.syncEnemies(dt);
     this.syncProjectiles();
     this.syncOrbs();
 
@@ -312,7 +419,7 @@ export class Renderer {
     this.drawBlades();
     this.drawHealthBars();
     this.drawTrail();
-    this.drawPlayer();
+    this.drawPlayer(dt);
     this.drawShield();
     this.scrollBackdrop();
 
@@ -345,6 +452,24 @@ export class Renderer {
     this.backdrop.tilePosition.y = -this.camera.y * 0.25 + Math.sin(this.time * 0.1) * 8;
   }
 
+  /**
+   * Horizontal travel direction of the Dewling, for the Tier A sprite flip.
+   *
+   * The simulation stores the player's position but not its velocity, and
+   * adding one purely for a render concern would push a render need into
+   * src/core/. Differencing the position here keeps that boundary intact. The
+   * zero-motion case deliberately leaves the last facing alone, so a Dewling
+   * that stops does not snap back to facing right.
+   */
+  trackPlayerFacing() {
+    const x = this.sim.state.player.x;
+    if (this.lastPlayerX !== undefined) {
+      const dx = x - this.lastPlayerX;
+      if (dx !== 0) this.lastPlayerDx = dx;
+    }
+    this.lastPlayerX = x;
+  }
+
   recordTrail() {
     const player = this.sim.state.player;
     this.trail.push({ x: player.x, y: player.y });
@@ -355,32 +480,200 @@ export class Renderer {
   /* Entities                                                            */
   /* ------------------------------------------------------------------ */
 
-  syncEnemies() {
-    const player = this.sim.state.player;
+  /**
+   * @param {Object} enemy
+   * @returns {Object} The view record for an enemy, creating one if needed
+   */
+  ensureEnemyView(enemy) {
+    let view = this.enemyViews.get(enemy.id);
+    if (view) return view;
+
+    const key = enemyTextureKey(enemy.typeId);
+    const sprite = this.acquireSprite(key);
+    const config = getEnemySpriteConfig(enemy.typeId);
+    const baseScale = scaleForRadius(sprite.texture, enemy.radius, config.fit);
+    sprite.scale.set(baseScale);
+    sprite.alpha = 1;
+
+    view = {
+      sprite,
+      baseScale,
+      key,
+      // Dissolve snapshot, filled in on death.
+      typeId: enemy.typeId,
+      x: 0,
+      y: 0,
+      phaseOffset: 0,
+      spawnTime: 0,
+      lastHitTime: -Infinity,
+      deathTime: -Infinity,
+      vx: 0,
+      vy: 0,
+    };
+    this.enemyViews.set(enemy.id, view);
+    return view;
+  }
+
+  /**
+   * @param {number} dt - Frame time in seconds, for the Tier A boss animator
+   */
+  syncEnemies(dt = 1 / 60) {
+    const t = this.sim.elapsed;
     const seen = new Set();
 
     for (const enemy of this.sim.enemies) {
       if (!enemy.alive) continue;
       seen.add(enemy.id);
 
-      let view = this.enemyViews.get(enemy.id);
-      if (!view) {
-        const key = enemyTextureKey(enemy.typeId);
-        const sprite = this.acquireSprite(key);
-        const config = getEnemySpriteConfig(enemy.typeId);
-        const baseScale = scaleForRadius(sprite.texture, enemy.radius, config.fit);
-        sprite.scale.set(baseScale);
-        view = { sprite, baseScale, key };
-        this.enemyViews.set(enemy.id, view);
+      const view = this.ensureEnemyView(enemy);
+
+      if (enemy.isBoss) {
+        this.syncBoss(view, enemy, dt);
+        continue;
       }
 
-      syncEnemySprite(view, enemy, this.time, player);
+      // TIER B — the whole swarm animation system, one shared transform.
+      applyJuice(enemy, t, this.juiceTransform);
+      syncEnemySprite(view, enemy, this.juiceTransform);
+      this.applySwarmCycle(view, enemy, t);
+
+      // Track the last velocity so a corpse keeps facing the way it swam
+      // rather than snapping to 0 the instant it dies. Two number writes.
+      view.vx = enemy.vx;
+      view.vy = enemy.vy;
     }
 
     // Enemies removed without a death event (wave wipe) still need parking.
     for (const id of [...this.enemyViews.keys()]) {
       if (!seen.has(id)) this.releaseEnemyView(id);
     }
+
+    this.syncDyingViews(t);
+  }
+
+  /**
+   * TIER A for the boss. Bound lazily because the Rustwhale only exists on boss
+   * waves, and rebound if a later wave spawns a new one.
+   *
+   * @param {Object} view
+   * @param {Object} boss
+   * @param {number} dt - Frame time in seconds
+   */
+  syncBoss(view, boss, dt) {
+    if (this.bossId !== boss.id) {
+      this.bossId = boss.id;
+      this.bossAnimator = new SpriteAnimator(this.tierA?.rustwhale ?? {}, {
+        priority: RUSTWHALE_PRIORITY,
+        slice: this.slice,
+      });
+    }
+
+    const sprite = view.sprite;
+    sprite.x = boss.x;
+    sprite.y = boss.y;
+    sprite.alpha = 1;
+    sprite.tint = boss.hitFlash > 0 ? DAMAGE_TINT : NO_TINT;
+
+    this.bossAnimator.update(dt);
+    this.bossAnimator.setFacing(boss.vx);
+    if (this.bossAnimator.isFallback) {
+      // Step A5 — no sheet for this state: keep the existing static sprite,
+      // rotated to face travel as Phase 6b did.
+      sprite.rotation = Math.atan2(boss.vy, boss.vx);
+      sprite.scale.set(view.baseScale);
+      return;
+    }
+
+    sprite.rotation = 0;
+    this.bossAnimator.applyTo(sprite, view.baseScale);
+  }
+
+  /**
+   * Step B3 — the optional shared swim-cycle layer.
+   *
+   * Applied ON TOP of the Tier B transforms, never instead of them. Every
+   * instance of a type shares one sheet; the only per-instance input is the
+   * entity's phaseOffset number, so this stays a frame-index lookup rather
+   * than a per-entity animator. Types with no sheet fall through untouched.
+   *
+   * @param {Object} view
+   * @param {Object} enemy
+   * @param {number} t
+   */
+  applySwarmCycle(view, enemy, t) {
+    const clip = this.swarmCycles?.[enemy.typeId];
+    if (!clip?.available || !this.slice || !(clip.frames > 1)) return;
+
+    const index = sharedCycleFrame(t, enemy.phaseOffset, clip.fps, clip.frames);
+    let frames = this.cycleFrames?.get(clip.sheet);
+    if (!frames) {
+      if (!this.cycleFrames) this.cycleFrames = new Map();
+      frames = [];
+      for (let i = 0; i < clip.frames; i++) frames.push(this.slice(clip.sheet, i, clip));
+      this.cycleFrames.set(clip.sheet, frames);
+    }
+
+    const texture = frames[index];
+    if (texture) view.sprite.texture = texture;
+  }
+
+  /**
+   * Advance dissolving corpses and park them once faded.
+   *
+   * Iterated back-to-front so a completed dissolve can be swap-removed without
+   * disturbing the rest of the pass.
+   *
+   * @param {number} t - Simulation time, seconds
+   */
+  syncDyingViews(t) {
+    for (let i = this.dyingViews.length - 1; i >= 0; i--) {
+      const view = this.dyingViews[i];
+
+      if (t - view.deathTime >= DEATH_DISSOLVE_SEC) {
+        this.parkSprite(view);
+        this.dyingViews[i] = this.dyingViews[this.dyingViews.length - 1];
+        this.dyingViews.pop();
+        continue;
+      }
+
+      applyJuice(view, t, this.juiceTransform);
+      syncEnemySprite(view, view, this.juiceTransform);
+    }
+  }
+
+  /**
+   * Start a death dissolve, so a killed enemy fades and shrinks instead of
+   * vanishing between frames.
+   *
+   * The view takes a snapshot because the simulation entity is returned to the
+   * enemy pool within the same tick — reading it back later would show whatever
+   * enemy was next recycled into that object.
+   *
+   * @param {Object} data - enemy:death payload
+   */
+  beginDissolve(data) {
+    const view = this.enemyViews.get(data.id);
+    if (!view) return;
+    this.enemyViews.delete(data.id);
+
+    if (data.isBoss) {
+      // The boss has an authored death clip in Tier A; it does not dissolve.
+      this.parkSprite(view);
+      if (this.bossId === data.id) {
+        this.bossId = null;
+        this.bossAnimator = null;
+      }
+      return;
+    }
+
+    view.x = data.x;
+    view.y = data.y;
+    view.typeId = data.typeId;
+    view.deathTime = data.deathTime ?? this.sim.elapsed;
+    view.phaseOffset = data.phaseOffset ?? 0;
+    view.spawnTime = -Infinity; // Long since grown in.
+    view.lastHitTime = -Infinity;
+    this.dyingViews.push(view);
   }
 
   /**
@@ -426,7 +719,12 @@ export class Renderer {
     g.fill({ color: PIXI_TINT.orb });
   }
 
-  drawPlayer() {
+  /**
+   * TIER A for the Dewling.
+   *
+   * @param {number} dt - Frame time in seconds
+   */
+  drawPlayer(dt) {
     const player = this.sim.state.player;
     const sprite = this.heroSprite;
 
@@ -440,8 +738,21 @@ export class Renderer {
     sprite.y = player.y;
     sprite.tint = cosmeticTint(this.getCosmetic());
 
-    const bob = 1 + Math.sin(this.time * 3) * 0.04;
-    sprite.scale.set(scaleForRadius(sprite.texture, PLAYER_CFG.RADIUS, 1.9) * bob);
+    this.heroAnimator.update(dt);
+    // Flip rather than mirrored frames: the sheet is authored facing +X only.
+    this.heroAnimator.setFacing(this.lastPlayerDx);
+
+    if (this.heroAnimator.isFallback) {
+      // Step A5 — no sheet for this state, so the Phase 6b idle bob stands in.
+      const bob = 1 + Math.sin(this.time * 3) * 0.04;
+      sprite.scale.set(scaleForRadius(sprite.texture, PLAYER_CFG.RADIUS, 1.9) * bob);
+      return;
+    }
+
+    this.heroAnimator.applyTo(
+      sprite,
+      scaleForRadius(sprite.texture, PLAYER_CFG.RADIUS, 1.9)
+    );
   }
 
   /* ------------------------------------------------------------------ */

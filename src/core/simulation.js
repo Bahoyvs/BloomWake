@@ -11,6 +11,7 @@
  */
 
 import { EventBus } from './event-bus.js';
+import { AnimationDirector } from './animation.js';
 import { GameState, GAME_STATES, DEFAULT_PLAYER_STATS } from './game-state.js';
 import { applyMetaUpgradesToRunStart, getDraftOfferCount } from './meta-shop.js';
 import { WaveSpawner } from './spawner.js';
@@ -72,10 +73,22 @@ export class Simulation {
     this.projectilePool = new ObjectPool(makeProjectile, 64);
     this.bladePool = new ObjectPool(makeBlade, 6);
     this.effectPool = new ObjectPool(makeEffect, 8);
+    /**
+     * Enemies are pooled at the wave cap (WAVE_CONSTANTS.MAX_ACTIVE_ENEMIES).
+     * Before Phase 7 every spawn allocated a fresh literal and every death
+     * dropped it on the floor — at a 200-enemy cap with continuous refill that
+     * is a steady stream of garbage. Tier B adds four more fields per enemy, so
+     * recycling them is what keeps "zero new GC pressure" an honest claim
+     * rather than a slightly worse status quo.
+     */
+    this.enemyPool = new ObjectPool(makeEnemy, 64);
 
     this.cards = new CardSystem(this);
+    this.animation = new AnimationDirector(this.bus);
 
     this.nextEntityId = 1;
+    /** True while the Dewling has non-zero movement input; read by the director. */
+    this.playerMoving = false;
     this.invulnTimer = 0;
     this.waveBreakTimer = 0;
     this.elapsed = 0;
@@ -95,6 +108,7 @@ export class Simulation {
   resetEntities() {
     for (const p of this.projectiles) this.projectilePool.release(p);
     for (const e of this.effects) this.effectPool.release(e);
+    for (const enemy of this.enemies) this.enemyPool.release(enemy);
     this.projectiles.length = 0;
     this.effects.length = 0;
     this.enemies.length = 0;
@@ -104,6 +118,8 @@ export class Simulation {
 
     this.bossTelegraph.active = false;
     this.cards.reset();
+    this.animation.reset();
+    this.playerMoving = false;
     this.invulnTimer = 0;
     this.waveBreakTimer = 0;
     this.elapsed = 0;
@@ -155,6 +171,8 @@ export class Simulation {
 
     if (inBreak) {
       removeDead(this.orbs);
+      // The field is empty during a break, but the Dewling still idles/moves.
+      this.animation.update(this);
       this.waveBreakTimer -= dt;
       if (this.waveBreakTimer <= 0) this.state.nextWave();
       return;
@@ -183,7 +201,12 @@ export class Simulation {
 
     this.resolveCollisions();
 
-    removeDead(this.enemies);
+    // Runs BEFORE the sweep: a boss killed this tick is still in the list with
+    // alive === false, which is the only moment its 'death' state can be
+    // observed. After the sweep it is gone and the transition is lost.
+    this.animation.update(this);
+
+    sweepToPool(this.enemies, this.enemyPool);
     removeDead(this.orbs);
     removeDead(this.sporePools);
     sweepToPool(this.projectiles, this.projectilePool);
@@ -197,6 +220,10 @@ export class Simulation {
     const player = this.state.player;
     const dir = normalize(input.x ?? 0, input.y ?? 0);
     const speed = player.moveSpeed * this.cards.moveSpeedMultiplier * UNIT_PX;
+
+    // Movement intent, not displacement: a Dewling pushing into a wall is
+    // still visually "moving" even though its clamped position does not change.
+    this.playerMoving = dir.x !== 0 || dir.y !== 0;
 
     player.x = clamp(player.x + dir.x * speed * dt, PLAYER_CFG.RADIUS, WORLD.WIDTH - PLAYER_CFG.RADIUS);
     player.y = clamp(player.y + dir.y * speed * dt, PLAYER_CFG.RADIUS, WORLD.HEIGHT - PLAYER_CFG.RADIUS);
@@ -264,29 +291,51 @@ export class Simulation {
     const hp = def.baseHp * getEnemyHpMultiplier(wave);
     const pos = this.spawner.spawnPosition(this.state.player.x, this.state.player.y);
 
-    const enemy = {
-      id: this.nextEntityId++,
-      typeId: def.id,
-      behavior: def.behavior,
-      isBoss: false,
-      x: pos.x,
-      y: pos.y,
-      radius: def.radius,
-      hp,
-      maxHp: hp,
-      speed: def.baseSpeed * UNIT_PX * getEnemySpeedMultiplier(wave),
-      contactDamage: def.contactDamage,
-      xpValue: def.xpValue,
-      scoreValue: def.scoreValue,
-      hitFlash: 0,
-      orbitCooldown: 0,
-      timeAlive: 0,
-      sporeTimer: randomRange(this.rng, 1.0, 3.5),
-      alive: true,
-    };
+    const enemy = this.enemyPool.acquire();
+    enemy.id = this.nextEntityId++;
+    enemy.typeId = def.id;
+    enemy.behavior = def.behavior;
+    enemy.isBoss = false;
+    enemy.x = pos.x;
+    enemy.y = pos.y;
+    enemy.radius = def.radius;
+    enemy.hp = hp;
+    enemy.maxHp = hp;
+    enemy.speed = def.baseSpeed * UNIT_PX * getEnemySpeedMultiplier(wave);
+    enemy.contactDamage = def.contactDamage;
+    enemy.xpValue = def.xpValue;
+    enemy.scoreValue = def.scoreValue;
+    enemy.hitFlash = 0;
+    enemy.orbitCooldown = 0;
+    enemy.timeAlive = 0;
+    enemy.sporeTimer = randomRange(this.rng, 1.0, 3.5);
+    enemy.telegraphTimer = 0;
+    enemy.vx = 0;
+    enemy.vy = 0;
+    enemy.alive = true;
+    this.stampAnimationFields(enemy);
 
     this.enemies.push(enemy);
     return enemy;
+  }
+
+  /**
+   * Reset the Tier B procedural-animation fields on a pooled entity.
+   *
+   * phaseOffset is the one that matters: without it every member of a swarm
+   * flutters on the same sine phase and 150 Ashfish pulse in lockstep, which
+   * reads as one organism rather than many. It is drawn from the seeded run RNG
+   * so replays stay deterministic, and it is re-drawn on every acquire — a
+   * recycled entity inheriting its predecessor's phase would slowly cluster the
+   * swarm back into unison as the pool churns.
+   *
+   * @param {Object} entity - A pooled entity being brought to life
+   */
+  stampAnimationFields(entity) {
+    entity.phaseOffset = this.rng() * Math.PI * 2;
+    entity.spawnTime = this.elapsed;
+    entity.lastHitTime = -Infinity;
+    entity.deathTime = -Infinity;
   }
 
   /**
@@ -298,26 +347,29 @@ export class Simulation {
     const hp = getBossHp(wave);
     const pos = this.spawner.spawnPosition(this.state.player.x, this.state.player.y);
 
-    const boss = {
-      id: this.nextEntityId++,
-      typeId: def.id,
-      behavior: def.behavior,
-      isBoss: true,
-      x: pos.x,
-      y: pos.y,
-      radius: def.radius,
-      hp,
-      maxHp: hp,
-      speed: def.baseSpeed * UNIT_PX,
-      contactDamage: def.contactDamage,
-      xpValue: def.xpValue,
-      scoreValue: def.scoreValue,
-      hitFlash: 0,
-      orbitCooldown: 0,
-      timeAlive: 0,
-      telegraphTimer: 2.0,
-      alive: true,
-    };
+    const boss = this.enemyPool.acquire();
+    boss.id = this.nextEntityId++;
+    boss.typeId = def.id;
+    boss.behavior = def.behavior;
+    boss.isBoss = true;
+    boss.x = pos.x;
+    boss.y = pos.y;
+    boss.radius = def.radius;
+    boss.hp = hp;
+    boss.maxHp = hp;
+    boss.speed = def.baseSpeed * UNIT_PX;
+    boss.contactDamage = def.contactDamage;
+    boss.xpValue = def.xpValue;
+    boss.scoreValue = def.scoreValue;
+    boss.hitFlash = 0;
+    boss.orbitCooldown = 0;
+    boss.timeAlive = 0;
+    boss.sporeTimer = 0;
+    boss.telegraphTimer = 2.0;
+    boss.vx = 0;
+    boss.vy = 0;
+    boss.alive = true;
+    this.stampAnimationFields(boss);
 
     this.enemies.push(boss);
     this.bus.emit('boss:spawned', { wave, hp, id: boss.id });
@@ -338,25 +390,27 @@ export class Simulation {
       const perpX = -dir.y;
       const perpY = dir.x;
 
+      // Heading for this tick, before speed is applied. Each branch sets it,
+      // then one shared step integrates and records velocity — so the Tier B
+      // facing transform gets a real velocity for every behaviour without each
+      // branch having to remember to write one.
+      let headingX = dir.x;
+      let headingY = dir.y;
+
       switch (enemy.behavior) {
         case 'SINE_WAVE': {
           // Ashfish wave oscillation
           const waveOffset = Math.sin(enemy.timeAlive * 5.0) * 0.5;
-          enemy.x += (dir.x + perpX * waveOffset) * enemy.speed * dt;
-          enemy.y += (dir.y + perpY * waveOffset) * enemy.speed * dt;
+          headingX = dir.x + perpX * waveOffset;
+          headingY = dir.y + perpY * waveOffset;
           break;
         }
         case 'FAST_SWARM': {
           // Cracked Wisp straight fast charge
-          enemy.x += dir.x * enemy.speed * dt;
-          enemy.y += dir.y * enemy.speed * dt;
           break;
         }
         case 'STATIONARY_SPORE': {
           // Rustbloom slow approach + periodic spore drop
-          enemy.x += dir.x * enemy.speed * dt;
-          enemy.y += dir.y * enemy.speed * dt;
-
           enemy.sporeTimer -= dt;
           if (enemy.sporeTimer <= 0) {
             enemy.sporeTimer = 3.5;
@@ -367,15 +421,12 @@ export class Simulation {
         case 'ZIGZAG_FLYING': {
           // Smogmoth sharp zigzag flying trajectory
           const zigzag = Math.sin(enemy.timeAlive * 8.0) * 0.8;
-          enemy.x += (dir.x + perpX * zigzag) * enemy.speed * dt;
-          enemy.y += (dir.y + perpY * zigzag) * enemy.speed * dt;
+          headingX = dir.x + perpX * zigzag;
+          headingY = dir.y + perpY * zigzag;
           break;
         }
         case 'BOSS_TELEGRAPH_AOE': {
           // Rustwhale Boss movement & attack trigger
-          enemy.x += dir.x * enemy.speed * dt;
-          enemy.y += dir.y * enemy.speed * dt;
-
           enemy.telegraphTimer -= dt;
           if (enemy.telegraphTimer <= 0 && !this.bossTelegraph.active) {
             enemy.telegraphTimer = ENEMIES[ENEMY_TYPES.RUSTWHALE].telegraphCooldown;
@@ -386,11 +437,14 @@ export class Simulation {
         case 'DIRECT':
         default: {
           // Tarling direct path
-          enemy.x += dir.x * enemy.speed * dt;
-          enemy.y += dir.y * enemy.speed * dt;
           break;
         }
       }
+
+      enemy.vx = headingX * enemy.speed;
+      enemy.vy = headingY * enemy.speed;
+      enemy.x += enemy.vx * dt;
+      enemy.y += enemy.vy * dt;
 
       // Clamp within world boundaries
       enemy.x = clamp(enemy.x, enemy.radius, WORLD.WIDTH - enemy.radius);
@@ -637,6 +691,7 @@ export class Simulation {
   damageEnemy(enemy, amount) {
     enemy.hp -= amount;
     enemy.hitFlash = 0.1;
+    enemy.lastHitTime = this.elapsed;
     // Position travels with the event so the renderer can place hit particles
     // without reaching back into simulation entities.
     this.bus.emit('enemy:damaged', {
@@ -652,8 +707,11 @@ export class Simulation {
 
   killEnemy(enemy) {
     enemy.alive = false;
+    enemy.deathTime = this.elapsed;
     this.state.registerKill(enemy.scoreValue);
     this.spawnOrb(enemy.x, enemy.y, enemy.xpValue);
+    // deathTime travels with the event: the entity is recycled within the tick,
+    // so the renderer cannot read it back off the enemy to time its dissolve.
     this.bus.emit('enemy:death', {
       id: enemy.id,
       typeId: enemy.typeId,
@@ -661,6 +719,8 @@ export class Simulation {
       y: enemy.y,
       radius: enemy.radius,
       isBoss: Boolean(enemy.isBoss),
+      deathTime: enemy.deathTime,
+      phaseOffset: enemy.phaseOffset,
     });
 
     // If boss is killed on boss wave, complete wave
@@ -715,6 +775,7 @@ export class Simulation {
 
   /** Enemies recede at wave end, leaving a short breather to collect orbs. */
   onWaveComplete() {
+    for (const enemy of this.enemies) this.enemyPool.release(enemy);
     this.enemies.length = 0;
     for (const p of this.projectiles) this.projectilePool.release(p);
     this.projectiles.length = 0;
@@ -740,6 +801,56 @@ export class Simulation {
 }
 
 /* Pool factories — blank entities, filled in on acquire. */
+
+/**
+ * Every field an enemy will ever hold is declared here, including the boss-only
+ * telegraphTimer and the Rustbloom-only sporeTimer. One shape for all enemy
+ * types keeps the objects monomorphic, so the hot loops in updateEnemies and
+ * resolveCollisions stay on a single inline cache instead of going megamorphic
+ * as the roster mixes.
+ *
+ * The last four are Tier B procedural-animation state (Phase 7). They are plain
+ * numbers on the entity the pool already owns — there is deliberately no
+ * per-entity animator object, because at a 200-enemy cap that would be 200
+ * allocations to track four numbers.
+ */
+function makeEnemy() {
+  return {
+    id: 0,
+    typeId: '',
+    behavior: 'DIRECT',
+    isBoss: false,
+    x: 0,
+    y: 0,
+    radius: 0,
+    hp: 0,
+    maxHp: 0,
+    speed: 0,
+    contactDamage: 0,
+    xpValue: 0,
+    scoreValue: 0,
+    hitFlash: 0,
+    orbitCooldown: 0,
+    timeAlive: 0,
+    sporeTimer: 0,
+    telegraphTimer: 0,
+    alive: false,
+    /**
+     * Velocity in px/s. Recorded by updateEnemies rather than integrated from,
+     * because the behaviour branches move entities directly. Tier B's
+     * facingRotation reads it so a sine-wave Ashfish banks into its curve
+     * instead of always pointing flatly at the Dewling.
+     */
+    vx: 0,
+    vy: 0,
+    // Tier B procedural animation
+    phaseOffset: 0,
+    spawnTime: 0,
+    lastHitTime: -Infinity,
+    deathTime: -Infinity,
+  };
+}
+
 function makeProjectile() {
   return { id: 0, x: 0, y: 0, vx: 0, vy: 0, damage: 0, radius: 0, life: 0, alive: false };
 }

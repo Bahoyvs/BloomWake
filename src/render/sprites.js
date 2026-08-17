@@ -78,40 +78,38 @@ export function makeSprite(texture) {
 }
 
 /**
- * Point an existing sprite at an enemy's current state.
+ * Point an existing sprite at an enemy's current state, using a Tier B
+ * transform (Phase 7).
  *
- * Called every frame for every live enemy, so it allocates nothing and only
- * touches properties that actually change.
+ * Called every frame for every live enemy — up to 200 of them — so it
+ * allocates nothing and only writes properties that actually change. All the
+ * motion decisions were made by src/render/juice.js; this function just moves
+ * numbers onto the sprite.
  *
- * Facing is derived from the vector to the Dewling rather than from a stored
- * velocity: enemies always steer at the player, so this needs no new field on
- * the simulation entity and keeps src/core/ free of render concerns.
+ * Phase 7 note: this replaces the Phase 6b bob/spin/faceTravel handling that
+ * used to live here. Those read from ENEMY_SPRITE_CONFIG and derived facing
+ * from the vector to the Dewling; the Tier B transform derives it from the
+ * enemy's real velocity instead, so sine-wave and zigzag movers now bank
+ * through their curves rather than sliding sideways while pointing at the
+ * player. `fit` is still read from ENEMY_SPRITE_CONFIG, at view construction.
  *
  * @param {{sprite: Sprite, baseScale: number}} view - Renderer-owned record
- * @param {Object} enemy - Simulation entity
- * @param {number} time - Seconds since run start
- * @param {{x: number, y: number}} player
+ * @param {Object} entity - Simulation entity, or a dissolving snapshot
+ * @param {{scaleX: number, scaleY: number, rotation: number, alpha: number, flash: boolean}} transform
  */
-export function syncEnemySprite(view, enemy, time, player) {
+export function syncEnemySprite(view, entity, transform) {
   const { sprite } = view;
-  const config = getEnemySpriteConfig(enemy.typeId);
 
-  sprite.x = enemy.x;
-  sprite.y = enemy.y;
+  sprite.x = entity.x;
+  sprite.y = entity.y;
+  sprite.rotation = transform.rotation;
+  sprite.alpha = transform.alpha;
+  sprite.scale.x = view.baseScale * transform.scaleX;
+  sprite.scale.y = view.baseScale * transform.scaleY;
 
-  if (config.faceTravel) {
-    sprite.rotation = Math.atan2(player.y - enemy.y, player.x - enemy.x);
-  } else if (config.spin) {
-    sprite.rotation = time * config.spin + enemy.id;
-  }
-
-  if (config.bob) {
-    const wobble = 1 + Math.sin(time * 4 + enemy.id) * config.bob;
-    sprite.scale.set(view.baseScale * wobble);
-  }
-
-  // Damage flash via GPU tint — no second sprite sheet, no filter allocation.
-  sprite.tint = enemy.hitFlash > 0 ? DAMAGE_TINT : NO_TINT;
+  // Damage flash via GPU tint — no second sprite sheet, no filter allocation,
+  // and no per-entity shader pass (explicitly out of scope for Tier B).
+  sprite.tint = transform.flash ? DAMAGE_TINT : NO_TINT;
 }
 
 /**

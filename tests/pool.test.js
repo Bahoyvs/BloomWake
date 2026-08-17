@@ -172,3 +172,206 @@ describe('Card-spawned entities are pooled', () => {
     expect(sim.projectilePool.available).toBe(availableBefore + live);
   });
 });
+
+/**
+ * PHASE 7 REGRESSION — Tier B added four fields (phaseOffset, spawnTime,
+ * lastHitTime, deathTime) plus vx/vy to every enemy. The requirement is that
+ * this costs nothing in the spawn/despawn hot path.
+ *
+ * A NOTE ON WHAT CHANGED: before Phase 7 enemies were NOT pooled at all — they
+ * were fresh object literals dropped on the floor by removeDead(). Adding four
+ * fields to that shape would have been strictly more garbage per spawn, at a
+ * 200-enemy cap with continuous refill. So enemies were moved onto the same
+ * ObjectPool the card-spawned entities use. These tests assert the identity
+ * churn is now zero, not merely unchanged.
+ */
+describe('Enemy pooling with Tier B animation fields', () => {
+  /** @returns {Simulation} */
+  function runningSim(seed = 7) {
+    const bus = new EventBus();
+    const state = new GameState(bus, { maxWaves: PHASE1.MAX_WAVES });
+    const sim = new Simulation({ bus, state, seed });
+    sim.startRun();
+    return sim;
+  }
+
+  it('gives every spawned enemy the four Tier B fields', () => {
+    const sim = runningSim();
+    const enemy = sim.spawnEnemy('ashfish');
+
+    expect(typeof enemy.phaseOffset).toBe('number');
+    expect(typeof enemy.spawnTime).toBe('number');
+    expect(enemy.lastHitTime).toBe(-Infinity);
+    expect(enemy.deathTime).toBe(-Infinity);
+    expect(typeof enemy.vx).toBe('number');
+    expect(typeof enemy.vy).toBe('number');
+  });
+
+  it('gives the boss the same fields', () => {
+    const sim = runningSim();
+    const boss = sim.spawnBoss();
+
+    expect(typeof boss.phaseOffset).toBe('number');
+    expect(boss.lastHitTime).toBe(-Infinity);
+    expect(boss.deathTime).toBe(-Infinity);
+  });
+
+  it('spreads phaseOffset across a swarm so it does not flutter in unison', () => {
+    const sim = runningSim();
+    const offsets = new Set();
+    for (let i = 0; i < 60; i++) offsets.add(sim.spawnEnemy('ashfish').phaseOffset);
+
+    expect(offsets.size).toBeGreaterThan(55);
+    for (const offset of offsets) {
+      expect(offset).toBeGreaterThanOrEqual(0);
+      expect(offset).toBeLessThanOrEqual(Math.PI * 2);
+    }
+  });
+
+  it('recycles the same objects across a spawn/despawn cycle', () => {
+    const sim = runningSim();
+
+    const first = sim.spawnEnemy('tarling');
+    const identity = first;
+    sim.killEnemy(first);
+    sweepToPool(sim.enemies, sim.enemyPool);
+
+    const second = sim.spawnEnemy('tarling');
+    expect(second).toBe(identity);
+  });
+
+  it('allocates no new enemy objects once the pool is warm', () => {
+    const sim = runningSim();
+
+    // Warm the pool to the concurrent load this scenario reaches.
+    for (let i = 0; i < 40; i++) sim.spawnEnemy('tarling');
+    for (const enemy of sim.enemies) sim.killEnemy(enemy);
+    sweepToPool(sim.enemies, sim.enemyPool);
+
+    const createdAfterWarmup = sim.enemyPool.created;
+    const reusedAfterWarmup = sim.enemyPool.reused;
+
+    // Many full spawn/despawn cycles inside that warm capacity.
+    for (let cycle = 0; cycle < 50; cycle++) {
+      for (let i = 0; i < 40; i++) sim.spawnEnemy('ashfish');
+      for (const enemy of sim.enemies) sim.killEnemy(enemy);
+      sweepToPool(sim.enemies, sim.enemyPool);
+    }
+
+    expect(sim.enemyPool.created).toBe(createdAfterWarmup);
+    expect(sim.enemyPool.reused - reusedAfterWarmup).toBe(2000);
+  });
+
+  it('holds object identity steady across a long live run', () => {
+    const sim = runningSim(21);
+    // Wave 10's spawn rate, not wave 1's: at wave 1 the spawner is interval-
+    // limited to roughly one enemy a second, which never exercises the pool.
+    sim.state.wave = 10;
+    sim.spawner.beginWave(10);
+
+    /** Distinct OBJECTS handed out. */
+    const identities = new Set();
+    /** Distinct enemies that ever lived. */
+    const lifetimes = new Set();
+    let peakConcurrent = 0;
+
+    for (let i = 0; i < 60 * 40; i++) {
+      sim.update(1 / 60, { x: Math.sin(i / 30), y: Math.cos(i / 30) });
+      peakConcurrent = Math.max(peakConcurrent, sim.enemies.length);
+      for (const enemy of sim.enemies) {
+        identities.add(enemy);
+        lifetimes.add(enemy.id);
+      }
+
+      // Kill the front of the queue every few ticks so the spawner keeps
+      // refilling. This is the churn the pool exists for; without kills the
+      // field just fills to the cap and sits there.
+      if (i % 3 === 0 && sim.enemies.length > 0) {
+        const victim = sim.enemies[0];
+        if (victim.alive) sim.damageEnemy(victim, victim.hp);
+      }
+    }
+
+    // The real property: many enemies lived, but they shared a small, bounded
+    // set of objects. Without pooling these two numbers would be equal, and
+    // every spawn would be a fresh allocation carrying six more fields.
+    expect(lifetimes.size).toBeGreaterThan(50);
+    expect(identities.size).toBeLessThanOrEqual(peakConcurrent);
+    expect(identities.size).toBeLessThan(lifetimes.size / 4);
+
+    // The pool never had to grow past what it pre-allocated.
+    expect(sim.enemyPool.created).toBe(64);
+    expect(sim.enemyPool.reused).toBeGreaterThan(50);
+  });
+
+  it('returns wiped enemies to the pool when a wave ends', () => {
+    const sim = runningSim();
+    for (let i = 0; i < 12; i++) sim.spawnEnemy('tarling');
+
+    const availableBefore = sim.enemyPool.available;
+    const live = sim.enemies.length;
+    sim.onWaveComplete();
+
+    expect(sim.enemies).toHaveLength(0);
+    expect(sim.enemyPool.available).toBe(availableBefore + live);
+  });
+
+  it('returns enemies to the pool on reset', () => {
+    const sim = runningSim();
+    for (let i = 0; i < 8; i++) sim.spawnEnemy('smogmoth');
+
+    const availableBefore = sim.enemyPool.available;
+    sim.resetEntities();
+
+    expect(sim.enemies).toHaveLength(0);
+    expect(sim.enemyPool.available).toBe(availableBefore + 8);
+  });
+
+  it('never hands out a recycled enemy carrying stale animation state', () => {
+    const sim = runningSim();
+
+    const first = sim.spawnEnemy('tarling');
+    sim.elapsed = 5;
+    sim.damageEnemy(first, 1);
+    expect(first.lastHitTime).toBe(5);
+    sim.killEnemy(first);
+    expect(first.deathTime).toBe(5);
+    sweepToPool(sim.enemies, sim.enemyPool);
+
+    sim.elapsed = 9;
+    const recycled = sim.spawnEnemy('tarling');
+    expect(recycled).toBe(first);
+    // A stale lastHitTime would flash a brand-new enemy on spawn; a stale
+    // deathTime would dissolve it.
+    expect(recycled.lastHitTime).toBe(-Infinity);
+    expect(recycled.deathTime).toBe(-Infinity);
+    expect(recycled.spawnTime).toBe(9);
+    expect(recycled.alive).toBe(true);
+  });
+
+  it('re-rolls phaseOffset on reuse so the swarm does not re-synchronise', () => {
+    const sim = runningSim();
+    const offsets = [];
+
+    for (let cycle = 0; cycle < 30; cycle++) {
+      const enemy = sim.spawnEnemy('ashfish');
+      offsets.push(enemy.phaseOffset);
+      sim.killEnemy(enemy);
+      sweepToPool(sim.enemies, sim.enemyPool);
+    }
+
+    // Same pooled object every time, but a fresh phase on each acquire.
+    expect(new Set(offsets).size).toBeGreaterThan(28);
+  });
+
+  it('keeps one object shape, so the hot loops stay monomorphic', () => {
+    const sim = runningSim();
+    const tarling = sim.spawnEnemy('tarling');
+    const rustbloom = sim.spawnEnemy('rustbloom');
+    const boss = sim.spawnBoss();
+
+    const shape = Object.keys(tarling).sort();
+    expect(Object.keys(rustbloom).sort()).toEqual(shape);
+    expect(Object.keys(boss).sort()).toEqual(shape);
+  });
+});
