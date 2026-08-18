@@ -1,163 +1,98 @@
 # BloomWake
 
-Bounded Swarm / Survivor-Arena (Vampire Survivors formülü, performans-güvenli hibrit)
-Tema: Frutiger Aero + Frutiger Aqua (kahraman tarafı) vs. Frutevil Aero (düşman tarafı)
-Platform: CrazyGames
-
-Spesifikasyon: [`Bloomwake_GDD_v1.md`](Bloomwake_GDD_v1.md) · Plan: [`Bloomwake_Development_Plan_v1.md`](Bloomwake_Development_Plan_v1.md)
+A browser-native survivor-arena roguelite that holds 200 concurrent enemies on screen at 60 FPS — with the swarm-legibility problem solved numerically, not by eye.
 
 ---
 
-## Durum: Faz 6b tamamlandı (PixiJS sprite pipeline)
+## Tech Stack
 
-| Faz | Kapsam | Durum |
-|---|---|---|
-| Faz 0 | Mimari iskelet, veri tabloları, event bus | ✅ |
-| Faz 1 | Çekirdek hayatta kalma döngüsü | ✅ |
-| Faz 2 | Spatial hash + 200 düşman tavanı | ✅ (Faz 4 ile birleştirildi) |
-| Faz 3 | Kart sistemi (8 kart, seviye atlama draft'ı) + Buddy Boost gating | ✅ |
-| Faz 4 | Tam düşman rosteri (Tarling, Ashfish, Cracked Wisp, Rustbloom, Smogmoth) + Rustwhale Boss & Telegraph | ✅ |
-| Faz 5 | Bloom Capsule + Petal Meta-İlerleme + Daily Bloom | ✅ |
-| Faz 6 | Görsel/tema katmanı (Frutiger Aero/Aqua + Frutevil) | ✅ |
-| Faz 6b | PixiJS sprite pipeline + asset preloader | ✅ (asset bekliyor) |
-| Faz 6c | Ses tasarımı (WebAudio) | ⏳ |
-| Faz 7 | Mobil kontrol + cilalama | ⏳ |
+| Layer | Technology |
+| --- | --- |
+| **Language** | JavaScript (ES modules, ~17,400 LOC) |
+| **Rendering** | PixiJS 8 (WebGL) — sprite batching, GPU tint, pooled particle sprites |
+| **Build** | Vite 5 |
+| **Testing** | Vitest 2 — 25 unit-test suites + 3 headless simulation/benchmark harnesses |
+| **Persistence** | `localStorage` with backward-compatible deep-merge loading |
+| **Target** | CrazyGames (web) |
 
-Faz 4 kapsamı: 5 Frutevil düşman tipi, 64px Spatial Hash Grid collision optimizasyonu, Rustbloom spor tuzak alanları, Rustwhale Boss & formüle bağlı deterministik Kara Gelgit (Black Tide) telegraph AoE saldırısı.
+**Architecture patterns:** DOM-free simulation core, dependency injection, object pooling, spatial hashing, event bus, data-driven tuning tables.
 
-Faz 5 kapsamı: Bloom Capsule ödül sistemi (küçük/büyük kapsül, performansa
-bağlı ağırlıklar, 8 run'lık pity garantisi), Petal kalıcı para birimi,
-4 meta-yükseltme, 4 kozmetik varyant, yerel-güne bağlı Daily Bloom ve
-localStorage kalıcılığı (geriye dönük uyumlu deep-merge yükleme).
+---
 
-### Ekonomi kalibrasyonu (Faz 5 Adım C)
+## Core Mechanics & Features
 
-Petal ödül miktarları tahminle değil simülasyonla belirlendi. Bot 200 run
-oynatılır, her run'ın kapsül geliri üretim mantığıyla hesaplanır ve 4. Kart
-Slotu'na (2000 Petal) ulaşma süresi 15-20 run bandına oturana kadar ödül
-aralıkları ölçeklenir.
+- **Sustains a 200-enemy swarm** through a 64px spatial hash grid that collapses broadphase collision from O(n²) to ~O(n), an object pool for burst-spawned card entities, and a particle system whose sprites are parked (`visible = false`) rather than destroyed — a full-wave wipe must not allocate or restructure the display list.
+- **Drafts builds from 8 stacking cards** with weighted level-up offers and Buddy Boost gating, backed by a balance simulation that enforces two hard thresholds: no level-5 card may exceed 40% of the others' combined output, and no card may be "dead" at level 3.
+- **Escalates through a 15-wave roster** of five Frutevil enemy archetypes plus a Rustwhale boss whose Black Tide AoE runs on a deterministic, formula-driven telegraph — readable and reproducible under test rather than random.
+- **Persists meta-progression** across runs via Bloom Capsules (weighted by run performance, with an 8-run pity guarantee), the Petal currency, 4 meta-upgrades, 4 cosmetic variants, and a local-day-scoped Daily Bloom bonus.
 
-```bash
-node tests/economy-calibration.js --write
-```
+---
 
-Ödül tabloları `src/data/rewards.js` içinde CALIBRATED_POOL işaretleri arasında
-tutulur; script bu bloğu yeniden yazar. Elle düzenlemek yerine script'i
-yeniden çalıştırın.
+## Technical Architecture & Problem Solving
 
-### Görsel katman ve "Görsel Çorba" testi (Faz 6)
+Two hard problems define this codebase, and both were solved by making a subjective quality measurable.
 
-Tema, Dewling'in 200 düşman arasında kaybolmamasını **sayısal olarak** garanti
-eden bir parlaklık ayrımı üzerine kurulu:
+**The performance ceiling.** A survivor-arena lives or dies on how many entities it can move, collide and draw per frame, in a browser, on a mid-range machine. Naïve pairwise collision at a 200-enemy cap is 20,000 checks per frame before any rendering; the spatial hash grid partitions world space into 64px cells and reduces that to near-linear. Allocation pressure is attacked separately — card effects that burst (a 16-petal storm, a rebuilt blade ring on every level-up) recycle through an `ObjectPool` that tracks `created` vs `reused`, on the principle that a pool which keeps growing is a leak. On the render side, damage flashes are a GPU `tint` rather than a second sprite, and sprite scale is derived from collision radius (`scaleForRadius`) so art can ship at any resolution without touching code. Because the whole simulation is DOM-free, a headless benchmark (`tests/juice-bench.js`) measures per-frame CPU cost at the 200-enemy cap in Node, with a `--throttle N` flag that reports the budget as if the CPU were N times slower — a standing-in for a mid-range mobile core. That harness is explicit about its limits: it measures CPU, not GPU time or Pixi batching, so it proves the animation layer's share of the frame budget is small without pretending to prove a frame rate.
 
-- Kahraman tarafı (Dewling, izi, kalkanı) ekrandaki tek **çok parlak** öğe.
-- Frutevil paleti tamamen **koyu ve doygunluğu düşük**, sadece dört renk ailesi
-  (katran, kül, pas, is). Düşman sayısı artınca ortalama ekran parlaklığı
-  Dewling'in bandına yaklaşamaz.
-- Arka plan sade iki duraklı bir gradient; Dewling ve izi çizim sırasında
-  **her zaman en üstte** (`Z_ORDER`, `src/render/theme.js`).
+**The legibility ceiling — "visual soup."** At 200 enemies, the player's own character routinely disappears into the swarm, and the usual fix is to nudge colors until it "looks fine." Here the fix is a contract: the hero side is the only very-bright element on screen, and the entire enemy palette is dark and desaturated across just four color families, so average screen brightness cannot drift into the hero's band no matter how many enemies spawn. Draw order is pinned by an explicit `Z_ORDER` table. Crucially, `tests/theme.test.js` asserts these rules using WCAG contrast ratios, so a palette change that breaks legibility fails in CI instead of in playtesting — and because a unit test cannot see a PNG, `src/render/asset-audit.js` samples the real pixels of loaded textures in dev mode to close that gap. Measured on a live canvas at 200 enemies + 50 projectiles: the brightest pixel on screen is the player, **9× brighter** than the surrounding swarm.
 
-`tests/theme.test.js` bu kuralları WCAG kontrast oranıyla doğrular — paleti
-bozacak bir değişiklik playtest'te değil, testte yakalanır.
+The same evidence-over-intuition discipline extends to the economy. Petal reward amounts were not estimated — `tests/economy-calibration.js` plays 200 bot runs, computes each run's capsule income through production logic, and rescales the reward bands until time-to-unlock for the 4th Card Slot (2000 Petal) lands in a 15–20 run window, rewriting the calibrated block in `src/data/rewards.js` in place.
 
-Ölçüm (200 düşman + 50 mermi, canlı canvas piksel analizi): ekrandaki en parlak
-piksel Dewling'in kendisi, Dewling çevresindeki sürüden **9 kat** daha parlak.
+Underpinning all of it: **`src/core/` is pure JavaScript with zero `window`/`document`/DOM references.** The entire simulation, economy and progression layer runs and is tested under Node; even the asset loader is injected (`src/core/assets.js` never imports PixiJS — the real loader lives in `src/render/pixi-loader.js`), and a missing sprite file degrades to a generated placeholder rather than halting boot.
 
-(Faz 6b ile karakter/düşman çizimi sprite'a taşındı — aşağıya bakın. Palet
-kuralı hâlâ geçerli, ama artık gerçek PNG piksellerini de denetlemek gerekiyor.)
+---
 
-### Faz 6b — Sprite pipeline
+## Installation / How to Play
 
-Prosedürel çizim karakter ve düşmanlar için bırakıldı; artık **PixiJS sprite**
-kullanılıyor. Sadece hazır görseli olmayan efektler (AoE halkaları, ışın,
-bıçaklar, boss telegraph, arena kenarı) vektör olarak `PIXI.Graphics` ile
-çiziliyor.
-
-- `src/core/assets.js` — manifest + preload yaşam döngüsü. Yükleyici **enjekte
-  edilir**, bu yüzden bu dosya PixiJS import etmez ve Node'da test edilebilir;
-  gerçek yükleyici `src/render/pixi-loader.js` içinde.
-- Eksik dosya **boot'u durdurmaz**: `missing` listesine yazılır ve üretilen bir
-  placeholder ile doldurulur. `/assets` boşken bile oyun çalışır.
-- Sprite ölçeği çarpışma yarıçapından türetilir (`scaleForRadius`), yani görsel
-  her çözünürlükte gelebilir; anchor daima (0.5, 0.5).
-- Hasar flaşı ayrı sprite değil, GPU **tint**.
-
-Görselleri `assets/sprites/` ve `assets/ui/` altına bırakmak yeterli — kod
-değişikliği gerekmez. Detaylar: [`assets/README.md`](assets/README.md).
-
-`src/render/asset-audit.js` yüklenen dokümanların gerçek piksellerini ölçüp Faz 6
-parlaklık sözleşmesine uyup uymadığını dev modunda raporlar; palet testi gerçek
-PNG'leri göremediği için bu boşluğu kapatır.
-
-### Denge simülasyonu & Testler
+**Requirements:** Node.js 18+.
 
 ```bash
-npm test
-```
-282 test geçiyor (18 test dosyası).
-
-```bash
-node tests/balance-sim.js
-```
-
-Eşikler: hiçbir 5. seviye kart diğerlerinin toplamının %40'ını aşamaz, hiçbir kart 3. seviyede "ölü" olamaz.
-
-## Çalıştırma
-
-```bash
+git clone https://github.com/Bahoyvs/BloomWake.git
+cd BloomWake
 npm install
+npm run dev          # Vite dev server
 ```
 
 ```bash
-npm run dev
+npm run build        # production bundle
+npm test             # Vitest unit suites
+node tests/balance-sim.js      # card balance thresholds
+node tests/juice-bench.js      # 200-enemy frame-cost benchmark
 ```
 
-## Kontroller
+*Live build: **[link pending]***
 
-| Girdi | Etki |
-|---|---|
-| `WASD` / ok tuşları | Hareket (Dewling kendi ateş eder) |
-| `1` / `2` / `3` | Seviye atlama draft'ından kart seç (fare tıklaması da olur) |
-| `Enter` / `Space` | Run başlat / yeniden başlat |
-| `Esc` / `P` | Duraklat / devam |
+### Controls
 
-## Mimari
+| Input | Effect |
+| --- | --- |
+| `WASD` / arrow keys | Move (the Dewling fires automatically) |
+| `1` – `4` | Pick a card from the level-up draft (mouse click also works) |
+| `Enter` / `Space` | Start / restart run |
+| `Esc` / `P` | Pause / resume |
 
-`src/core/` **saf JavaScript**'tir: `window`/`document`/DOM referansı içermez ve tamamı Node üzerinde test edilir.
+---
+
+## Repository Layout
 
 ```
-src/core/      simülasyon çekirdeği (saf, testable)
-  constants.js   dünya/ölçek/tuning sabitleri + CARD_MODEL
-  math.js        vektör + seeded RNG yardımcıları
-  event-bus.js   bus.emit / bus.on
-  wave.js        GDD Bölüm 6 dalga formülleri
-  spawner.js     dalga spawn zamanlaması, düşman seçimi, boss zamanlaması
-  spatial.js     64px Spatial Hash Grid (broadphase collision)
-  pool.js        kart kaynaklı nesneler için object pool
-  cards.js       8 kartın efekt handler'ları
-  draft.js       ağırlıklı kart draft'ı (GDD Bölüm 7) + Buddy Boost gating
-  game-state.js  run durumu, XP/seviye, dalga akışı, draft durumu
-  simulation.js  varlıklar, düşman davranışları, boss telegraph, çarpışma
-  state.js       kalıcı meta-state + geriye dönük uyumlu deep-merge yükleme
-  rewards.js     Bloom Capsule çözümü, pity garantisi
-  meta-shop.js   meta-yükseltme satın alma + run başlangıcına uygulama
-  cosmetics.js   kozmetik sahiplik/kuşanma
-  daily-bloom.js yerel-güne bağlı günlük bonus (saf, timestamp parametreli)
-  meta-progression.js  run sonucu -> kapsül -> kalıcı state köprüsü
-  assets.js      asset manifesti + preload (yükleyici enjekte edilir)
-src/data/      düşman, kart, ödül, yükseltme ve kozmetik tabloları
-assets/        oyun görselleri (sprites/ + ui/) — bkz. assets/README.md
-src/render/    PixiJS sprite renderer + kamera
-  theme.js       Frutiger Aero/Frutevil paleti + kontrast & Z_ORDER kuralları
-  sprites.js     sprite yapılandırması, yarıçaptan ölçek, tint
-  pixi-loader.js PIXI.Assets yükleyici + placeholder üretimi
-  asset-audit.js yüklenen doku parlaklık denetimi (dev)
-  particles.js   havuzlanmış PIXI sprite parçacık sistemi
-  screen-shake.js  trauma tabanlı ekran sarsıntısı
-  renderer.js    Container katmanları, vektör VFX, çizim sırası
-src/ui/        DOM HUD, draft ekranı, meta ekranları (menü/mağaza/sonuç)
-  meta-ui.js     Petal mağazası, Bloom Complete, Daily Bloom, toast
-  storage.js     localStorage kalıcılığı (tek DOM dokunan katman)
-src/input/     klavye girdisi
-tests/         vitest birim testleri + balance-sim.js
+src/core/      pure simulation — no DOM, fully testable under Node
+  spatial.js     64px spatial hash grid (broadphase collision)
+  pool.js        object pool with created/reused leak accounting
+  simulation.js  entities, enemy behaviours, boss telegraph, collision
+  wave.js        wave formulas · spawner.js  pacing & concurrent cap
+  cards.js/draft.js   card effect handlers + weighted draft
+  game-state.js  run state, XP/levels, wave flow
+  rewards.js/meta-shop.js/meta-progression.js   capsules, Petal economy
+  assets.js      asset manifest + preload (loader is injected)
+src/render/    PixiJS layer
+  theme.js       palette + WCAG contrast & Z_ORDER contract
+  sprites.js     sprite config, radius-derived scale, tint
+  particles.js   pooled PIXI sprite particles · screen-shake.js  trauma-based shake
+  asset-audit.js real-texture brightness audit (dev)
+src/data/      enemy, card, reward, upgrade and cosmetic tables
+src/ui/        DOM HUD, draft screen, meta screens (storage.js is the only DOM-touching persistence)
+tests/         Vitest suites + balance-sim, economy-calibration, juice-bench
 ```
+
+**Design documentation:** [`Bloomwake_GDD_v1.md`](Bloomwake_GDD_v1.md) · [`Bloomwake_Development_Plan_v1.md`](Bloomwake_Development_Plan_v1.md) · [`assets/README.md`](assets/README.md) (art drop-in guide)
