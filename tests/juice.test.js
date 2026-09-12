@@ -17,10 +17,9 @@ import {
   createTransform,
   deathDissolve,
   facingRotation,
-  flutter,
   getJuiceProfile,
+  JUICE_PROFILE,
   hitFlash,
-  idleBreathe,
   resetTransform,
   sharedCycleFrame,
   spawnGrow,
@@ -46,23 +45,16 @@ function makeEntity(overrides = {}) {
 }
 
 describe('juice functions are pure', () => {
-  it('flutter gives the same output for the same input', () => {
-    const entity = makeEntity();
-    const a = flutter(entity, 3.5);
-    const b = flutter(entity, 3.5);
-    expect(a.scaleY).toBe(b.scaleY);
-  });
-
-  it('flutter does not mutate the entity', () => {
-    const entity = makeEntity();
-    const snapshot = { ...entity };
-    flutter(entity, 2.2);
-    expect(entity).toEqual(snapshot);
+  it('spawnGrow gives the same output for the same input', () => {
+    const entity = makeEntity({ spawnTime: 3.4 });
+    const a = spawnGrow(entity, 3.5, createTransform());
+    const b = spawnGrow(entity, 3.5, createTransform());
+    expect(a.scaleX).toBe(b.scaleX);
   });
 
   it('every function leaves its entity untouched', () => {
     const t = 4.2;
-    for (const fn of [flutter, spawnGrow, hitFlash, deathDissolve, idleBreathe]) {
+    for (const fn of [spawnGrow, hitFlash, deathDissolve]) {
       const entity = makeEntity({ deathTime: 3.0, lastHitTime: 4.19 });
       const snapshot = { ...entity };
       fn(entity, t);
@@ -75,28 +67,18 @@ describe('juice functions are pure', () => {
     expect(entity).toEqual(snapshot);
   });
 
-  it('holds no module state — two entities never influence each other', () => {
-    const first = makeEntity({ phaseOffset: 0 });
-    const second = makeEntity({ phaseOffset: 3.0 });
+  it('holds no module state \u2014 two entities never influence each other', () => {
+    const first = makeEntity({ vx: 1, vy: 0 });
+    const second = makeEntity({ vx: 0, vy: 1 });
 
-    const firstAlone = flutter(first, 1.0).scaleY;
+    const firstAlone = facingRotation(first, createTransform()).rotation;
 
     // Interleave the two and re-measure the first.
-    flutter(second, 1.0);
-    flutter(second, 9.0);
-    const firstAgain = flutter(first, 1.0).scaleY;
+    facingRotation(second, createTransform());
+    facingRotation(second, createTransform());
+    const firstAgain = facingRotation(first, createTransform()).rotation;
 
     expect(firstAgain).toBe(firstAlone);
-  });
-
-  it('gives different phases to entities with different phaseOffset', () => {
-    // The reason phaseOffset exists: a swarm flickering in unison reads as one
-    // organism rather than 150.
-    const values = new Set();
-    for (let i = 0; i < 20; i++) {
-      values.add(flutter(makeEntity({ phaseOffset: i * 0.31 }), 1.0).scaleY);
-    }
-    expect(values.size).toBeGreaterThan(15);
   });
 
   it('applyJuice is deterministic across repeated calls', () => {
@@ -158,12 +140,10 @@ describe('juice functions do not leak between entities through a shared transfor
 describe('juice functions allocate nothing when given a transform', () => {
   it('returns the very object it was handed', () => {
     const out = createTransform();
-    expect(flutter(makeEntity(), 1, out)).toBe(out);
     expect(facingRotation(makeEntity(), out)).toBe(out);
     expect(spawnGrow(makeEntity(), 1, out)).toBe(out);
     expect(hitFlash(makeEntity(), 1, out)).toBe(out);
     expect(deathDissolve(makeEntity(), 1, out)).toBe(out);
-    expect(idleBreathe(makeEntity(), 1, out)).toBe(out);
     expect(applyJuice(makeEntity(), 1, out)).toBe(out);
   });
 
@@ -182,11 +162,21 @@ describe('juice functions allocate nothing when given a transform', () => {
 });
 
 describe('individual transforms behave as specified', () => {
-  it('flutter squashes within +/- 8%', () => {
-    for (let t = 0; t < 5; t += 0.05) {
-      const { scaleY } = flutter(makeEntity(), t);
-      expect(scaleY).toBeGreaterThanOrEqual(0.92 - 1e-9);
-      expect(scaleY).toBeLessThanOrEqual(1.08 + 1e-9);
+  it('never deforms a hull that is merely alive', () => {
+    /*
+     * THE DE-LIQUIFY CONTRACT, as an assertion.
+     *
+     * Tier B used to squash every swimmer on a sine and breathe the stationary
+     * types. Both are gone: these are machines, and with two hundred of them on
+     * screen the wobble read as the whole swarm being made of jelly. An entity
+     * that is neither spawning in nor dying must be exactly its own size.
+     */
+    for (const typeId of ['tarling', 'ashfish', 'cracked_wisp', 'rustbloom', 'smogmoth', 'bio_goliath']) {
+      for (let t = 0; t < 3; t += 0.05) {
+        const out = applyJuice(makeEntity({ typeId, spawnTime: -10 }), t, createTransform());
+        expect(out.scaleX, typeId).toBe(1);
+        expect(out.scaleY, typeId).toBe(1);
+      }
     }
   });
 
@@ -246,11 +236,19 @@ describe('individual transforms behave as specified', () => {
     }
   });
 
-  it('idleBreathe stays within 1.4%', () => {
-    for (let t = 0; t < 10; t += 0.05) {
-      const { scaleX } = idleBreathe(makeEntity(), t);
-      expect(Math.abs(scaleX - 1)).toBeLessThanOrEqual(0.014 + 1e-9);
-    }
+  it('still scales for the two events that earn it', () => {
+    // Spawning in and dying are the only times a hull changes size, because
+    // both are moments it genuinely stops being hull-shaped.
+    const spawning = applyJuice(makeEntity({ spawnTime: 1.0 }), 1.0, createTransform());
+    expect(spawning.scaleX).toBeLessThan(1);
+
+    const dying = applyJuice(
+      makeEntity({ spawnTime: -10, deathTime: 1.0 }),
+      1.0 + DEATH_DISSOLVE_SEC * 0.9,
+      createTransform()
+    );
+    expect(dying.scaleX).toBeLessThan(1);
+    expect(dying.alpha).toBeLessThan(1);
   });
 
   it('resetTransform restores the neutral pose', () => {
@@ -271,21 +269,28 @@ describe('individual transforms behave as specified', () => {
 });
 
 describe('juice profiles', () => {
-  it('gives stationary types breathing instead of flutter', () => {
-    expect(getJuiceProfile('rustbloom').stationary).toBe(true);
-    expect(getJuiceProfile('ashfish').stationary).toBeUndefined();
+  it('turns hulls with a front toward their travel, and leaves the rest alone', () => {
+    // The only per-species decision left. A Xeno Larva is a faceted diamond and
+    // a Brood Spore is radially symmetric; rotating either is invisible work
+    // done two hundred times a frame.
+    expect(getJuiceProfile('ashfish').face).toBe(true);
+    expect(getJuiceProfile('bio_goliath').face).toBe(true);
+    expect(getJuiceProfile('tarling').face).toBe(false);
+    expect(getJuiceProfile('rustbloom').face).toBe(false);
   });
 
   it('falls back to a sane default for an unknown future swarm type', () => {
     const profile = getJuiceProfile('some_future_enemy');
-    expect(profile.flutter).toBe(true);
+    expect(profile.face).toBe(true);
   });
 
-  it('applies breathing, not flutter, to a stationary type', () => {
-    const rustbloom = makeEntity({ typeId: 'rustbloom', spawnTime: -10 });
-    const out = applyJuice(rustbloom, 1.0, createTransform());
-    // Breathing amplitude is 1.4%; flutter would be up to 8%.
-    expect(Math.abs(out.scaleY - 1)).toBeLessThanOrEqual(0.014 + 1e-9);
+  it('carries no deformation flags at all any more', () => {
+    // Guards against a `flutter` or `stationary` row creeping back in: both
+    // drove sine scale deformations, and applyJuice no longer reads either.
+    for (const typeId of Object.keys(JUICE_PROFILE)) {
+      expect(JUICE_PROFILE[typeId].flutter, typeId).toBeUndefined();
+      expect(JUICE_PROFILE[typeId].stationary, typeId).toBeUndefined();
+    }
   });
 });
 

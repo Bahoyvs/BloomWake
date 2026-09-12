@@ -1,9 +1,17 @@
 /**
- * Dewling cosmetic variants (Pre-production decision: 4 variants at Basic Launch).
+ * Void Drifter hull liveries (4 variants at Basic Launch).
  *
- * One is free, two are Petal purchases at opposite ends of the price curve, and
- * the prestige skin is drop-only — it cannot be bought at any price, which is
- * the entire point of it as a Legendary chase item.
+ * One is free, two are purchases at opposite ends of the price curve, and the
+ * prestige livery is drop-only — it cannot be bought at any price, which is the
+ * entire point of it as a Legendary chase item.
+ *
+ * IDs are save keys and stay as-is; only the names, descriptions and colours
+ * carry the re-skin.
+ *
+ * `tint` is applied straight to the hero's white atlas hull, which makes every
+ * one of these subject to the Visual Soup contract: a livery below the hero
+ * luminance floor would hide the player inside their own swarm. That is
+ * asserted in tests/data.test.js rather than left to review.
  */
 
 export const COSMETIC_IDS = {
@@ -16,36 +24,36 @@ export const COSMETIC_IDS = {
 export const COSMETICS = {
   [COSMETIC_IDS.DEFAULT]: {
     id: COSMETIC_IDS.DEFAULT,
-    name: 'Dewling',
-    description: 'The original bloom.',
+    name: 'Void Drifter',
+    description: 'Standart filo livresi.',
     cost: 0,
     purchasable: true,
-    /** Grey-box tint; the themed art pass is Phase 6. */
-    tint: '#dff3ff',
-    ring: '#7fd4ff',
+    /** Matches HERO_TINT, so equipping the default changes nothing. */
+    tint: '#cffcff',
+    ring: '#7df9ff',
   },
   [COSMETIC_IDS.DEW_TINT]: {
     id: COSMETIC_IDS.DEW_TINT,
-    name: 'Dew Tint',
-    description: 'A soft green shimmer across the surface.',
+    name: 'Ion Wash',
+    description: 'Motor taşmasının gövdeye vurduğu soluk iyon parıltısı.',
     cost: 150,
     purchasable: true,
-    tint: '#dff7e6',
-    ring: '#8fe4b0',
+    tint: '#8fd8ff',
+    ring: '#3b82f6',
   },
   [COSMETIC_IDS.DEEP_WATER]: {
     id: COSMETIC_IDS.DEEP_WATER,
-    name: 'Deep Water',
-    description: 'Pressure-dark, lit from within.',
+    name: 'Deep Field',
+    description: 'Uzun menzil keşif boyası; içeriden aydınlanır.',
     cost: 1200,
     purchasable: true,
-    tint: '#bcd8ff',
-    ring: '#4f8fd6',
+    tint: '#b9e8ff',
+    ring: '#1d4ea8',
   },
   [COSMETIC_IDS.PRESTIJ_SKIN]: {
     id: COSMETIC_IDS.PRESTIJ_SKIN,
-    name: 'Prestige Bloom',
-    description: 'Only ever found inside a Legendary Bloom Capsule.',
+    name: 'Nova Prestige',
+    description: 'Yalnızca efsanevi kurtarma kapsülünden çıkar.',
     cost: 0,
     /** Drop-only: never appears in the shop and cannot be bought. */
     purchasable: false,

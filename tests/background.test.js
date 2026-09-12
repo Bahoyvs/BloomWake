@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import {
   Background,
-  makeLiminalPoolTileTexture,
+  makeVoidTileTexture,
   makeCausticsTexture,
   makeSunbeamsTexture,
 } from '../src/render/background.js';
@@ -125,7 +125,7 @@ describe('Background visual system', () => {
   });
 
   it('creates non-null textures from procedural generators', () => {
-    const tileTex = makeLiminalPoolTileTexture(null);
+    const tileTex = makeVoidTileTexture(null);
     const causticsTex = makeCausticsTexture(null);
     const sunbeamTex = makeSunbeamsTexture(null);
 

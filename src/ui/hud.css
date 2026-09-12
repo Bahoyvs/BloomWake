@@ -1,52 +1,70 @@
 /*
- * Phase 6 HUD — Frutiger Aero glass.
+ * HUD — Void Drifter cockpit chrome.
  *
- * Panels are translucent aqua glass with a bright top edge and a soft blur, the
- * signature Aero treatment. Everything sits at low opacity so the playfield
- * stays readable underneath: the HUD must never compete with the Dewling.
+ * Panels are deep-space plate with a neon-cyan edge: hard geometry, thin
+ * bright rims, no soft glass. Everything sits at low opacity so the playfield
+ * stays readable underneath — the HUD must never compete with the Drifter.
+ *
+ * THE DRAFT CARDS ARE THE ONE PLACE WITH REAL ART.
+ * Kenney's sci-fi plates ship as light grey PNGs meant for a bright UI. They
+ * are 9-sliced through `border-image` on a ::before layer and DARKENED with a
+ * filter there, rather than on the card itself, so the plate lands in the
+ * game's palette without dragging the text down with it. Slicing rather than
+ * stretching is what keeps the plate's corner radius constant while the card
+ * itself is fluid-width.
  */
 
 :root {
-  /* Base glass tints */
-  --aero-glass: rgba(18, 58, 76, 0.42);
-  --aero-glass-strong: rgba(12, 44, 60, 0.72);
-  --aero-edge: rgba(160, 232, 255, 0.34);
-  --aero-edge-bright: rgba(228, 250, 255, 0.9);
+  /* Plate fills */
+  --hull-plate: rgba(10, 16, 30, 0.62);
+  --hull-plate-strong: rgba(6, 10, 22, 0.86);
+  --hull-edge: rgba(0, 240, 255, 0.32);
+  --hull-edge-bright: rgba(160, 250, 255, 0.85);
 
   /* Text */
-  --aero-text: #e8fbff;
-  --aero-text-dim: #8fb8c9;
+  --hull-text: #e6feff;
+  --hull-text-dim: #7f9cb5;
 
-  /* Accents */
-  --aero-cyan: #7fe6ff;
-  --aero-aqua: #5ad6ff;
-  --aero-mint: #9bf5c4;
+  /* Accents — the theme palette, mirrored for CSS. */
+  --neon-cyan: #00f0ff;
+  --ion-blue: #3b82f6;
+  --bio-acid: #00ff88;
+  --danger-red: #ff2a55;
 
   /*
-   * The Vista Aero "waterline": a bright glossy upper half and a matte lower
-   * half separated by a HARD stop at 50%. This single gradient is what makes a
-   * panel read as curved glass rather than a flat translucent rectangle.
+   * Rarity, per the theme brief: blue / green / yellow / red.
+   * These are the EXACT colours inside the shipped badge plates, so the rim,
+   * the pips and the badge cannot drift apart into three different blues.
    */
-  --aero-specular: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.34) 0%,
-    rgba(255, 255, 255, 0.14) 49.9%,
-    rgba(255, 255, 255, 0.03) 50%,
-    rgba(255, 255, 255, 0.09) 100%
+  --rarity-common: #1c9fd7;
+  --rarity-uncommon: #16bb77;
+  --rarity-rare: #ffcc00;
+  --rarity-legendary: #ee2747;
+
+  /*
+   * A single hard-stopped gradient reads as an angled metal plate catching one
+   * light source. The stop is off-centre rather than at 50% so it looks lit,
+   * not folded.
+   */
+  --hull-specular: linear-gradient(
+    170deg,
+    rgba(120, 220, 255, 0.14) 0%,
+    rgba(120, 220, 255, 0.05) 38%,
+    rgba(0, 0, 0, 0.12) 38.5%,
+    rgba(0, 0, 0, 0.28) 100%
   );
 
-  /* Top highlight line + cyan inner glow + deep outer shadow. */
-  --aero-shadow:
-    inset 0 1px 0 var(--aero-edge-bright),
-    inset 0 0 24px rgba(127, 230, 255, 0.22),
-    0 14px 40px rgba(0, 0, 0, 0.62);
+  --hull-shadow:
+    inset 0 1px 0 var(--hull-edge-bright),
+    inset 0 0 22px rgba(0, 240, 255, 0.14),
+    0 14px 40px rgba(0, 0, 0, 0.72);
 
-  --aero-shadow-soft:
-    inset 0 1px 0 var(--aero-edge-bright),
-    inset 0 0 16px rgba(127, 230, 255, 0.16),
-    0 8px 24px rgba(0, 0, 0, 0.5);
+  --hull-shadow-soft:
+    inset 0 1px 0 var(--hull-edge-bright),
+    inset 0 0 14px rgba(0, 240, 255, 0.1),
+    0 8px 24px rgba(0, 0, 0, 0.6);
 
-  --aero-blur: blur(8px);
+  --hull-blur: blur(7px);
 }
 
 .hud {
@@ -54,7 +72,7 @@
   inset: 0;
   pointer-events: none;
   font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
-  color: var(--aero-text);
+  color: var(--hull-text);
 }
 
 .hud__top {
@@ -67,11 +85,11 @@
   justify-content: center;
   gap: 28px;
   padding: 14px 20px;
-  background: var(--aero-specular), linear-gradient(180deg, rgba(7, 34, 48, 0.9), rgba(7, 30, 42, 0.1));
-  backdrop-filter: var(--aero-blur);
-  -webkit-backdrop-filter: var(--aero-blur);
-  border-bottom: 1px solid var(--aero-edge);
-  box-shadow: inset 0 1px 0 var(--aero-edge-bright), 0 6px 22px rgba(0, 0, 0, 0.45);
+  background: var(--hull-specular), linear-gradient(180deg, rgba(5, 12, 26, 0.92), rgba(5, 10, 20, 0.1));
+  backdrop-filter: var(--hull-blur);
+  -webkit-backdrop-filter: var(--hull-blur);
+  border-bottom: 1px solid var(--hull-edge);
+  box-shadow: inset 0 -1px 0 rgba(0, 240, 255, 0.2), 0 6px 22px rgba(0, 0, 0, 0.55);
   font-size: 14px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -84,7 +102,7 @@
 }
 
 .hud__stat-label {
-  color: var(--aero-text-dim);
+  color: var(--hull-text-dim);
   font-size: 11px;
 }
 
@@ -108,12 +126,13 @@
 .hud__bar {
   position: relative;
   height: 16px;
-  border: 1px solid var(--aero-edge);
-  border-radius: 999px;
-  background: var(--aero-specular), var(--aero-glass);
-  backdrop-filter: var(--aero-blur);
-  -webkit-backdrop-filter: var(--aero-blur);
-  box-shadow: var(--aero-shadow-soft);
+  border: 1px solid var(--hull-edge);
+  /* Clipped corners rather than a radius: this is hull plating, not glass. */
+  clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+  background: var(--hull-specular), var(--hull-plate);
+  backdrop-filter: var(--hull-blur);
+  -webkit-backdrop-filter: var(--hull-blur);
+  box-shadow: var(--hull-shadow-soft);
   overflow: hidden;
 }
 
@@ -126,12 +145,12 @@
 .hud__bar--hp .hud__bar-fill {
   background:
     linear-gradient(180deg,
-      rgba(255, 255, 255, 0.75) 0%,
-      rgba(255, 255, 255, 0.28) 49.9%,
-      rgba(255, 255, 255, 0.02) 50%,
-      rgba(255, 255, 255, 0.14) 100%),
-    linear-gradient(180deg, #d8f8ff, #4fc3e8);
-  box-shadow: 0 0 16px rgba(127, 230, 255, 0.65), inset 0 -1px 3px rgba(0, 40, 60, 0.4);
+      rgba(255, 255, 255, 0.6) 0%,
+      rgba(255, 255, 255, 0.2) 45%,
+      rgba(0, 0, 0, 0.05) 46%,
+      rgba(255, 255, 255, 0.12) 100%),
+    linear-gradient(180deg, #9ff8ff, var(--neon-cyan));
+  box-shadow: 0 0 16px rgba(0, 240, 255, 0.7), inset 0 -1px 3px rgba(0, 30, 60, 0.5);
 }
 
 .hud__bar--xp {
@@ -139,14 +158,8 @@
 }
 
 .hud__bar--xp .hud__bar-fill {
-  background:
-    linear-gradient(180deg,
-      rgba(255, 255, 255, 0.7) 0%,
-      rgba(255, 255, 255, 0.24) 49.9%,
-      rgba(255, 255, 255, 0.02) 50%,
-      rgba(255, 255, 255, 0.12) 100%),
-    linear-gradient(180deg, #ccffe8, #57d69a);
-  box-shadow: 0 0 14px rgba(155, 245, 196, 0.6);
+  background: linear-gradient(180deg, #b6ffdc, var(--bio-acid));
+  box-shadow: 0 0 14px rgba(0, 255, 136, 0.6);
 }
 
 .hud__bar-text {
@@ -173,8 +186,8 @@
   letter-spacing: 0.12em;
   text-transform: uppercase;
   text-align: center;
-  color: var(--aero-text);
-  text-shadow: 0 0 18px rgba(127, 230, 255, 0.65), 0 2px 10px rgba(0, 0, 0, 0.7);
+  color: var(--hull-text);
+  text-shadow: 0 0 18px rgba(0, 240, 255, 0.7), 0 2px 10px rgba(0, 0, 0, 0.8);
   opacity: 0;
   transition: opacity 0.25s ease;
 }
@@ -183,13 +196,55 @@
   opacity: 1;
 }
 
+/*
+ * Clear-the-swarm objective prompt.
+ *
+ * Sits BELOW the banner slot rather than in it: banners are transient events
+ * ("Wave 3", "Phase 2") and this is a standing condition, so the two must be
+ * able to be on screen at once. It is deliberately quieter than a banner —
+ * hazard amber, letterspaced, no glow — because it is a persistent readout and
+ * anything shoutier becomes noise within a couple of seconds.
+ */
+.hud__objective {
+  position: absolute;
+  top: 44%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 16px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: #ffb347;
+  background: rgba(10, 6, 2, 0.55);
+  border: 1px solid rgba(255, 179, 71, 0.35);
+  border-radius: 2px;
+  opacity: 0;
+  /* Not interactive, and must never eat a click meant for the canvas. */
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+.hud__objective--visible {
+  opacity: 1;
+}
+
+.hud__objective-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--hull-text);
+  letter-spacing: 0.05em;
+}
+
 .hud__phase {
   position: absolute;
   bottom: 10px;
   left: 12px;
   font-size: 11px;
-  letter-spacing: 0.08em;
-  color: #4d5661;
+  letter-spacing: 0.12em;
+  color: #3d4a5c;
 }
 
 /* Owned-card strip */
@@ -201,15 +256,18 @@
   flex-direction: column;
   gap: 3px;
   font-size: 11px;
-  color: var(--aero-text-dim);
+  color: var(--hull-text-dim);
 }
 
 .hud__owned b {
-  color: var(--aero-text);
+  color: var(--hull-text);
   font-weight: 600;
 }
 
-/* Level-up draft */
+/* ------------------------------------------------------------------ */
+/* Level-up draft                                                      */
+/* ------------------------------------------------------------------ */
+
 .hud__draft {
   position: absolute;
   inset: 0;
@@ -219,9 +277,9 @@
   justify-content: center;
   gap: 22px;
   padding: 24px;
-  background: radial-gradient(circle at 50% 40%, rgba(10, 48, 66, 0.78), rgba(2, 8, 14, 0.93));
-  backdrop-filter: var(--aero-blur);
-  -webkit-backdrop-filter: var(--aero-blur);
+  background: radial-gradient(circle at 50% 40%, rgba(6, 20, 40, 0.82), rgba(2, 3, 10, 0.95));
+  backdrop-filter: var(--hull-blur);
+  -webkit-backdrop-filter: var(--hull-blur);
   pointer-events: auto;
 }
 
@@ -234,6 +292,8 @@
   font-weight: 800;
   letter-spacing: 0.14em;
   text-transform: uppercase;
+  color: var(--hull-text);
+  text-shadow: 0 0 20px rgba(0, 240, 255, 0.5);
 }
 
 .hud__draft-options {
@@ -249,63 +309,257 @@
   flex-direction: column;
   gap: 7px;
   width: min(240px, 78vw);
-  padding: 18px 16px 16px;
+  /* Bottom padding leaves the pip rail its own strip along the edge. */
+  padding: 18px 16px 26px;
   text-align: left;
   color: inherit;
   font: inherit;
-  background: var(--aero-specular), var(--aero-glass-strong);
-  backdrop-filter: var(--aero-blur);
-  -webkit-backdrop-filter: var(--aero-blur);
-  border: 1px solid var(--aero-edge);
-  border-top-width: 3px;
-  border-radius: 12px;
-  box-shadow: var(--aero-shadow);
+  background: none;
+  border: 0;
   cursor: pointer;
-  transition: transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease;
+  transition: transform 0.14s ease, filter 0.14s ease;
+}
+
+/*
+ * The Kenney plate, 9-sliced and pushed into the palette.
+ *
+ * `fill` makes border-image paint the centre as well as the frame, so one
+ * image is the whole panel. The filter lives here rather than on .hud__card
+ * because a filter on the button would dim the text with the plate.
+ */
+.hud__card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 14px solid transparent;
+  border-image: url('/assets/ui/panel_card.png') 14 fill stretch;
+  filter: brightness(0.26) saturate(1.6) hue-rotate(185deg);
+  z-index: 0;
+}
+
+/* Neon rim and glow, above the darkened plate but below the content. */
+.hud__card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  box-shadow: var(--hull-shadow);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.hud__card > * {
+  position: relative;
+  z-index: 1;
 }
 
 .hud__card:hover {
   transform: translateY(-4px);
-  filter: brightness(1.12);
-  box-shadow:
-    inset 0 1px 0 var(--aero-edge-bright),
-    inset 0 0 30px rgba(127, 230, 255, 0.35),
-    0 20px 48px rgba(0, 0, 0, 0.68);
+  filter: brightness(1.14);
 }
 
-.hud__card--common { border-top-color: #8fb8c9; }
-.hud__card--uncommon { border-top-color: var(--aero-mint); }
-.hud__card--rare { border-top-color: var(--aero-cyan); }
-.hud__card--legendary { border-top-color: #ffd98a; }
+.hud__card:focus-visible {
+  outline: 2px solid var(--neon-cyan);
+  outline-offset: 3px;
+}
+
+/*
+ * Rarity badge: the plate's coloured corner block, cropped to just that block.
+ *
+ * The source PNG is a full sci-fi button whose top-left QUADRANT (source pixels
+ * 0-31 of 64) is the rarity colour and whose remaining three quarters are the
+ * light-grey button face. Drawn whole at 22px that reads as a grey square with
+ * a tinted corner — the colour, which is the only part that carries meaning,
+ * would be the part that disappeared.
+ *
+ * So the background is zoomed to 267% and offset 10%, which frames source
+ * pixels 4-28: inside the colour block, clear of the rounded outer edge. The
+ * image URL comes from the asset manifest via hud.js, so this rule owns the
+ * crop and the manifest owns the path.
+ */
+.hud__card-badge {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  width: 20px;
+  height: 20px;
+  z-index: 2;
+  background-repeat: no-repeat;
+  background-size: 267%;
+  background-position: 10% 10%;
+  border-radius: 2px;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.6), inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+  pointer-events: none;
+}
 
 .hud__card-key {
   position: absolute;
   top: 10px;
   right: 12px;
   font-size: 11px;
-  color: #6c7684;
+  color: #5b6a7d;
 }
 
 .hud__card-name {
   font-size: 17px;
   font-weight: 700;
+  letter-spacing: 0.02em;
+  /* Clear of the rarity badge in the top-left corner. */
+  padding-left: 20px;
 }
 
 .hud__card-meta {
   font-size: 10px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: #7b8794;
+  color: #6d7f92;
 }
 
 .hud__card-level {
   font-size: 12px;
   font-weight: 600;
-  color: var(--aero-cyan);
+  color: var(--neon-cyan);
 }
 
 .hud__card-desc {
   font-size: 12px;
   line-height: 1.5;
-  color: var(--aero-text-dim);
+  color: var(--hull-text-dim);
+}
+
+/* Level pips, flush to the card's bottom edge. */
+.hud__card-pips {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 10px;
+  display: flex;
+  gap: 4px;
+}
+
+.hud__pip {
+  flex: 1 1 0;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.09);
+  box-shadow: inset 0 0 0 1px rgba(0, 240, 255, 0.14);
+}
+
+/* Rarity drives the badge colour, the top rim and the lit pips together, so
+   the three never disagree about what the card is worth. */
+.hud__card--common .hud__pip--on { background: var(--rarity-common); box-shadow: 0 0 8px var(--rarity-common); }
+.hud__card--uncommon .hud__pip--on { background: var(--rarity-uncommon); box-shadow: 0 0 8px var(--rarity-uncommon); }
+.hud__card--rare .hud__pip--on { background: var(--rarity-rare); box-shadow: 0 0 8px var(--rarity-rare); }
+.hud__card--legendary .hud__pip--on { background: var(--rarity-legendary); box-shadow: 0 0 8px var(--rarity-legendary); }
+
+.hud__card--common::after { border-top: 3px solid var(--rarity-common); }
+.hud__card--uncommon::after { border-top: 3px solid var(--rarity-uncommon); }
+.hud__card--rare::after { border-top: 3px solid var(--rarity-rare); }
+.hud__card--legendary::after { border-top: 3px solid var(--rarity-legendary); }
+
+/* ==========================================================================
+ * Fixed Top-Screen Boss Health Bar (Dreadnought Station HUD)
+ * ======================================================================== */
+.hud__boss {
+  position: absolute;
+  top: 66px;
+  left: 50%;
+  transform: translate(-50%, -10px);
+  width: min(620px, 56vw);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 14px;
+  background: var(--hull-specular), linear-gradient(180deg, rgba(20, 6, 12, 0.88), rgba(12, 4, 10, 0.72));
+  backdrop-filter: var(--hull-blur);
+  -webkit-backdrop-filter: var(--hull-blur);
+  border: 1px solid rgba(255, 42, 85, 0.45);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 120, 150, 0.5),
+    inset 0 0 18px rgba(255, 42, 85, 0.2),
+    0 10px 30px rgba(0, 0, 0, 0.8);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.45s cubic-bezier(0.16, 1, 0.3, 1), transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 20;
+}
+
+.hud__boss--visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0);
+}
+
+.hud__boss-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.hud__boss-title {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: #ff6080;
+  text-shadow: 0 0 10px rgba(255, 42, 85, 0.6);
+  text-transform: uppercase;
+}
+
+.hud__boss-phase {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 2px 7px;
+  border-radius: 2px;
+  background: rgba(255, 42, 85, 0.2);
+  border: 1px solid rgba(255, 42, 85, 0.5);
+  color: #ffb3c1;
+  text-transform: uppercase;
+}
+
+.hud__boss-track {
+  position: relative;
+  height: 12px;
+  background: rgba(10, 2, 6, 0.8);
+  border: 1px solid rgba(255, 42, 85, 0.35);
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.9);
+  overflow: hidden;
+}
+
+/* Lag bar / damage ghost: yellow-white layer eroding slowly behind main fill */
+.hud__boss-ghost {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  background: linear-gradient(90deg, #fffae0, #ffd54f);
+  opacity: 0.85;
+  box-shadow: 0 0 8px rgba(255, 235, 59, 0.5);
+  transition: width 0.08s linear;
+}
+
+/* Main HP fill: immediate response, vibrant sci-fi red/crimson glow */
+.hud__boss-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  background: linear-gradient(90deg, #ff1744 0%, #ff3d00 70%, #ff9100 100%);
+  box-shadow: 0 0 12px rgba(255, 42, 85, 0.85);
+  transition: width 0.04s ease-out;
+}
+
+.hud__boss-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #ffffff;
+  text-shadow: 0 1px 2px #000000, 0 0 6px #000000;
+  pointer-events: none;
 }

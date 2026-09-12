@@ -19,10 +19,21 @@
  * a squash multiply together fine. The FX are authored to read on their own so
  * the game feels animated before a single frame is drawn.
  *
- * SHAPE LANGUAGE
- * Squash-and-stretch here is volume-preserving: when scaleY drops, scaleX rises
- * by roughly the inverse. A blob that only shrinks reads as a bug; a blob that
- * squashes and bulges reads as soft and alive, which is what the Dewling is.
+ * SHAPE LANGUAGE: NONE. THIS IS A SHIP.
+ * The first version of this module was written for a soft creature and used
+ * volume-preserving squash-and-stretch everywhere — the Drifter bounced as it
+ * moved, bulged when it fired and flattened when it was hit, and the boss
+ * swelled on a sine. Re-skinned as a fighter and a capital station, all of that
+ * reads as the hardware being made of rubber.
+ *
+ * The replacement vocabulary is rigid and kinetic:
+ *
+ *   - IMPACT is displacement. Firing kicks the hull backward along the shot
+ *     line and it snaps back (see RECOIL/attackRecoil); being hit shoves it and
+ *     rings out. The sprite never changes shape.
+ *   - EMPHASIS is brightness. A white flash for two or three frames.
+ *   - DEATH is the one place scale still moves, as a straight collapse, because
+ *     a ship being destroyed genuinely stops being ship-shaped.
  *
  * Same rules as juice.js: pure functions, no module state, results written into
  * a caller-owned transform. Tier A is two entities, so cost is irrelevant here —
@@ -50,6 +61,26 @@ export const HERO_FX = {
   [ANIM_STATES.ATTACK]: { duration: 0.17, loop: false },
   [ANIM_STATES.HIT]: { duration: 0.22, loop: false },
   [ANIM_STATES.DEATH]: { duration: 0.75, loop: false },
+};
+
+/**
+ * The Drifter's weapon recoil.
+ *
+ * A LINEAR IMPULSE, NOT A SPRING. The hull is knocked straight back along the
+ * inverse of the firing line and is home again in `duration`. The brief pins
+ * that at ~0.06s, which is under four frames: fast enough to read as a snap
+ * rather than as the ship drifting backwards, and short enough that at the
+ * Phase Repeater's L5 fire rate consecutive shots do not overlap into a
+ * permanent offset.
+ *
+ * `attackRecoil` reads these; the old version was a half-sine over the whole
+ * 0.17s attack state, which was long enough to see the ship travelling.
+ */
+export const RECOIL = {
+  /** Seconds from full kick back to rest. */
+  duration: 0.06,
+  /** Peak displacement in px, opposite the firing angle. */
+  distance: 9,
 };
 
 /**
@@ -101,26 +132,12 @@ function impact(p) {
   return inv * inv;
 }
 
-/**
- * Apply a volume-preserving squash to a transform.
- *
- * @param {Object} out
- * @param {number} amount - Positive squashes flat and wide, negative stretches
- *   tall and thin
- */
-function squash(out, amount) {
-  out.scaleY *= 1 - amount;
-  // Inverse on the other axis keeps apparent volume constant, which is what
-  // makes it read as a deforming body rather than a resizing image.
-  out.scaleX *= 1 + amount * 0.85;
-}
-
 /* ------------------------------------------------------------------ */
 /* Hero state transforms                                               */
 /* ------------------------------------------------------------------ */
 
 /**
- * Procedural pose for the Dewling in a given state.
+ * Procedural pose for the Drifter in a given state.
  *
  * @param {string} state - One of ANIM_STATES
  * @param {number} stateElapsed - Seconds since this state began
@@ -135,49 +152,37 @@ export function heroStateTransform(state, stateElapsed, time, out, context = {})
   const p = config?.duration > 0 ? clamp01(stateElapsed / config.duration) : 0;
 
   switch (state) {
-    case ANIM_STATES.MOVE: {
-      // Three things sell movement on a radially symmetric blob, and it needs
-      // all three — a bounce alone just looks like idling in place.
-      const speed = clamp01(Math.abs(context.dx ?? 0) / 3);
-
-      //   1. A bounce, faster and deeper the quicker it travels.
-      const bounce = Math.sin(time * (11 + speed * 5)) * (0.05 + speed * 0.045);
-      squash(out, bounce);
-
-      //   2. A stretch along travel, so it elongates into its own motion.
-      out.scaleX *= 1 + speed * 0.14;
-      out.scaleY *= 1 - speed * 0.07;
-
-      //   3. A lean in the direction of travel.
-      out.rotation = Math.sign(context.dx ?? 0) * speed * 0.2;
-      break;
-    }
-
     case ANIM_STATES.ATTACK: {
-      // Anticipation then release: wind down into a squash for the first
-      // quarter, then spring back out through an overshoot.
-      if (p < 0.25) {
-        squash(out, (p / 0.25) * 0.22);
-      } else {
-        const release = (p - 0.25) / 0.75;
-        squash(out, -0.28 * damped(release, 1.1, 4.2));
-      }
+      /*
+       * NOTHING. The whole of firing is the recoil kick, which is a POSITION
+       * offset applied by the renderer (see attackRecoil), not a transform.
+       *
+       * This branch used to wind the hull down into a 22% squash and spring it
+       * back out through an overshoot. On a fighter that reads as the fuselage
+       * compressing every time the gun fires, and at the Phase Repeater's L5
+       * rate of two shots a second it never stopped.
+       */
       break;
     }
 
     case ANIM_STATES.HIT: {
-      // Hard asymmetric squash that rings out, plus a flash over the first
-      // third — long enough to register, short enough not to hide the sprite.
-      squash(out, 0.34 * damped(p, 1.4, 5.5));
+      /*
+       * A flash and a jolt. The rotation is a damped rock — the hull is knocked
+       * off its bearing and settles — which is rigid-body motion; the previous
+       * version paired it with a 34% asymmetric squash that flattened the ship.
+       */
       out.flash = p < 0.34;
-      // A small recoil wobble reads as "knocked", not merely "flashed".
       out.rotation = damped(p, 2.0, 6) * 0.13;
       break;
     }
 
     case ANIM_STATES.DEATH: {
-      // Collapse and fade. Shrinking to zero looks like a deletion, so it
-      // settles at a fifth of size and lets alpha finish the job.
+      /*
+       * The one place scale still moves, and it earns it: a ship being
+       * destroyed genuinely stops being ship-shaped. Uniform on both axes so it
+       * collapses rather than deforming, and it settles at a fifth of size
+       * because shrinking to zero looks like a deletion rather than a death.
+       */
       const collapse = 1 - 0.8 * p * p;
       out.scaleX *= collapse;
       out.scaleY *= collapse;
@@ -186,10 +191,19 @@ export function heroStateTransform(state, stateElapsed, time, out, context = {})
       break;
     }
 
+    case ANIM_STATES.MOVE:
     case ANIM_STATES.IDLE:
     default: {
-      // Slow breathing so a standing Dewling is never a still image.
-      squash(out, Math.sin(time * 2.4) * 0.045);
+      /*
+       * Also nothing, and deliberately.
+       *
+       * MOVE used to bounce, stretch along travel and lean; IDLE breathed on a
+       * sine. Both were written for a soft creature. A ship under thrust
+       * communicates speed through its ENGINES and its heading — the flames
+       * lengthen with throttle (THRUSTER in sprite-factory.js) and the hull
+       * turns toward its travel — and neither of those needs the sprite to
+       * change shape.
+       */
       break;
     }
   }
@@ -198,7 +212,7 @@ export function heroStateTransform(state, stateElapsed, time, out, context = {})
 }
 
 /**
- * Procedural pose for the Rustwhale.
+ * Procedural pose for the Dreadnought.
  *
  * @param {string} state
  * @param {number} stateElapsed - Seconds since this state began
@@ -215,59 +229,58 @@ export function bossStateTransform(state, stateElapsed, time, out, context = {})
 
   switch (state) {
     case ANIM_STATES.TELEGRAPH: {
-      // The wind-up: a swell that beats faster and harder as the window closes,
-      // so the threat reads as imminent rather than merely present. Frequency
-      // and amplitude both ramp with p, and p is driven by telegraph_ms — the
-      // same fairness number the sprite path derives its fps from, so this
-      // peaks exactly as the AoE lands.
+      /*
+       * The wind-up, as a STROBE rather than a swell.
+       *
+       * Frequency ramps with p, so the warning beats faster as the window
+       * closes and peaks exactly as the AoE lands — p is driven by
+       * telegraph_ms, the same fairness number the sprite path derives its fps
+       * from. What changed is the channel: this used to inflate the whole
+       * station by up to 22%, which on a 200px chassis was the single worst
+       * offender in the "everything is rubber" read.
+       */
       const urgency = 0.5 + p * p * 3.5;
       const beat = Math.sin(stateElapsed * Math.PI * 2 * (2 + urgency * 3));
-      const swell = (0.06 + p * 0.16) * beat;
-      out.scaleX *= 1 + swell;
-      out.scaleY *= 1 + swell;
-      // Flash on the peak of each beat once the window is more than half gone.
-      out.flash = p > 0.5 && beat > 0.6;
+      out.flash = beat > 0.6 - p * 0.5;
       break;
     }
 
     case ANIM_STATES.ATTACK: {
-      // The slam: a violent stretch down and out, recovering slowly.
-      squash(out, 0.3 * impact(p));
+      // The slam. A hard flash on the strike, decaying — no deformation.
+      out.flash = impact(p) > 0.55;
       break;
     }
 
     case ANIM_STATES.HIT: {
-      squash(out, 0.12 * damped(p, 1.2, 5));
       out.flash = p < 0.5;
+      // Rigid rock on its axis, settling. The station is knocked, not squashed.
+      out.rotation = damped(p, 1.2, 5) * 0.02;
       break;
     }
 
     case ANIM_STATES.PHASE_UP: {
-      // A heave: swells up, holds, settles. Bigger and slower than a hit so a
-      // tier change is unmistakably a different event.
+      // A tier change is announced by a sustained strobe, longer and steadier
+      // than a hit flash so the two are unmistakably different events.
       const heave = Math.sin(p * Math.PI);
-      out.scaleX *= 1 + heave * 0.22;
-      out.scaleY *= 1 + heave * 0.22;
-      out.flash = heave > 0.55;
+      out.flash = heave > 0.4;
       break;
     }
 
     case ANIM_STATES.DEATH: {
+      // Same exemption as the hero: destruction is the one time a hull is
+      // allowed to stop being hull-shaped. Uniform collapse, plus a list.
       const collapse = 1 - 0.65 * p;
       out.scaleX *= collapse;
-      out.scaleY *= collapse * (1 - p * 0.3);
+      out.scaleY *= collapse;
       out.alpha = 1 - clamp01(p * 1.1);
-      // A slow list to one side as it goes down.
       out.rotation = p * 0.5;
       break;
     }
 
     case ANIM_STATES.IDLE:
     default: {
-      // Heavy, slow swell — a big thing breathing.
-      const breathe = Math.sin(time * 1.3) * 0.035;
-      out.scaleX *= 1 + breathe;
-      out.scaleY *= 1 - breathe * 0.6;
+      // Nothing. The station's idle motion is its axial spin and its reactor
+      // glow, both owned by dreadnoughtPulse — it does not breathe.
       break;
     }
   }
@@ -280,56 +293,45 @@ export function bossStateTransform(state, stateElapsed, time, out, context = {})
 /* ------------------------------------------------------------------ */
 
 /**
- * Droplets shed behind the Dewling while it moves.
+ * Exhaust grit shed from the engine nozzles.
  *
- * A wake does something the trail cannot: it persists in world space after the
- * player has gone, so it reads as displacement rather than as a graphic stuck
- * to the sprite.
+ * REPLACES A GHOST CHAIN. The Drifter used to leave a trail of semi-transparent
+ * copies of its own sprite (the old AFTERIMAGE pool). Seven translucent ships
+ * stacked up behind the real one is the single most confusing thing that can
+ * be put on screen in a game whose headline risk is the player losing track of
+ * their own hull — and it is a liquid, smeary effect on top of that.
+ *
+ * What comes out of the nozzles now is small, hard and high-frequency: a few
+ * plasma sparks per emission, thrown backward, which reads as thrust without
+ * ever competing with the ship for identity.
  */
 export const MOVE_WAKE = {
-  /** Seconds between emissions at full speed. */
-  interval: 0.05,
-  /** Droplets per emission. */
+  /** Seconds between emissions at full throttle. Short — this is grit. */
+  interval: 0.028,
+  /** Sparks per emission, per nozzle. */
   count: 2,
-};
-
-/**
- * Ghost copies of the sprite at recent positions — the "trace".
- *
- * This is the single most effective movement cue available without new art,
- * because it shows the actual silhouette displaced through space rather than
- * an abstract shape standing in for it.
- */
-export const AFTERIMAGE = {
-  /** Seconds between ghosts. */
-  interval: 0.042,
-  /** Lifetime of one ghost. */
-  life: 0.24,
-  /** Pool size — also the maximum on screen at once. */
-  poolSize: 7,
-  /** Alpha of a freshly placed ghost. */
-  alpha: 0.42,
 };
 
 /**
  * Recoil kick, in pixels, at a point in the attack.
  *
- * The Dewling shoves backward off its own shot and springs back. Recoil is what
- * gives a projectile weight — without it the shot looks like it merely appeared
- * next to the character rather than being fired by it.
+ * A LINEAR RETURN, NOT A SPRING. The hull snaps to full displacement on the
+ * frame the shot goes out and slides back to rest over RECOIL.duration (~0.06s,
+ * under four frames). The previous version was a half-sine spread across the
+ * whole 0.17s attack state, which ramped UP over the first 85ms — so the ship
+ * drifted backward after the shot instead of being kicked by it, and at a high
+ * fire rate never returned to centre.
  *
  * @param {number} stateElapsed - Seconds since the attack began
  * @returns {number} Distance to displace OPPOSITE the firing angle
  */
 export function attackRecoil(stateElapsed) {
-  const duration = HERO_FX[ANIM_STATES.ATTACK].duration;
-  const p = clamp01(stateElapsed / duration);
-  // Snap out fast, ease back — a spring that never overshoots forward.
-  return 7 * Math.sin(p * Math.PI) * (1 - p * 0.45);
+  const p = clamp01(stateElapsed / RECOIL.duration);
+  return RECOIL.distance * (1 - p);
 }
 
 /**
- * Whether a moving Dewling should shed wake droplets this frame.
+ * Whether a moving Drifter should shed exhaust sparks this frame.
  *
  * @param {number} accumulator - Seconds banked since the last emission
  * @param {number} speedFactor - 0..1, how fast it is travelling
@@ -337,12 +339,12 @@ export function attackRecoil(stateElapsed) {
  */
 export function wakeDue(accumulator, speedFactor) {
   if (speedFactor <= 0.05) return false;
-  // Emit more often the faster it moves, so a drifting Dewling barely trickles.
+  // Emit more often the faster it moves, so a drifting Drifter barely trickles.
   return accumulator >= MOVE_WAKE.interval / (0.4 + speedFactor * 0.6);
 }
 
 /**
- * How much to amplify the Dewling's motion trail in a given state.
+ * How much to amplify the Drifter's motion trail in a given state.
  *
  * The trail is the readability device the GDD leans on to find the player in a
  * crowd, so states that matter push it harder — this is the "trace" half of the

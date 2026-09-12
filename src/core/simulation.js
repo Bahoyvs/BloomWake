@@ -24,6 +24,8 @@ import {
   WORLD,
   PLAYER_CFG,
   PROJECTILE_CFG,
+  ENEMY_BULLET_CFG,
+  FRENZY_CFG,
   ORB_CFG,
   CARD_MODEL,
   DRAFT_CFG,
@@ -31,7 +33,15 @@ import {
 } from './constants.js';
 import { clamp, distanceSq, mulberry32, normalize, randomRange, removeDead } from './math.js';
 import { getEnemyHpMultiplier, getEnemySpeedMultiplier, isBossWave, getBossHp } from './wave.js';
-import { ENEMIES, ENEMY_TYPES, calculateTelegraphMs } from '../data/enemies.js';
+import {
+  ENEMIES,
+  ENEMY_TYPES,
+  ENEMY_BEHAVIORS,
+  calculateTelegraphMs,
+  getBossPhase,
+  BOSS_PHASES,
+} from '../data/enemies.js';
+import { PROJECTILE_KINDS } from './cards.js';
 
 const STARTER_CARD_ID = 'dewdrop_barrage';
 
@@ -52,10 +62,12 @@ export class Simulation {
 
     this.enemies = [];
     this.projectiles = [];
+    /** Hostile ordnance — the Dreadnought's radial rings. */
+    this.enemyBullets = [];
     this.orbs = [];
     /** Short-lived rings drawn for AoE cards. */
     this.effects = [];
-    /** Rustbloom toxic spore pools on the ground. */
+    /** Brood Spore acid pools on the ground. */
     this.sporePools = [];
 
     /** Active Boss Telegraph state */
@@ -69,10 +81,40 @@ export class Simulation {
       totalMs: 0,
     };
 
+    /**
+     * The Dreadnought's phase-3 sweeping death ray.
+     *
+     * Two stages in one record: `telegraph` draws the warning cone and does no
+     * damage, then `firing` turns the same cone into a beam that tracks the
+     * Drifter at a capped rate. Keeping both in one object means the renderer
+     * reads one thing and the angle it drew the warning at is exactly the
+     * angle the beam starts from.
+     */
+    this.deathRay = {
+      active: false,
+      firing: false,
+      x: 0,
+      y: 0,
+      angle: 0,
+      elapsed: 0,
+      telegraphSec: 0,
+      sweepSec: 0,
+      length: 0,
+      halfWidth: 0,
+      damagePerSec: 0,
+      turnRate: 0,
+    };
+
     // Card-spawned objects are recycled
     this.projectilePool = new ObjectPool(makeProjectile, 64);
     this.bladePool = new ObjectPool(makeBlade, 6);
     this.effectPool = new ObjectPool(makeEffect, 8);
+    /**
+     * The boss throws 18 bullets a ring every 2.6s and they live six seconds,
+     * so a hundred can be in flight at once. Same reasoning as the enemy pool:
+     * anything spawned on a repeating timer gets recycled.
+     */
+    this.enemyBulletPool = new ObjectPool(makeEnemyBullet, 48);
     /**
      * Enemies are pooled at the wave cap (WAVE_CONSTANTS.MAX_ACTIVE_ENEMIES).
      * Before Phase 7 every spawn allocated a fresh literal and every death
@@ -89,14 +131,43 @@ export class Simulation {
     this.nextEntityId = 1;
     /** True while the Dewling has non-zero movement input; read by the director. */
     this.playerMoving = false;
+    /**
+     * Drifter momentum in px/s. Not on `state.player`: that object is
+     * serialised into saves, and velocity is a fact about the current frame.
+     * The renderer reads these for hull facing and engine throttle.
+     */
+    this.playerVx = 0;
+    this.playerVy = 0;
+    /**
+     * Unit heading the hull is pointing, kept across a full stop.
+     *
+     * Velocity goes to zero when the player lets go; facing must not, or the
+     * Singularity Lance would fire out of a parked ship along +X and the
+     * wingman formation would snap round to the world axes. Updated only while
+     * the ship is actually moving.
+     */
+    this.facingX = 1;
+    this.facingY = 0;
     this.invulnTimer = 0;
     this.waveBreakTimer = 0;
     this.elapsed = 0;
+    /** Simulation time the spawn window closed; drives the clear-out frenzy. */
+    this.frenzyStart = Infinity;
     /** Level-ups waiting for a draft; several can arrive in one frame. */
     this.pendingLevelUps = 0;
 
-    this.bus.on('wave:start', (data) => this.spawner.beginWave(data.wave));
+    this.bus.on('wave:start', (data) => {
+      this.spawner.beginWave(data.wave);
+      this.frenzyStart = Infinity;
+      // A boss wave opens on an empty field, whatever the last wave left.
+      if (isBossWave(data.wave)) this.clearArenaForBoss();
+    });
     this.bus.on('wave:complete', () => this.onWaveComplete());
+    // Stamped here rather than read off the wave clock: the window can also be
+    // closed early, and the ramp has to start from whenever that happened.
+    this.bus.on('wave:spawn_closed', () => {
+      this.frenzyStart = this.elapsed;
+    });
     this.bus.on('player:level_up', () => this.onLevelUp());
     this.bus.on('card:selected', ({ cardId }) => this.cards.onCardChanged(cardId));
     this.bus.on('draft:choice', () => this.onDraftResolved());
@@ -107,9 +178,11 @@ export class Simulation {
   /** Clear all entities and per-run timers (does not touch GameState). */
   resetEntities() {
     for (const p of this.projectiles) this.projectilePool.release(p);
+    for (const b of this.enemyBullets) this.enemyBulletPool.release(b);
     for (const e of this.effects) this.effectPool.release(e);
     for (const enemy of this.enemies) this.enemyPool.release(enemy);
     this.projectiles.length = 0;
+    this.enemyBullets.length = 0;
     this.effects.length = 0;
     this.enemies.length = 0;
     this.orbs.length = 0;
@@ -117,12 +190,19 @@ export class Simulation {
     this.spatialGrid.clear();
 
     this.bossTelegraph.active = false;
+    this.deathRay.active = false;
+    this.deathRay.firing = false;
     this.cards.reset();
     this.animation.reset();
     this.playerMoving = false;
+    this.playerVx = 0;
+    this.playerVy = 0;
+    this.facingX = 1;
+    this.facingY = 0;
     this.invulnTimer = 0;
     this.waveBreakTimer = 0;
     this.elapsed = 0;
+    this.frenzyStart = Infinity;
     this.pendingLevelUps = 0;
   }
 
@@ -188,8 +268,10 @@ export class Simulation {
     this.updateEnemies(dt);
     this.updateSporePools(dt);
     this.updateBossTelegraph(dt);
+    this.updateDeathRay(dt);
     this.cards.update(dt);
     this.updateProjectiles(dt);
+    this.updateEnemyBullets(dt);
 
     // Populate Spatial Hash Grid for fast O(n) collision broadphase
     this.spatialGrid.clear();
@@ -210,25 +292,135 @@ export class Simulation {
     removeDead(this.orbs);
     removeDead(this.sporePools);
     sweepToPool(this.projectiles, this.projectilePool);
+    sweepToPool(this.enemyBullets, this.enemyBulletPool);
+
+    // AFTER the sweep, so "the field is empty" is checked against the list the
+    // player can actually see. Checking before it would hold the wave open for
+    // one extra frame on corpses that are already gone.
+    this.checkSwarmCleared();
+  }
+
+  /**
+   * The "clear the swarm" rule.
+   *
+   * A wave used to end when its clock hit zero, which cut to the card screen
+   * mid-fight with a live swarm still on the field. Now the clock only closes
+   * the spawn window (GameState.closeSpawnWindow); the wave is over when the
+   * last enemy is dead.
+   *
+   * Boss waves are exempt: killing the Dreadnought completes the wave outright
+   * (see killEnemy), because its escorts are its property and leaving the
+   * player to mop them up after the kill is anticlimax, not tension.
+   */
+  checkSwarmCleared() {
+    if (!this.state.spawnWindowClosed) return;
+    if (this.state.currentState !== GAME_STATES.RUNNING) return;
+    if (isBossWave(this.state.wave)) return;
+    if (this.enemies.length > 0) return;
+
+    this.state.completeWave();
   }
 
   /* ------------------------------------------------------------------ */
   /* Player                                                              */
   /* ------------------------------------------------------------------ */
 
+  /**
+   * Move the Drifter under inertia.
+   *
+   * The ship carries velocity rather than being teleported by input: it
+   * accelerates toward the input direction while a key is held and coasts on
+   * drag when it is not. See PLAYER_CFG for the constants and why they sit
+   * where they do.
+   *
+   * WHAT THIS DOES NOT CHANGE: top speed, and therefore the balance envelope.
+   * `speed` is still the GDD figure, velocity still converges on exactly it,
+   * and diagonal input is still normalised — so a held direction covers the
+   * same ground per second as before, minus a fixed ~13px ramp-up at the start
+   * of each burst. Kite distance, spawn ring and contact pressure are untouched.
+   *
+   * Velocity lives on the Simulation rather than on `state.player` on purpose:
+   * player state is serialised into saves, and momentum is a per-frame fact
+   * about a run in progress, not something to persist.
+   *
+   * @param {number} dt
+   * @param {{x: number, y: number}} input - Desired direction, unnormalised
+   */
   updatePlayer(dt, input) {
     const player = this.state.player;
     const dir = normalize(input.x ?? 0, input.y ?? 0);
     const speed = player.moveSpeed * this.cards.moveSpeedMultiplier * UNIT_PX;
+    const thrusting = dir.x !== 0 || dir.y !== 0;
 
-    // Movement intent, not displacement: a Dewling pushing into a wall is
+    // Movement INTENT, not displacement: a Dewling pushing into a wall is
     // still visually "moving" even though its clamped position does not change.
-    this.playerMoving = dir.x !== 0 || dir.y !== 0;
+    this.playerMoving = thrusting;
 
-    player.x = clamp(player.x + dir.x * speed * dt, PLAYER_CFG.RADIUS, WORLD.WIDTH - PLAYER_CFG.RADIUS);
-    player.y = clamp(player.y + dir.y * speed * dt, PLAYER_CFG.RADIUS, WORLD.HEIGHT - PLAYER_CFG.RADIUS);
+    if (thrusting) {
+      // Exponential approach — frame-rate independent, and it cannot overshoot
+      // the target the way a fixed `v += a * dt` step can at a low frame rate.
+      const k = 1 - Math.exp(-PLAYER_CFG.ACCEL * dt);
+      this.playerVx += (dir.x * speed - this.playerVx) * k;
+      this.playerVy += (dir.y * speed - this.playerVy) * k;
+      // Facing follows INPUT, not velocity: during a drifting reversal the two
+      // point opposite ways, and the ship should already be aimed where the
+      // player is steering rather than where its momentum is still carrying it.
+      this.facingX = dir.x;
+      this.facingY = dir.y;
+    } else {
+      const decay = Math.pow(PLAYER_CFG.DRAG, dt * 60);
+      this.playerVx *= decay;
+      this.playerVy *= decay;
+      if (Math.hypot(this.playerVx, this.playerVy) < PLAYER_CFG.STOP_EPSILON) {
+        this.playerVx = 0;
+        this.playerVy = 0;
+      }
+    }
+
+    const nextX = clamp(
+      player.x + this.playerVx * dt,
+      PLAYER_CFG.RADIUS,
+      WORLD.WIDTH - PLAYER_CFG.RADIUS
+    );
+    const nextY = clamp(
+      player.y + this.playerVy * dt,
+      PLAYER_CFG.RADIUS,
+      WORLD.HEIGHT - PLAYER_CFG.RADIUS
+    );
+
+    // Kill the component that just drove into a wall. Without this, holding
+    // into the arena edge banks momentum the player then has to spend turning
+    // around, and the ship reads as sticking to the wall and peeling off it.
+    if (nextX === player.x && this.playerVx !== 0) this.playerVx = 0;
+    if (nextY === player.y && this.playerVy !== 0) this.playerVy = 0;
+
+    player.x = nextX;
+    player.y = nextY;
 
     if (this.invulnTimer > 0) this.invulnTimer -= dt;
+  }
+
+  /**
+   * The hull's unit heading, held across a full stop.
+   *
+   * Read by the Singularity Lance (which fires along it) and by the Tactical
+   * Wingman (whose V opens behind it). Returns the shared vector rather than a
+   * fresh object — this is called every frame by every owned card.
+   *
+   * @returns {{x: number, y: number}}
+   */
+  getFacing() {
+    FACING.x = this.facingX;
+    FACING.y = this.facingY;
+    return FACING;
+  }
+
+  /**
+   * Active Tactical Wingman escort entities.
+   * @returns {Array<{id: number, x: number, y: number, vx: number, vy: number, angle: number}>}
+   */
+  get wingmen() {
+    return this.cards?.drones ?? [];
   }
 
   /**
@@ -273,6 +465,13 @@ export class Simulation {
       this.spawnBoss();
     }
 
+    // The clock closed the window: stop asking the spawner for arrivals. The
+    // spawner is told rather than merely not called, so anything else holding
+    // a reference to it sees the same answer.
+    if (this.state.spawnWindowClosed && this.spawner.active) {
+      this.spawner.close();
+    }
+
     // Spawn regular enemies up to concurrent cap
     const toSpawn = this.spawner.update(dt, this.enemies.length);
     for (let i = 0; i < toSpawn; i++) {
@@ -282,14 +481,53 @@ export class Simulation {
   }
 
   /**
+   * Clear the arena for a boss.
+   *
+   * BOSS ARENA ISOLATION, the second half. The spawner refuses to produce new
+   * chaff on a boss wave (WaveSpawner.beginWave), and this removes whatever
+   * survived the previous wave's tail. The result is the contract the fight is
+   * designed around: on a boss wave the only things on the field are the
+   * Dreadnought and the escorts it calls itself.
+   *
+   * Enemies are released rather than killed — no XP orbs, no score, no death
+   * particles. They did not die; the encounter simply took the stage.
+   */
+  clearArenaForBoss() {
+    if (this.enemies.length === 0) return;
+
+    let removed = 0;
+    for (const enemy of this.enemies) {
+      if (enemy.isBoss) continue;
+      this.enemyPool.release(enemy);
+      removed++;
+    }
+    const boss = this.enemies.filter((enemy) => enemy.isBoss);
+    this.enemies.length = 0;
+    for (const enemy of boss) this.enemies.push(enemy);
+
+    this.sporePools.length = 0;
+    this.spatialGrid.clear();
+    if (removed > 0) this.bus.emit('arena:cleared', { removed });
+  }
+
+  /**
    * @param {string} typeId - Key from the enemy data table
+   * @param {Object} [options]
+   * @param {number} [options.x] - Spawn here instead of on the spawn ring
+   * @param {number} [options.y]
    * @returns {Object} The spawned enemy
    */
-  spawnEnemy(typeId) {
+  spawnEnemy(typeId, options = null) {
     const def = ENEMIES[typeId] || ENEMIES[ENEMY_TYPES.TARLING];
     const wave = this.state.wave;
     const hp = def.baseHp * getEnemyHpMultiplier(wave);
-    const pos = this.spawner.spawnPosition(this.state.player.x, this.state.player.y);
+    const pos =
+      options && options.x !== undefined
+        ? {
+            x: clamp(options.x, def.radius, WORLD.WIDTH - def.radius),
+            y: clamp(options.y, def.radius, WORLD.HEIGHT - def.radius),
+          }
+        : this.spawner.spawnPosition(this.state.player.x, this.state.player.y);
 
     const enemy = this.enemyPool.acquire();
     enemy.id = this.nextEntityId++;
@@ -301,7 +539,8 @@ export class Simulation {
     enemy.radius = def.radius;
     enemy.hp = hp;
     enemy.maxHp = hp;
-    enemy.speed = def.baseSpeed * UNIT_PX * getEnemySpeedMultiplier(wave);
+    enemy.baseSpeed = def.baseSpeed * UNIT_PX * getEnemySpeedMultiplier(wave);
+    enemy.speed = enemy.baseSpeed;
     enemy.contactDamage = def.contactDamage;
     enemy.xpValue = def.xpValue;
     enemy.scoreValue = def.scoreValue;
@@ -313,6 +552,24 @@ export class Simulation {
     enemy.vx = 0;
     enemy.vy = 0;
     enemy.alive = true;
+
+    /* ---- Per-species runtime, reset on every acquire ---- */
+    enemy.stunTimer = 0;
+    enemy.knockVx = 0;
+    enemy.knockVy = 0;
+    enemy.breaksPierce = Boolean(def.breaksPierce);
+    // Charge cycle (Dart Ravager). Staggered on spawn so an incoming pack does
+    // not lock on in unison and arrive as one wall.
+    enemy.chargeState = CHARGE_STATE.IDLE;
+    enemy.chargeTimer = def.chargeInterval
+      ? randomRange(this.rng, def.chargeInterval * 0.35, def.chargeInterval)
+      : 0;
+    enemy.chargeDirX = 0;
+    enemy.chargeDirY = 0;
+    // Cloak (Phantom Stalker). 1 = fully visible; the renderer reads it.
+    enemy.visibility = 1;
+    enemy.cloaked = false;
+
     this.stampAnimationFields(enemy);
 
     this.enemies.push(enemy);
@@ -339,7 +596,7 @@ export class Simulation {
   }
 
   /**
-   * Spawn Rustwhale Boss on boss wave
+   * Spawn the Dreadnought Station on a boss wave.
    */
   spawnBoss() {
     const def = ENEMIES[ENEMY_TYPES.RUSTWHALE];
@@ -357,7 +614,8 @@ export class Simulation {
     boss.radius = def.radius;
     boss.hp = hp;
     boss.maxHp = hp;
-    boss.speed = def.baseSpeed * UNIT_PX;
+    boss.baseSpeed = def.baseSpeed * UNIT_PX;
+    boss.speed = boss.baseSpeed;
     boss.contactDamage = def.contactDamage;
     boss.xpValue = def.xpValue;
     boss.scoreValue = def.scoreValue;
@@ -369,15 +627,55 @@ export class Simulation {
     boss.vx = 0;
     boss.vy = 0;
     boss.alive = true;
+    boss.stunTimer = 0;
+    boss.knockVx = 0;
+    boss.knockVy = 0;
+    boss.breaksPierce = false;
+    boss.chargeState = CHARGE_STATE.IDLE;
+    boss.chargeTimer = 0;
+    boss.chargeDirX = 0;
+    boss.chargeDirY = 0;
+    boss.visibility = 1;
+    boss.cloaked = false;
+    /*
+     * The three attack clocks, offset from each other on purpose.
+     *
+     * The ring goes out first (short fuse), the escort call lands next, and the
+     * ray last. Starting them all at zero would open the fight with every
+     * pattern firing at once — the player would never get to learn any of them
+     * separately, which is the whole point of a phased boss.
+     */
+    boss.radialTimer = 1.6;
+    boss.escortTimer = def.escortInterval * 0.6;
+    boss.rayTimer = def.rayInterval * 0.75;
+    boss.phase = 1;
+    boss.radialCountExecuted = 0;
+    boss.escortCountExecuted = 0;
+    boss.rayCountExecuted = 0;
+
     this.stampAnimationFields(boss);
 
     this.enemies.push(boss);
-    this.bus.emit('boss:spawned', { wave, hp, id: boss.id });
+    this.bus.emit('boss:spawned', { wave, hp, id: boss.id, phase: 1 });
     return boss;
   }
 
+  /**
+   * Advance every enemy: per-species behaviour, then one shared integration.
+   *
+   * SHAPE OF THIS LOOP. Each branch decides a HEADING and may scale `speed`;
+   * a single step at the bottom turns that into velocity, adds the hit kick,
+   * and integrates. Branches that moved entities directly would each have to
+   * remember to write `vx`/`vy` for the renderer's facing transform, and one
+   * that forgot would leave its species pointing flatly at the Drifter.
+   *
+   * @param {number} dt
+   */
   updateEnemies(dt) {
     const player = this.state.player;
+    // Computed once per frame, not per enemy: it is the same number for all of
+    // them and this loop runs up to 200 times.
+    const frenzyFloor = this.getFrenzyFloor();
 
     for (const enemy of this.enemies) {
       if (!enemy.alive) continue;
@@ -386,69 +684,504 @@ export class Simulation {
       if (enemy.hitFlash > 0) enemy.hitFlash -= dt;
       if (enemy.orbitCooldown > 0) enemy.orbitCooldown -= dt;
 
+      // Kinetic recoil from being shot, decaying toward zero. Applied to every
+      // species and outside the stun check: a frozen enemy still gets shoved.
+      const kick = Math.pow(HIT_KICK_DECAY, dt * 60);
+      enemy.knockVx *= kick;
+      enemy.knockVy *= kick;
+      if (Math.abs(enemy.knockVx) < 1) enemy.knockVx = 0;
+      if (Math.abs(enemy.knockVy) < 1) enemy.knockVy = 0;
+
       const dir = normalize(player.x - enemy.x, player.y - enemy.y);
       const perpX = -dir.y;
       const perpY = dir.x;
 
-      // Heading for this tick, before speed is applied. Each branch sets it,
-      // then one shared step integrates and records velocity — so the Tier B
-      // facing transform gets a real velocity for every behaviour without each
-      // branch having to remember to write one.
       let headingX = dir.x;
       let headingY = dir.y;
+      let speed = enemy.baseSpeed;
 
-      switch (enemy.behavior) {
-        case 'SINE_WAVE': {
-          // Ashfish wave oscillation
-          const waveOffset = Math.sin(enemy.timeAlive * 5.0) * 0.5;
-          headingX = dir.x + perpX * waveOffset;
-          headingY = dir.y + perpY * waveOffset;
-          break;
-        }
-        case 'FAST_SWARM': {
-          // Cracked Wisp straight fast charge
-          break;
-        }
-        case 'STATIONARY_SPORE': {
-          // Rustbloom slow approach + periodic spore drop
-          enemy.sporeTimer -= dt;
-          if (enemy.sporeTimer <= 0) {
-            enemy.sporeTimer = 3.5;
-            this.spawnSporePool(enemy.x, enemy.y);
+      /*
+       * A stunned enemy holds its heading but contributes no speed of its own.
+       * It still slides on whatever knockback is on it, which is what makes
+       * the Graviton EMP read as a shove-and-freeze rather than two effects.
+       */
+      if (enemy.stunTimer > 0) {
+        enemy.stunTimer -= dt;
+        speed = 0;
+      } else {
+        switch (enemy.behavior) {
+          case ENEMY_BEHAVIORS.SINE_WAVE: {
+            // Mantis Strider — weaves across the approach vector, so it comes
+            // in from the flank instead of down the same line as everything
+            // else. The weave is on the PERPENDICULAR, so it still closes.
+            const def = ENEMIES[enemy.typeId];
+            const weave =
+              Math.sin(enemy.timeAlive * (def?.weaveRate ?? 4.2) + enemy.phaseOffset) *
+              (def?.weaveAmount ?? 0.55);
+            headingX = dir.x + perpX * weave;
+            headingY = dir.y + perpY * weave;
+            break;
           }
-          break;
-        }
-        case 'ZIGZAG_FLYING': {
-          // Smogmoth sharp zigzag flying trajectory
-          const zigzag = Math.sin(enemy.timeAlive * 8.0) * 0.8;
-          headingX = dir.x + perpX * zigzag;
-          headingY = dir.y + perpY * zigzag;
-          break;
-        }
-        case 'BOSS_TELEGRAPH_AOE': {
-          // Rustwhale Boss movement & attack trigger
-          enemy.telegraphTimer -= dt;
-          if (enemy.telegraphTimer <= 0 && !this.bossTelegraph.active) {
-            enemy.telegraphTimer = ENEMIES[ENEMY_TYPES.RUSTWHALE].telegraphCooldown;
-            this.triggerBossTelegraph(player.x, player.y);
+
+          case ENEMY_BEHAVIORS.LOCK_ON_CHARGE: {
+            speed = this.updateChargeCycle(enemy, dt, dir);
+            if (enemy.chargeState === CHARGE_STATE.DASHING) {
+              // The dash is committed: it flies the direction it locked, not
+              // the direction the Drifter has since moved. That commitment is
+              // what makes the wind-up worth reading.
+              headingX = enemy.chargeDirX;
+              headingY = enemy.chargeDirY;
+            } else if (enemy.chargeState === CHARGE_STATE.WINDUP) {
+              // Braces in place while the warning shows.
+              headingX = 0;
+              headingY = 0;
+            }
+            break;
           }
-          break;
-        }
-        case 'DIRECT':
-        default: {
-          // Tarling direct path
-          break;
+
+          case ENEMY_BEHAVIORS.BROOD_SPORE: {
+            // Slow drift, leaving acid behind it. The burst is on death — see
+            // killEnemy.
+            const def = ENEMIES[enemy.typeId];
+            enemy.sporeTimer -= dt;
+            if (enemy.sporeTimer <= 0) {
+              enemy.sporeTimer = def?.sporeInterval ?? 3.5;
+              this.spawnSporePool(enemy.x, enemy.y);
+            }
+            break;
+          }
+
+          case ENEMY_BEHAVIORS.CLOAK_STALK: {
+            speed = this.updateCloak(enemy, player);
+            break;
+          }
+
+          case ENEMY_BEHAVIORS.ARMORED_GUARD: {
+            // Bio-Goliath. Deliberately the dullest movement on the roster:
+            // it walks in a straight line at half everyone else's pace,
+            // because its job is to BE somewhere, not to get somewhere.
+            break;
+          }
+
+          case ENEMY_BEHAVIORS.BOSS_STATION: {
+            this.updateBossAttacks(enemy, dt, player);
+            break;
+          }
+
+          case ENEMY_BEHAVIORS.DIRECT:
+          default: {
+            // Xeno Larva — straight in.
+            break;
+          }
         }
       }
 
-      enemy.vx = headingX * enemy.speed;
-      enemy.vy = headingY * enemy.speed;
+      /*
+       * Clear-out enrage multiplier.
+       * Capped at max 1.05x - 1.1x (FRENZY_CFG.MAX_ENRAGE_MULTIPLIER = 1.08) so enemies
+       * do not aggressively outrun or trap the player unfairly.
+       */
+      if (frenzyFloor > 1 && speed > 0 && !enemy.isBoss) {
+        speed = speed * frenzyFloor;
+      }
+
+      enemy.speed = speed;
+      enemy.vx = headingX * speed + enemy.knockVx;
+      enemy.vy = headingY * speed + enemy.knockVy;
       enemy.x += enemy.vx * dt;
       enemy.y += enemy.vy * dt;
 
       // Clamp within world boundaries
       enemy.x = clamp(enemy.x, enemy.radius, WORLD.WIDTH - enemy.radius);
       enemy.y = clamp(enemy.y, enemy.radius, WORLD.HEIGHT - enemy.radius);
+    }
+  }
+
+  /**
+   * Minimum speed every survivor travels at during the clear-out tail, in px/s.
+   *
+   * Zero while the spawn window is open — during the wave proper the roster's
+   * speed spread IS the roster, and flattening it would erase the difference
+   * between chaff and a cruiser. It only comes up once nothing new is arriving,
+   * which is exactly when a species being outrunnable stops being flavour and
+   * starts being a softlock. See FRENZY_CFG.
+   *
+   * Ramped rather than switched on, so the moment the window closes reads as
+   * the swarm turning toward the player rather than as a teleport.
+   *
+   * @returns {number} px/s, or 0 when no frenzy applies
+   */
+  getFrenzyFloor() {
+    if (!this.state.spawnWindowClosed) return 0;
+    if (isBossWave(this.state.wave)) return 0;
+
+    const since = this.elapsed - this.frenzyStart;
+    const ramp = clamp(since / FRENZY_CFG.RAMP_SEC, 0, 1);
+    return 1 + (FRENZY_CFG.MAX_ENRAGE_MULTIPLIER - 1) * ramp;
+  }
+
+  /**
+   * Dart Ravager's three-beat charge cycle: drift -> lock -> dash.
+   *
+   * The lock is the contract. `chargeWindup` seconds of the enemy sitting
+   * still with `chargeState === WINDUP` is what the renderer paints the red
+   * warning from, and it is exactly the window the player has to step out of
+   * the line. Without it a 2x-speed striker is an unavoidable hit.
+   *
+   * @param {Object} enemy
+   * @param {number} dt
+   * @param {{x: number, y: number}} dir - Unit vector toward the Drifter
+   * @returns {number} Speed to travel at this tick
+   */
+  updateChargeCycle(enemy, dt, dir) {
+    const def = ENEMIES[enemy.typeId];
+    enemy.chargeTimer -= dt;
+
+    switch (enemy.chargeState) {
+      case CHARGE_STATE.WINDUP:
+        if (enemy.chargeTimer <= 0) {
+          enemy.chargeState = CHARGE_STATE.DASHING;
+          enemy.chargeTimer = def?.chargeDuration ?? 0.8;
+        }
+        return 0;
+
+      case CHARGE_STATE.DASHING:
+        if (enemy.chargeTimer <= 0) {
+          enemy.chargeState = CHARGE_STATE.IDLE;
+          enemy.chargeTimer = def?.chargeInterval ?? 3.4;
+          return enemy.baseSpeed;
+        }
+        return enemy.baseSpeed * (def?.chargeSpeedMultiplier ?? 2);
+
+      default:
+        if (enemy.chargeTimer <= 0) {
+          enemy.chargeState = CHARGE_STATE.WINDUP;
+          enemy.chargeTimer = def?.chargeWindup ?? 0.55;
+          // The lock is taken HERE, at the start of the wind-up, so the line
+          // the warning draws is the line the dash will actually fly.
+          enemy.chargeDirX = dir.x;
+          enemy.chargeDirY = dir.y;
+          this.bus.emit('enemy:lock_on', { id: enemy.id, x: enemy.x, y: enemy.y });
+          // Brace on the SAME frame the lock is taken. Returning baseSpeed here
+          // would let it drift for one frame after the warning appeared, which
+          // is a frame of the telegraph lying about where the dash starts from.
+          return 0;
+        }
+        return enemy.baseSpeed;
+    }
+  }
+
+  /**
+   * Phantom Stalker's camouflage.
+   *
+   * Faster while dark, and it MUST surface before it can reach you: the
+   * decloak range is well outside contact range, so the reveal is a warning
+   * rather than a hit arriving with its own announcement. `visibility` is a
+   * plain number the renderer turns into alpha — the simulation has no opinion
+   * about how invisible looks.
+   *
+   * @param {Object} enemy
+   * @param {Object} player
+   * @returns {number} Speed to travel at this tick
+   */
+  updateCloak(enemy, player) {
+    const def = ENEMIES[enemy.typeId];
+    const range = def?.decloakRange ?? 190;
+    const near = distanceSq(player.x, player.y, enemy.x, enemy.y) <= range * range;
+
+    if (near) {
+      if (enemy.cloaked) this.bus.emit('enemy:decloak', { id: enemy.id, x: enemy.x, y: enemy.y });
+      enemy.cloaked = false;
+      enemy.visibility = 1;
+      return enemy.baseSpeed;
+    }
+
+    enemy.cloaked = true;
+    enemy.visibility = def?.cloakAlpha ?? 0.2;
+    return enemy.baseSpeed * (def?.cloakSpeedMultiplier ?? 1.45);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* The Dreadnought Station                                             */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Run the station's attack clocks for one tick.
+   *
+   * PHASES ACCUMULATE, THEY DO NOT SWAP. At full health it only sprays rings;
+   * under 75% it also calls escorts; under 45% it also sweeps the ray. A boss
+   * that trades one attack for another gets EASIER as it dies, which is the
+   * wrong shape for the wall at the end of a wave — each threshold has to add
+   * pressure, not move it.
+   *
+   * @param {Object} boss
+   * @param {number} dt
+   * @param {Object} player
+   */
+  updateBossAttacks(boss, dt, player) {
+    const def = ENEMIES[ENEMY_TYPES.RUSTWHALE];
+    const hpFrac = boss.maxHp > 0 ? boss.hp / boss.maxHp : 1;
+
+    const phase = getBossPhase(hpFrac);
+
+    if (phase.phase !== boss.phase) {
+      boss.phase = phase.phase;
+      this.bus.emit('boss:phase', { id: boss.id, phase: phase.phase, hp: boss.hp });
+    }
+
+    /* ---- Phase 1: radial bullet ring ---- */
+    boss.radialTimer -= dt;
+    if (boss.radialTimer <= 0) {
+      boss.radialTimer = def.radialInterval;
+      this.fireRadialRing(boss, def);
+      boss.radialCountExecuted++;
+    }
+
+    /* ---- Phase 2: escort call ---- */
+    if (boss.phase >= 2) {
+      boss.escortTimer -= dt;
+      if (boss.escortTimer <= 0) {
+        boss.escortTimer = def.escortInterval;
+        this.callEscorts(boss, def);
+        boss.escortCountExecuted++;
+      }
+    }
+
+    /* ---- Phase 3: sweeping death ray ---- */
+    if (boss.phase >= 3) {
+      boss.rayTimer -= dt;
+      if (boss.rayTimer <= 0 && !this.deathRay.active) {
+        boss.rayTimer = def.rayInterval;
+        this.beginDeathRay(boss, def, player);
+        boss.rayCountExecuted++;
+      }
+    }
+
+    /* ---- The legacy Bio-Acid Bloom, still on its own clock ---- */
+    boss.telegraphTimer -= dt;
+    if (boss.telegraphTimer <= 0 && !this.bossTelegraph.active) {
+      boss.telegraphTimer = def.telegraphCooldown;
+      this.triggerBossTelegraph(player.x, player.y);
+    }
+  }
+
+  /**
+   * A ring of bullets thrown out from the turrets in every direction.
+   *
+   * Evenly spaced and rotated by a random offset each time, so consecutive
+   * rings never leave the same gap twice — a fixed offset teaches the player
+   * one safe angle and then stops being an attack.
+   *
+   * @param {Object} boss
+   * @param {Object} def
+   */
+  fireRadialRing(boss, def) {
+    const count = def.radialCount;
+    const offset = this.rng() * Math.PI * 2;
+
+    for (let i = 0; i < count; i++) {
+      const angle = offset + (i / count) * Math.PI * 2;
+      this.spawnEnemyBullet({
+        x: boss.x + Math.cos(angle) * boss.radius * 0.7,
+        y: boss.y + Math.sin(angle) * boss.radius * 0.7,
+        vx: Math.cos(angle) * def.radialSpeed,
+        vy: Math.sin(angle) * def.radialSpeed,
+        damage: def.radialDamage,
+      });
+    }
+
+    this.bus.emit('boss:radial', { id: boss.id, x: boss.x, y: boss.y, count });
+  }
+
+  /**
+   * Phase 2 — four Dart Ravagers thrown out of the reactor.
+   *
+   * They spawn ON the boss and are spread around it rather than arriving from
+   * the spawn ring, because the whole read is "the station launched these".
+   *
+   * @param {Object} boss
+   * @param {Object} def
+   */
+  callEscorts(boss, def) {
+    for (let i = 0; i < def.escortCount; i++) {
+      const angle = (i / def.escortCount) * Math.PI * 2 + this.rng() * 0.4;
+      this.spawnEnemy(def.escortType, {
+        x: boss.x + Math.cos(angle) * def.escortSpread,
+        y: boss.y + Math.sin(angle) * def.escortSpread,
+      });
+    }
+    this.bus.emit('boss:escorts', { id: boss.id, x: boss.x, y: boss.y, count: def.escortCount });
+  }
+
+  /**
+   * Phase 3 — start the death ray's warning cone.
+   *
+   * The cone is drawn at the angle the beam will START from, and the beam then
+   * tracks at `rayTurnRate`. The rate is the fairness knob: it is well under
+   * the Drifter's angular speed at any sane radius, so a player who keeps
+   * moving laterally always outruns it, and a player who stands still does not.
+   *
+   * @param {Object} boss
+   * @param {Object} def
+   * @param {Object} player
+   */
+  beginDeathRay(boss, def, player) {
+    const ray = this.deathRay;
+    ray.active = true;
+    ray.firing = false;
+    ray.x = boss.x;
+    ray.y = boss.y;
+    ray.angle = Math.atan2(player.y - boss.y, player.x - boss.x);
+    ray.elapsed = 0;
+    ray.telegraphSec = def.rayTelegraphSec;
+    ray.sweepSec = def.raySweepSec;
+    ray.length = def.rayLength;
+    ray.halfWidth = def.rayHalfWidth;
+    ray.damagePerSec = def.rayDamagePerSec;
+    ray.turnRate = def.rayTurnRate;
+    ray.bossId = boss.id;
+
+    this.bus.emit('boss:ray_telegraph', {
+      id: boss.id,
+      x: ray.x,
+      y: ray.y,
+      angle: ray.angle,
+      durationMs: def.rayTelegraphSec * 1000,
+    });
+  }
+
+  /**
+   * Advance the death ray: warning cone, then a tracking beam.
+   *
+   * Damage is dealt per second while the Drifter is inside the strip, and it
+   * bypasses invulnerability frames on purpose — i-frames exist to stop a
+   * contact hit from being applied sixty times a second, and a beam that ticks
+   * once every 0.7s would be a beam you can stand in.
+   *
+   * @param {number} dt
+   */
+  updateDeathRay(dt) {
+    const ray = this.deathRay;
+    if (!ray.active) return;
+
+    // The beam is welded to the station: if the boss dies mid-sweep it stops.
+    const boss = this.enemies.find((e) => e.id === ray.bossId && e.alive);
+    if (!boss) {
+      ray.active = false;
+      ray.firing = false;
+      return;
+    }
+    ray.x = boss.x;
+    ray.y = boss.y;
+
+    ray.elapsed += dt;
+
+    if (!ray.firing) {
+      if (ray.elapsed < ray.telegraphSec) return;
+      ray.firing = true;
+      ray.elapsed = 0;
+      this.bus.emit('boss:ray_fire', { id: boss.id, x: ray.x, y: ray.y, angle: ray.angle });
+      return;
+    }
+
+    if (ray.elapsed >= ray.sweepSec) {
+      ray.active = false;
+      ray.firing = false;
+      this.bus.emit('boss:ray_end', { id: boss.id });
+      return;
+    }
+
+    // Track the Drifter along the short arc, capped at turnRate.
+    const player = this.state.player;
+    const want = Math.atan2(player.y - ray.y, player.x - ray.x);
+    let delta = (want - ray.angle) % (Math.PI * 2);
+    if (delta > Math.PI) delta -= Math.PI * 2;
+    if (delta < -Math.PI) delta += Math.PI * 2;
+    const step = ray.turnRate * dt;
+    ray.angle += clamp(delta, -step, step);
+
+    if (this.pointInRay(player.x, player.y, PLAYER_CFG.RADIUS)) {
+      this.state.damagePlayer(ray.damagePerSec * dt);
+      this.bus.emit('boss:ray_hit', { x: player.x, y: player.y });
+    }
+  }
+
+  /**
+   * Is a circle inside the death ray's strip?
+   * @param {number} x
+   * @param {number} y
+   * @param {number} radius
+   * @returns {boolean}
+   */
+  pointInRay(x, y, radius = 0) {
+    const ray = this.deathRay;
+    if (!ray.active || !ray.firing) return false;
+
+    const relX = x - ray.x;
+    const relY = y - ray.y;
+    const dx = Math.cos(ray.angle);
+    const dy = Math.sin(ray.angle);
+
+    const along = relX * dx + relY * dy;
+    if (along < 0 || along > ray.length) return false;
+
+    const perp = Math.abs(relX * dy - relY * dx);
+    return perp <= ray.halfWidth + radius;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* Hostile ordnance                                                    */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * @param {Object} spec - x, y, vx, vy, damage
+   * @returns {Object}
+   */
+  spawnEnemyBullet(spec) {
+    const b = this.enemyBulletPool.acquire();
+    b.id = this.nextEntityId++;
+    b.x = spec.x;
+    b.y = spec.y;
+    b.vx = spec.vx;
+    b.vy = spec.vy;
+    b.damage = spec.damage;
+    b.radius = spec.radius ?? ENEMY_BULLET_CFG.RADIUS;
+    b.life = spec.life ?? ENEMY_BULLET_CFG.LIFETIME_SEC;
+    b.alive = true;
+    this.enemyBullets.push(b);
+    return b;
+  }
+
+  /**
+   * Fly the boss's bullets and check them against the Drifter.
+   *
+   * Checked here rather than in resolveCollisions because these are the only
+   * things in the game that hit the PLAYER by projectile, and running them
+   * through the enemy-indexed spatial grid would mean indexing the player.
+   *
+   * @param {number} dt
+   */
+  updateEnemyBullets(dt) {
+    const player = this.state.player;
+
+    for (const b of this.enemyBullets) {
+      if (!b.alive) continue;
+
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      b.life -= dt;
+
+      if (b.life <= 0 || b.x < 0 || b.y < 0 || b.x > WORLD.WIDTH || b.y > WORLD.HEIGHT) {
+        b.alive = false;
+        continue;
+      }
+
+      if (this.invulnTimer > 0) continue;
+      const reach = b.radius + PLAYER_CFG.RADIUS;
+      if (distanceSq(player.x, player.y, b.x, b.y) > reach * reach) continue;
+
+      b.alive = false;
+      this.damagePlayer(b.damage);
     }
   }
 
@@ -558,6 +1291,17 @@ export class Simulation {
     p.radius = spec.radius;
     p.life = spec.life;
     p.alive = true;
+    p.kind = spec.kind ?? PROJECTILE_KINDS.BOLT;
+    /** Extra enemies this may pass through. A Bio-Goliath zeroes it. */
+    p.pierce = spec.pierce ?? 0;
+    /**
+     * Last enemy hit. A pierced bolt must not re-damage the same enemy on the
+     * next frame while it is still overlapping it — one id is enough, because
+     * a bolt travelling at 480+ px/s never returns to a target it has left.
+     */
+    p.lastHitId = 0;
+    p.targetId = spec.targetId ?? 0;
+    p.turnRate = spec.turnRate ?? 0;
     this.projectiles.push(p);
     return p;
   }
@@ -600,6 +1344,8 @@ export class Simulation {
 
   updateProjectiles(dt) {
     for (const p of this.projectiles) {
+      if (p.turnRate > 0) this.steerMissile(p, dt);
+
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       p.life -= dt;
@@ -607,6 +1353,48 @@ export class Simulation {
       const outOfBounds = p.x < 0 || p.y < 0 || p.x > WORLD.WIDTH || p.y > WORLD.HEIGHT;
       if (p.life <= 0 || outOfBounds) p.alive = false;
     }
+  }
+
+  /**
+   * Turn a Nanite missile toward its target, at a capped rate.
+   *
+   * Speed is preserved through the turn — only the heading rotates — so a
+   * missile that has to come all the way round takes longer to arrive rather
+   * than arriving slower. If its target dies mid-flight it re-acquires the
+   * next-biggest thing; failing that it flies on straight and expires, which
+   * is a better read than a missile stopping in mid-air.
+   *
+   * @param {Object} p
+   * @param {number} dt
+   */
+  steerMissile(p, dt) {
+    let target = null;
+    for (let i = 0; i < this.enemies.length; i++) {
+      const enemy = this.enemies[i];
+      if (enemy.alive && enemy.id === p.targetId) {
+        target = enemy;
+        break;
+      }
+    }
+    if (!target) {
+      target = this.findHighestHpEnemy(PROJECTILE_CFG.TARGET_RANGE);
+      if (!target) return;
+      p.targetId = target.id;
+    }
+
+    const speed = Math.hypot(p.vx, p.vy);
+    if (speed <= 0) return;
+
+    const current = Math.atan2(p.vy, p.vx);
+    const want = Math.atan2(target.y - p.y, target.x - p.x);
+    let delta = (want - current) % (Math.PI * 2);
+    if (delta > Math.PI) delta -= Math.PI * 2;
+    if (delta < -Math.PI) delta += Math.PI * 2;
+
+    const step = p.turnRate * dt;
+    const angle = current + clamp(delta, -step, step);
+    p.vx = Math.cos(angle) * speed;
+    p.vy = Math.sin(angle) * speed;
   }
 
   /**
@@ -632,6 +1420,63 @@ export class Simulation {
     return best;
   }
 
+  /**
+   * Nearest living enemy to an arbitrary point — the Wingman drones' turrets.
+   *
+   * @param {number} x
+   * @param {number} y
+   * @param {number} maxRange
+   * @returns {Object|null}
+   */
+  findNearestEnemyTo(x, y, maxRange) {
+    let best = null;
+    let bestDistSq = maxRange * maxRange;
+
+    for (let i = 0; i < this.enemies.length; i++) {
+      const enemy = this.enemies[i];
+      if (!enemy.alive) continue;
+      const dSq = distanceSq(x, y, enemy.x, enemy.y);
+      if (dSq <= bestDistSq) {
+        bestDistSq = dSq;
+        best = enemy;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Highest-HP living enemy in range — the Nanite Swarm's target rule.
+   *
+   * CURRENT hp, not max: a Bio-Goliath the player has already worked down
+   * should stop soaking the salvo once something fresher is the bigger
+   * problem. Ties go to the nearest, so a wall of identical chaff does not
+   * make the missiles pick an arbitrary far-away one.
+   *
+   * @param {number} maxRange - Acquisition range in px
+   * @returns {Object|null}
+   */
+  findHighestHpEnemy(maxRange) {
+    const player = this.state.player;
+    const maxRangeSq = maxRange * maxRange;
+    let best = null;
+    let bestHp = -Infinity;
+    let bestDistSq = Infinity;
+
+    for (let i = 0; i < this.enemies.length; i++) {
+      const enemy = this.enemies[i];
+      if (!enemy.alive) continue;
+      const dSq = distanceSq(player.x, player.y, enemy.x, enemy.y);
+      if (dSq > maxRangeSq) continue;
+
+      if (enemy.hp > bestHp || (enemy.hp === bestHp && dSq < bestDistSq)) {
+        bestHp = enemy.hp;
+        bestDistSq = dSq;
+        best = enemy;
+      }
+    }
+    return best;
+  }
+
   /** Level stats for the starter weapon, kept for HUD/debug convenience. */
   getWeaponStats() {
     return this.cards.getStats(STARTER_CARD_ID);
@@ -650,11 +1495,32 @@ export class Simulation {
       const candidates = this.spatialGrid.queryRadius(p.x, p.y, p.radius);
       for (const enemy of candidates) {
         if (!enemy.alive) continue;
+        // Do not re-hit the enemy this shot just passed through.
+        if (enemy.id === p.lastHitId) continue;
         const hitRadius = p.radius + enemy.radius;
         if (distanceSq(p.x, p.y, enemy.x, enemy.y) > hitRadius * hitRadius) continue;
 
-        p.alive = false;
-        this.damageEnemy(enemy, p.damage);
+        p.lastHitId = enemy.id;
+        this.damageEnemy(enemy, p.damage, p.vx, p.vy);
+
+        /*
+         * THE BIO-GOLIATH'S ARMOUR.
+         *
+         * A guardian does not merely absorb the shot it was hit by — it strips
+         * the round's remaining pierce, so a fully-levelled Phase Repeater
+         * needle that would have carried on through the three larvae sheltering
+         * behind it stops dead in the armour instead. That is what makes the
+         * species a WALL rather than just a large target, and it is why it
+         * unlocks late: before the player owns pierce there is nothing to take
+         * away.
+         */
+        if (enemy.breaksPierce) p.pierce = 0;
+
+        if (p.pierce > 0) {
+          p.pierce -= 1;
+        } else {
+          p.alive = false;
+        }
         break;
       }
     }
@@ -687,11 +1553,66 @@ export class Simulation {
   /**
    * @param {Object} enemy
    * @param {number} amount - Damage points
+   * @param {number} [sourceVx] - Velocity of whatever landed the hit, for the
+   *   kinetic knock. Omitted by AoE and blades, which have no direction.
+   * @param {number} [sourceVy]
    */
-  damageEnemy(enemy, amount) {
+  damageEnemy(enemy, amount, sourceVx = 0, sourceVy = 0) {
+    if (enemy.isBoss && amount < enemy.hp) {
+      // Phase Gating: Boss HP cannot cross phase thresholds until required attack cycles are completed
+      if (enemy.phase === 1 && (enemy.radialCountExecuted ?? 0) < 2) {
+        const floorHp = enemy.maxHp * BOSS_PHASES.escort;
+        if (enemy.hp - amount < floorHp) {
+          amount = Math.max(0, enemy.hp - floorHp);
+        }
+      } else if (enemy.phase === 2 && (enemy.escortCountExecuted ?? 0) < 1) {
+        const floorHp = enemy.maxHp * BOSS_PHASES.ray;
+        if (enemy.hp - amount < floorHp) {
+          amount = Math.max(0, enemy.hp - floorHp);
+        }
+      }
+    }
     enemy.hp -= amount;
-    enemy.hitFlash = 0.1;
-    enemy.lastHitTime = this.elapsed;
+
+    /*
+     * THE FLASH HAS A REFRACTORY PERIOD, AND IT IS LOAD-BEARING.
+     *
+     * The damage flash is pure white — the only tint that makes a near-black
+     * carapace go bright, because a Pixi tint multiplies and cannot add light.
+     * Which also means a flashing enemy is showing its UNTINTED source frame,
+     * and the Kenney hulls are white with red and yellow accents.
+     *
+     * A late-game build lands several hits a second on everything in reach
+     * (satellites, lance, repeater, drones). Without this gate the flash never
+     * expired, so the whole swarm sat permanently white-and-red — the palette's
+     * darkness contract silently switched off exactly when the screen is at its
+     * busiest, which is when it matters most. Gated, the same build produces a
+     * crisp blink per enemy and the swarm stays dark between them.
+     */
+    if (this.elapsed - enemy.lastHitTime >= FLASH_REFRACTORY_SEC) {
+      enemy.hitFlash = HIT_FLASH_SEC;
+      enemy.lastHitTime = this.elapsed;
+    }
+
+    /*
+     * KINETIC IMPACT. A shot shoves what it hits backward along its own line
+     * of travel. Without it the only feedback a hit gives is a one-frame
+     * colour change, and against a wall of enemies the player cannot tell
+     * which one they connected with.
+     *
+     * Bosses are exempt — a station does not flinch — and the impulse is
+     * inversely scaled by radius so a Bio-Goliath barely rocks where a larva
+     * is thrown clear.
+     */
+    if (!enemy.isBoss && (sourceVx !== 0 || sourceVy !== 0)) {
+      const speed = Math.hypot(sourceVx, sourceVy);
+      if (speed > 0) {
+        const mass = Math.max(1, enemy.radius / 12);
+        const impulse = HIT_KICK_IMPULSE / mass;
+        enemy.knockVx += (sourceVx / speed) * impulse;
+        enemy.knockVy += (sourceVy / speed) * impulse;
+      }
+    }
     // Position travels with the event so the renderer can place hit particles
     // without reaching back into simulation entities.
     this.bus.emit('enemy:damaged', {
@@ -723,9 +1644,40 @@ export class Simulation {
       phaseOffset: enemy.phaseOffset,
     });
 
-    // If boss is killed on boss wave, complete wave
-    if (enemy.isBoss && isBossWave(this.state.wave)) {
-      this.state.completeWave();
+    /*
+     * THE BROOD SPORE BURSTS.
+     *
+     * Four larvae thrown out from where it died. Read from the data table
+     * rather than hardcoded so the count and spread are tunable, and spawned
+     * BEFORE the boss check so a spore killed on a boss wave still bursts.
+     *
+     * Note this deliberately ignores the spawn window: these are not arrivals,
+     * they came out of something the player chose to shoot. A spore left alive
+     * into the clear-out tail is a decision with a cost.
+     */
+    const def = ENEMIES[enemy.typeId];
+    if (def?.broodCount > 0) {
+      for (let i = 0; i < def.broodCount; i++) {
+        const angle = (i / def.broodCount) * Math.PI * 2 + this.rng() * 0.5;
+        this.spawnEnemy(def.broodType ?? ENEMY_TYPES.TARLING, {
+          x: enemy.x + Math.cos(angle) * def.broodSpread,
+          y: enemy.y + Math.sin(angle) * def.broodSpread,
+        });
+      }
+      this.bus.emit('enemy:brood_burst', {
+        x: enemy.x,
+        y: enemy.y,
+        count: def.broodCount,
+      });
+    }
+
+    // If boss is killed, stop any active death ray
+    if (enemy.isBoss) {
+      this.deathRay.active = false;
+      this.deathRay.firing = false;
+      if (isBossWave(this.state.wave)) {
+        this.state.completeWave();
+      }
     }
   }
 
@@ -779,8 +1731,12 @@ export class Simulation {
     this.enemies.length = 0;
     for (const p of this.projectiles) this.projectilePool.release(p);
     this.projectiles.length = 0;
+    for (const b of this.enemyBullets) this.enemyBulletPool.release(b);
+    this.enemyBullets.length = 0;
     this.sporePools.length = 0;
     this.bossTelegraph.active = false;
+    this.deathRay.active = false;
+    this.deathRay.firing = false;
     this.waveBreakTimer = PHASE1.WAVE_BREAK_SEC;
   }
 
@@ -791,14 +1747,69 @@ export class Simulation {
       enemyCount: this.enemies.length,
       orbCount: this.orbs.length,
       projectileCount: this.projectiles.length,
+      enemyBulletCount: this.enemyBullets.length,
       sporePoolCount: this.sporePools.length,
       bossTelegraph: { ...this.bossTelegraph },
+      deathRay: { ...this.deathRay },
       waveBreakTimer: this.waveBreakTimer,
       invulnerable: this.invulnTimer > 0,
       shieldCharge: this.cards.shieldCharge,
     };
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Module constants                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Dart Ravager charge states. Read by the renderer to decide whether to paint
+ * the lock-on warning, so they are exported rather than being local strings.
+ */
+export const CHARGE_STATE = {
+  IDLE: 'idle',
+  WINDUP: 'windup',
+  DASHING: 'dashing',
+};
+
+/**
+ * Damage-flash window in seconds — two frames at 60Hz.
+ *
+ * Short and hard on purpose. The flash is a rigid white blink, not a wobble;
+ * anything longer starts to read as the enemy changing colour rather than
+ * being struck.
+ */
+export const HIT_FLASH_SEC = 0.033;
+
+/**
+ * Minimum gap between damage flashes on one enemy, in seconds.
+ *
+ * Roughly five blinks a second at most. Long enough that the swarm is dark for
+ * the large majority of every second even under a maxed build, short enough
+ * that individual hits still read. See the note in damageEnemy.
+ */
+export const FLASH_REFRACTORY_SEC = 0.18;
+
+/** Backward impulse in px/s applied to a struck enemy of reference size. */
+export const HIT_KICK_IMPULSE = 260;
+
+/**
+ * Per-60Hz-frame decay of that impulse.
+ *
+ * 0.80 gives a ~55ms half-life: the enemy jolts and is back on course inside
+ * four frames. Higher values turn a kinetic hit into a shove, which is the
+ * Graviton EMP's job, not a bullet's.
+ */
+export const HIT_KICK_DECAY = 0.8;
+
+/**
+ * Shared facing vector returned by getFacing().
+ *
+ * Module-level and mutated in place: getFacing is called by every owned card
+ * every frame, and a fresh literal per call would be several allocations a
+ * frame for two numbers. Callers must read it immediately, never store it.
+ */
+const FACING = { x: 1, y: 0 };
 
 /* Pool factories — blank entities, filled in on acquire. */
 
@@ -835,6 +1846,30 @@ function makeEnemy() {
     sporeTimer: 0,
     telegraphTimer: 0,
     alive: false,
+    /** Undisturbed travel speed, before a stun or a charge multiplier. */
+    baseSpeed: 0,
+    /* ---- Crowd control and impact ---- */
+    stunTimer: 0,
+    knockVx: 0,
+    knockVy: 0,
+    /** Bio-Goliath only: strips pierce off anything that hits it. */
+    breaksPierce: false,
+    /* ---- Dart Ravager charge cycle ---- */
+    chargeState: 'idle',
+    chargeTimer: 0,
+    chargeDirX: 0,
+    chargeDirY: 0,
+    /* ---- Phantom Stalker camouflage. 1 = fully visible. ---- */
+    visibility: 1,
+    cloaked: false,
+    /* ---- Dreadnought Station attack clocks ---- */
+    radialTimer: 0,
+    escortTimer: 0,
+    rayTimer: 0,
+    phase: 1,
+    radialCountExecuted: 0,
+    escortCountExecuted: 0,
+    rayCountExecuted: 0,
     /**
      * Velocity in px/s. Recorded by updateEnemies rather than integrated from,
      * because the behaviour branches move entities directly. Tier B's
@@ -852,6 +1887,34 @@ function makeEnemy() {
 }
 
 function makeProjectile() {
+  return {
+    id: 0,
+    x: 0,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    damage: 0,
+    radius: 0,
+    life: 0,
+    alive: false,
+    /** 'bolt' | 'missile' | 'drone_bolt' — the renderer picks a frame from it. */
+    kind: 'bolt',
+    /** Extra enemies this may pass through before stopping. */
+    pierce: 0,
+    lastHitId: 0,
+    /* Guided rounds only. turnRate 0 means "flies straight". */
+    targetId: 0,
+    turnRate: 0,
+  };
+}
+
+/**
+ * The boss's radial ordnance. A separate shape from the player's projectiles
+ * because it carries none of the pierce/homing state and is checked against a
+ * completely different collider — keeping them one type would put six unused
+ * fields on every bullet in a 100-bullet ring.
+ */
+function makeEnemyBullet() {
   return { id: 0, x: 0, y: 0, vx: 0, vy: 0, damage: 0, radius: 0, life: 0, alive: false };
 }
 

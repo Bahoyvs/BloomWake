@@ -7,18 +7,29 @@
  * half lives in src/render/pixi-loader.js.
  */
 
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   AssetStore,
   ASSET_MANIFEST,
   ASSET_KEYS,
   ASSET_ROOT,
+  ASSET_SHEETS,
+  UI_ASSETS,
   ENEMY_TEXTURE_KEY,
   getEnemyTextureKey,
   assets,
 } from '../src/core/assets.js';
 import { ENEMIES } from '../src/data/enemies.js';
-import { scaleForRadius, SPRITE_FIT, hexToPixi, cosmeticTint, NO_TINT } from '../src/render/sprites.js';
+import {
+  scaleForRadius,
+  SPRITE_FIT,
+  hexToPixi,
+  cosmeticTint,
+  HERO_TINT,
+  NO_TINT,
+} from '../src/render/sprites.js';
 
 /** Stand-in texture. */
 const fakeTexture = (key) => ({ key, width: 128, height: 128 });
@@ -64,11 +75,76 @@ describe('Asset manifest', () => {
   });
 
   it('points at the agreed folder layout', () => {
+    const roots = Object.values(ASSET_ROOT);
     for (const entry of ASSET_MANIFEST) {
       expect(
-        entry.url.startsWith(ASSET_ROOT.SPRITES) || entry.url.startsWith(ASSET_ROOT.UI),
+        roots.some((root) => entry.url.startsWith(root)),
         entry.url
       ).toBe(true);
+    }
+  });
+
+  it('names a frame for every atlas-backed entry, and only those', () => {
+    const sheets = new Set(Object.values(ASSET_SHEETS));
+    for (const entry of ASSET_MANIFEST) {
+      // A `frame` on a standalone image would be silently ignored by the
+      // loader; a sheet entry WITHOUT one would hand the renderer a whole
+      // Spritesheet where it expects a Texture.
+      expect(Boolean(entry.frame), entry.key).toBe(sheets.has(entry.url));
+    }
+  });
+
+  it('names a frame that actually exists in the staged atlas', () => {
+    /*
+     * The one failure this whole pipeline cannot catch any other way.
+     *
+     * A frame name is a string that nothing resolves until a browser asks the
+     * Spritesheet for it, at which point the loader throws, the key lands in
+     * `missing`, and the enemy silently renders as a generated placeholder
+     * blob. Every other test here passes while the game looks broken.
+     *
+     * So this reads the real generated atlases off disk. It couples the suite
+     * to `npm run assets` having been run, which is the correct coupling:
+     * committing a manifest that points at a frame the build does not produce
+     * should fail here rather than in a screenshot.
+     */
+    const sheets = new Map();
+    for (const url of Object.values(ASSET_SHEETS)) {
+      const path = resolve(process.cwd(), 'public', url);
+      sheets.set(url, JSON.parse(readFileSync(path, 'utf8')));
+    }
+
+    for (const entry of ASSET_MANIFEST) {
+      if (!entry.frame) continue;
+      const sheet = sheets.get(entry.url);
+      expect(sheet, `${entry.key}: no atlas at ${entry.url}`).toBeDefined();
+      expect(
+        Object.hasOwn(sheet.frames, entry.frame),
+        `${entry.key} -> "${entry.frame}" is not in ${entry.url}`
+      ).toBe(true);
+    }
+  });
+
+  it('ships a standalone file for every non-atlas entry', () => {
+    for (const entry of ASSET_MANIFEST) {
+      if (entry.frame) continue;
+      const path = resolve(process.cwd(), 'public', entry.url);
+      expect(existsSync(path), `${entry.key}: ${entry.url} is not staged`).toBe(true);
+    }
+  });
+
+  it('stages every DOM-side UI plate the HUD references', () => {
+    for (const [name, url] of Object.entries(UI_ASSETS)) {
+      expect(existsSync(resolve(process.cwd(), 'public', url)), name).toBe(true);
+    }
+  });
+
+  it('exposes the DOM-side UI plates from the same manifest module', () => {
+    // The level-up panel's art is referenced from CSS, but a missing badge
+    // should still be findable here rather than only by reading a stylesheet.
+    for (const [name, url] of Object.entries(UI_ASSETS)) {
+      expect(url.startsWith(ASSET_ROOT.UI), name).toBe(true);
+      expect(url.endsWith('.png'), name).toBe(true);
     }
   });
 
@@ -76,14 +152,14 @@ describe('Asset manifest', () => {
     const critical = new Set(
       ASSET_MANIFEST.filter((e) => e.critical).map((e) => e.key)
     );
-    expect(critical.has(ASSET_KEYS.DEWLING)).toBe(true);
+    expect(critical.has(ASSET_KEYS.DRIFTER)).toBe(true);
     for (const key of Object.values(ENEMY_TEXTURE_KEY)) {
       expect(critical.has(key), key).toBe(true);
     }
   });
 
-  it('falls back to the Tarling texture for an unknown enemy id', () => {
-    expect(getEnemyTextureKey('not_a_real_enemy')).toBe(ASSET_KEYS.TARLING);
+  it('falls back to the Xeno Larva texture for an unknown enemy id', () => {
+    expect(getEnemyTextureKey('not_a_real_enemy')).toBe(ASSET_KEYS.XENO_LARVA);
   });
 });
 
@@ -98,7 +174,7 @@ describe('AssetStore preload', () => {
     expect(result.loaded).toBe(ASSET_MANIFEST.length);
     expect(result.missing).toEqual([]);
     expect(store.complete).toBe(true);
-    expect(store.get(ASSET_KEYS.DEWLING)).toBeDefined();
+    expect(store.get(ASSET_KEYS.DRIFTER)).toBeDefined();
   });
 
   it('reports progress monotonically', async () => {
@@ -132,11 +208,11 @@ describe('AssetStore preload', () => {
   it('keeps the assets that did load when others fail', async () => {
     const store = new AssetStore();
 
-    const result = await store.load(partialLoader([ASSET_KEYS.SMOGMOTH, ASSET_KEYS.BG_AQUA]));
+    const result = await store.load(partialLoader([ASSET_KEYS.PHANTOM_STALKER, ASSET_KEYS.BG_VOID]));
 
-    expect(result.missing).toEqual([ASSET_KEYS.SMOGMOTH, ASSET_KEYS.BG_AQUA]);
-    expect(store.has(ASSET_KEYS.DEWLING)).toBe(true);
-    expect(store.has(ASSET_KEYS.SMOGMOTH)).toBe(false);
+    expect(result.missing).toEqual([ASSET_KEYS.PHANTOM_STALKER, ASSET_KEYS.BG_VOID]);
+    expect(store.has(ASSET_KEYS.DRIFTER)).toBe(true);
+    expect(store.has(ASSET_KEYS.PHANTOM_STALKER)).toBe(false);
   });
 
   it('treats a loader returning nothing as a miss', async () => {
@@ -149,19 +225,19 @@ describe('AssetStore preload', () => {
 
   it('accepts a directly installed texture, which is how placeholders land', async () => {
     const store = new AssetStore();
-    await store.load(partialLoader([ASSET_KEYS.TARLING]));
-    expect(store.has(ASSET_KEYS.TARLING)).toBe(false);
+    await store.load(partialLoader([ASSET_KEYS.XENO_LARVA]));
+    expect(store.has(ASSET_KEYS.XENO_LARVA)).toBe(false);
 
-    store.set(ASSET_KEYS.TARLING, fakeTexture('placeholder'));
+    store.set(ASSET_KEYS.XENO_LARVA, fakeTexture('placeholder'));
 
-    expect(store.has(ASSET_KEYS.TARLING)).toBe(true);
+    expect(store.has(ASSET_KEYS.XENO_LARVA)).toBe(true);
     // Still honestly reported as missing from disk.
-    expect(store.missing).toContain(ASSET_KEYS.TARLING);
+    expect(store.missing).toContain(ASSET_KEYS.XENO_LARVA);
   });
 
   it('clears previous results on reload', async () => {
     const store = new AssetStore();
-    await store.load(partialLoader([ASSET_KEYS.TARLING]));
+    await store.load(partialLoader([ASSET_KEYS.XENO_LARVA]));
     expect(store.missing).toHaveLength(1);
 
     await store.load(okLoader());
@@ -208,9 +284,12 @@ describe('Tinting', () => {
     expect(hexToPixi('000000')).toBe(0x000000);
   });
 
-  it('leaves the hero untinted with no cosmetic equipped', () => {
-    expect(cosmeticTint(null)).toBe(NO_TINT);
-    expect(cosmeticTint({})).toBe(NO_TINT);
+  it('gives the hero its default livery with no cosmetic equipped', () => {
+    // NOT white: the atlas frame is untinted white geometry, so falling back to
+    // NO_TINT would render a colourless ship rather than the Drifter.
+    expect(cosmeticTint(null)).toBe(HERO_TINT);
+    expect(cosmeticTint({})).toBe(HERO_TINT);
+    expect(HERO_TINT).not.toBe(NO_TINT);
   });
 
   it('tints the hero sprite from the cosmetic palette', () => {

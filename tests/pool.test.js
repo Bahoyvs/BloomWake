@@ -150,10 +150,14 @@ describe('Card-spawned entities are pooled', () => {
   });
 
   it('recycles AoE ring effects', () => {
-    const sim = makeSim('aurora_pulse', 5);
+    // The Graviton EMP, not the old Corona Pulse: that slot is the Nanite
+    // Swarm now, and guided missiles draw no ring.
+    const sim = makeSim('tidewave', 5);
     const baseline = sim.effectPool.created;
 
-    for (let i = 0; i < 60 * 20; i++) sim.update(1 / 60, { x: 0, y: 0 });
+    // 40s, because the EMP's cooldown curve was lengthened to pay for its
+    // stun: 20s no longer fits enough activations to prove recycling.
+    for (let i = 0; i < 60 * 40; i++) sim.update(1 / 60, { x: 0, y: 0 });
 
     expect(sim.effectPool.reused).toBeGreaterThan(5);
     expect(sim.effectPool.created).toBe(baseline);
@@ -296,8 +300,17 @@ describe('Enemy pooling with Tier B animation fields', () => {
     // set of objects. Without pooling these two numbers would be equal, and
     // every spawn would be a fresh allocation carrying six more fields.
     expect(lifetimes.size).toBeGreaterThan(50);
-    expect(identities.size).toBeLessThanOrEqual(peakConcurrent);
     expect(identities.size).toBeLessThan(lifetimes.size / 4);
+    /*
+     * Bounded by what the pool ever built, not by the peak field size.
+     *
+     * A Brood Spore bursts into four larvae the instant it dies, so within a
+     * single tick the pool can hand out more objects than are alive at the end
+     * of it. The property that matters is unchanged: the run recycles a small
+     * fixed set rather than allocating per spawn.
+     */
+    expect(identities.size).toBeLessThanOrEqual(sim.enemyPool.created);
+    expect(peakConcurrent).toBeGreaterThan(0);
 
     // The pool never had to grow past what it pre-allocated.
     expect(sim.enemyPool.created).toBe(64);

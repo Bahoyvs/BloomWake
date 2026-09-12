@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { WaveSpawner } from '../src/core/spawner.js';
 import { WORLD, SPAWN_CFG } from '../src/core/constants.js';
 import { mulberry32, length } from '../src/core/math.js';
-import { getEnemyCount } from '../src/core/wave.js';
+import { getEnemyCount, getWaveDuration } from '../src/core/wave.js';
 
 describe('WaveSpawner (Phase 1 spawn scheduling)', () => {
   it('adopts the wave enemy cap from the GDD wave formula', () => {
@@ -25,12 +25,40 @@ describe('WaveSpawner (Phase 1 spawn scheduling)', () => {
   it('spaces spawns by the computed interval', () => {
     const spawner = new WaveSpawner(mulberry32(1));
     spawner.beginWave(1);
-    // 35s wave * 0.4 fill / 14 cap = 1.0s interval
-    expect(spawner.interval).toBeCloseTo(1.0);
+    // 45s spawn window * 0.4 fill / 14 cap = 1.286s interval
+    const expected = (getWaveDuration(1) * SPAWN_CFG.FILL_FRACTION) / getEnemyCount(1);
+    expect(spawner.interval).toBeCloseTo(expected);
 
     spawner.update(1 / 60, 0); // consumes the opening spawn
-    expect(spawner.update(0.5, 1)).toBe(0);
-    expect(spawner.update(0.6, 1)).toBe(1);
+    expect(spawner.update(expected * 0.5, 1)).toBe(0);
+    expect(spawner.update(expected * 0.6, 1)).toBe(1);
+  });
+
+  it('spawns nothing at all on a boss wave', () => {
+    // BOSS ARENA ISOLATION: the fight is the boss and its own escorts, and
+    // nothing else. Enforced in the spawner so no caller has to remember.
+    const spawner = new WaveSpawner(mulberry32(1));
+    spawner.beginWave(5);
+    expect(spawner.active).toBe(false);
+    expect(spawner.update(60, 0)).toBe(0);
+
+    spawner.beginWave(6);
+    expect(spawner.active).toBe(true);
+    expect(spawner.update(60, 0)).toBeGreaterThan(0);
+  });
+
+  it('stops producing arrivals once the spawn window is closed', () => {
+    const spawner = new WaveSpawner(mulberry32(1));
+    spawner.beginWave(1);
+    expect(spawner.update(10, 0)).toBeGreaterThan(0);
+
+    spawner.close();
+    expect(spawner.active).toBe(false);
+    expect(spawner.update(60, 0)).toBe(0);
+
+    // A new wave re-opens it.
+    spawner.beginWave(2);
+    expect(spawner.active).toBe(true);
   });
 
   it('never exceeds the concurrent cap', () => {

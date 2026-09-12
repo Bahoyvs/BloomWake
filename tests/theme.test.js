@@ -1,11 +1,11 @@
 /**
- * Visual Soup verification (Development Plan, Phase 6 risk row).
+ * Visual Soup verification.
  *
- * The plan's acceptance criterion is a playtest: with 200 enemies and 50
- * projectiles on screen, a tester must locate the Dewling within one second.
- * That is a human judgement, but the property underneath it is not — the
- * Dewling is findable because it is the brightest thing on screen by a wide
- * margin, and nothing else is allowed near its luminance band.
+ * The acceptance criterion is a playtest: with 200 enemies and 50 projectiles
+ * on screen, a tester must locate the Void Drifter within one second. That is a
+ * human judgement, but the property underneath it is not — the Drifter is
+ * findable because it is the brightest thing on screen by a wide margin, and
+ * nothing else is allowed near its luminance band.
  *
  * These tests pin that property numerically, so a future palette tweak that
  * would reintroduce visual soup fails here rather than in a playtest.
@@ -13,57 +13,61 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  PALETTE,
   THEME,
   Z_ORDER,
-  ENEMY_FILL_COLORS,
+  SWARM_FILL_COLORS,
   MIN_HERO_CONTRAST,
   MAX_ENEMY_LUMINANCE,
   MIN_HERO_LUMINANCE,
   relativeLuminance,
   contrastRatio,
+  hueDistance,
   getEnemyPalette,
   parseHex,
   withAlpha,
 } from '../src/render/theme.js';
 import { ENEMIES } from '../src/data/enemies.js';
 
-/** Every colour a Frutevil silhouette or its rim can be painted with. */
-const ALL_FRUTEVIL = Object.values(THEME.frutevil);
-/** The Dewling's own colours. */
+/** Every colour a Chitin Swarm carapace or its rim can be painted with. */
+const ALL_SWARM = Object.values(THEME.swarm);
+/** The Drifter's own colours. */
 const HERO_COLORS = [THEME.hero.core, THEME.hero.body, THEME.hero.rim];
+/** '#rrggbb' for a PALETTE int, so the two can be compared. */
+const asHex = (value) => `#${value.toString(16).padStart(6, '0')}`;
 
-describe('Hero/Frutevil luminance split', () => {
+describe('Hero/Swarm luminance split', () => {
   it('keeps every hero colour in the bright band', () => {
     for (const color of HERO_COLORS) {
       expect(relativeLuminance(color), color).toBeGreaterThanOrEqual(MIN_HERO_LUMINANCE);
     }
   });
 
-  it('keeps every Frutevil fill in the dark band', () => {
-    for (const color of ENEMY_FILL_COLORS) {
+  it('keeps every Swarm carapace in the dark band', () => {
+    for (const color of SWARM_FILL_COLORS) {
       expect(relativeLuminance(color), color).toBeLessThanOrEqual(MAX_ENEMY_LUMINANCE);
     }
   });
 
-  it('never lets a Frutevil colour approach the hero band', () => {
+  it('never lets a Swarm colour approach the hero band', () => {
     const dimmestHero = Math.min(...HERO_COLORS.map(relativeLuminance));
-    for (const color of ALL_FRUTEVIL) {
+    for (const color of ALL_SWARM) {
       expect(relativeLuminance(color), color).toBeLessThan(dimmestHero);
     }
   });
 
-  it('clears the contrast floor against every enemy fill', () => {
+  it('clears the contrast floor against every Swarm carapace', () => {
     // This is the property that makes enemy COUNT irrelevant: adding a 200th
-    // dark enemy cannot reduce the Dewling's contrast against any of them.
-    for (const color of ENEMY_FILL_COLORS) {
+    // dark enemy cannot reduce the Drifter's contrast against any of them.
+    for (const color of SWARM_FILL_COLORS) {
       expect(contrastRatio(THEME.hero.core, color), color).toBeGreaterThanOrEqual(
         MIN_HERO_CONTRAST
       );
     }
   });
 
-  it('clears the contrast floor against enemy rim colours too', () => {
-    for (const color of ALL_FRUTEVIL) {
+  it('clears the contrast floor against Swarm rim colours too', () => {
+    for (const color of ALL_SWARM) {
       expect(contrastRatio(THEME.hero.core, color), color).toBeGreaterThanOrEqual(
         MIN_HERO_CONTRAST
       );
@@ -83,11 +87,78 @@ describe('Hero/Frutevil luminance split', () => {
       relativeLuminance(THEME.background.top),
       relativeLuminance(THEME.background.bottom)
     );
-    for (const color of ENEMY_FILL_COLORS) {
+    for (const color of SWARM_FILL_COLORS) {
       // Enemies must not sink below the backdrop, or they vanish instead of
       // reading as shapes.
       expect(relativeLuminance(color), color).toBeGreaterThan(brightestBackdrop * 0.3);
     }
+  });
+});
+
+describe('Signal colours are exempt from the darkness ceiling, not from a rule', () => {
+  /*
+   * Bio-acid, hive magenta and telegraph red sit ABOVE the Swarm's luminance
+   * ceiling on purpose — they are transient warnings and corpse bursts, not
+   * silhouettes the player has to pick the hero out of. The rule they answer to
+   * instead is that a signal must be unmissable against the void.
+   */
+  const SIGNALS = { ...THEME.bio, ...THEME.danger };
+
+  it('makes every signal colour pop off the backdrop', () => {
+    for (const [name, color] of Object.entries(SIGNALS)) {
+      expect(contrastRatio(color, THEME.background.top), name).toBeGreaterThanOrEqual(
+        MIN_HERO_CONTRAST
+      );
+    }
+  });
+
+  it('separates every signal from the hero by HUE, since it cannot by brightness', () => {
+    /*
+     * Bio-acid green is genuinely brighter than the hero floor — that is what
+     * makes it a signal. So the guard that stops a burst reading as the ship
+     * cannot be luminance; it is hue distance. Cyan hull against green acid and
+     * red telegraph stays separable at a glance even when both are near-white
+     * bright.
+     */
+    for (const [name, color] of Object.entries(SIGNALS)) {
+      expect(hueDistance(color, THEME.hero.body), name).toBeGreaterThanOrEqual(30);
+    }
+  });
+
+  it('holds the Swarm itself to the darkness ceiling regardless', () => {
+    // The exemption is for signals only. If it ever leaked into a carapace,
+    // the enemy count would start mattering again.
+    for (const color of SWARM_FILL_COLORS) {
+      expect(relativeLuminance(color)).toBeLessThan(MIN_HERO_LUMINANCE);
+    }
+  });
+
+  it('separates the telegraph from the acid burst, since both fire at a boss', () => {
+    // If these converged, a "the AoE is charging" ring and a "you killed
+    // something" spray would be the same visual event.
+    expect(contrastRatio(THEME.danger.telegraph, THEME.bio.acid)).toBeGreaterThan(2);
+  });
+});
+
+describe('The theme brief is pinned, not merely implemented', () => {
+  it('carries the seven specified colours verbatim', () => {
+    expect(PALETTE.background).toBe(0x05070f);
+    expect(PALETTE.heroPrimary).toBe(0x00f0ff);
+    expect(PALETTE.heroSecondary).toBe(0x3b82f6);
+    expect(PALETTE.alienObsidian).toBe(0x1a1c23);
+    expect(PALETTE.alienAcid).toBe(0x00ff88);
+    expect(PALETTE.alienMagenta).toBe(0xff007f);
+    expect(PALETTE.dangerRed).toBe(0xff2a55);
+  });
+
+  it('uses those colours in the working palette rather than beside it', () => {
+    expect(THEME.background.top).toBe(asHex(PALETTE.background));
+    expect(THEME.hero.body).toBe(asHex(PALETTE.heroPrimary));
+    expect(THEME.hero.ion).toBe(asHex(PALETTE.heroSecondary));
+    expect(THEME.swarm.chitin).toBe(asHex(PALETTE.alienObsidian));
+    expect(THEME.bio.acid).toBe(asHex(PALETTE.alienAcid));
+    expect(THEME.bio.magenta).toBe(asHex(PALETTE.alienMagenta));
+    expect(THEME.danger.telegraph).toBe(asHex(PALETTE.dangerRed));
   });
 });
 
@@ -100,22 +171,23 @@ describe('Palette is bounded, not open-ended', () => {
     }
   });
 
-  it('limits Frutevil to a small hue set', () => {
-    // The plan calls for a RESTRICTED enemy palette. Six fills across six enemy
-    // types means no enemy introduces a colour of its own.
-    expect(ENEMY_FILL_COLORS.length).toBeLessThanOrEqual(6);
-    expect(new Set(ENEMY_FILL_COLORS).size).toBe(ENEMY_FILL_COLORS.length);
+  it('limits the Swarm to a small hue set', () => {
+    // The plan calls for a RESTRICTED enemy palette: one fill per roster
+    // entry - six swarm classes plus the boss - so no enemy introduces a
+    // colour of its own.
+    expect(SWARM_FILL_COLORS.length).toBeLessThanOrEqual(7);
+    expect(new Set(SWARM_FILL_COLORS).size).toBe(SWARM_FILL_COLORS.length);
   });
 
-  it('gives distinct fills to enemies that swarm together', () => {
-    // Tarling, Ashfish and Cracked Wisp co-exist from wave 4 onward.
+  it('gives distinct carapaces to enemies that swarm together', () => {
+    // Larva, Strider and Ravager co-exist from wave 4 onward.
     const swarm = ['tarling', 'ashfish', 'cracked_wisp'].map((id) => getEnemyPalette(id).fill);
     expect(new Set(swarm).size).toBe(3);
   });
 
-  it('keeps player projectiles distinguishable from the Dewling body', () => {
-    // Bright, but not identical — a bullet must never read as the character.
-    for (const color of [THEME.offence.dewdrop, THEME.offence.petal, THEME.offence.beam]) {
+  it('keeps player projectiles distinguishable from the Drifter hull', () => {
+    // Bright, but not identical — a bolt must never read as the ship.
+    for (const color of Object.values(THEME.offence)) {
       expect(color).not.toBe(THEME.hero.body);
       expect(relativeLuminance(color)).toBeGreaterThan(MAX_ENEMY_LUMINANCE);
     }
@@ -123,7 +195,7 @@ describe('Palette is bounded, not open-ended', () => {
 });
 
 describe('Draw order', () => {
-  it('puts the Dewling above absolutely everything', () => {
+  it('puts the Drifter above absolutely everything', () => {
     const others = Object.entries(Z_ORDER).filter(([key]) => key !== 'PLAYER');
     for (const [key, value] of others) {
       expect(value, key).toBeLessThan(Z_ORDER.PLAYER);
@@ -158,8 +230,8 @@ describe('Colour helpers', () => {
   });
 
   it('is symmetric', () => {
-    expect(contrastRatio(THEME.hero.core, THEME.frutevil.tar)).toBeCloseTo(
-      contrastRatio(THEME.frutevil.tar, THEME.hero.core),
+    expect(contrastRatio(THEME.hero.core, THEME.swarm.larva)).toBeCloseTo(
+      contrastRatio(THEME.swarm.larva, THEME.hero.core),
       6
     );
   });

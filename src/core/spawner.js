@@ -19,6 +19,16 @@ export class WaveSpawner {
     this.timer = 0;
     this.currentWave = 1;
     this.bossSpawned = false;
+    /**
+     * Whether new enemies may arrive.
+     *
+     * False for the whole of a boss wave (the arena belongs to the boss), and
+     * false for the tail of a normal wave once the spawn window closes. The
+     * flag lives here rather than in the simulation because "should anything
+     * spawn" is the spawner's entire remit — a caller that has to remember to
+     * stop asking is a caller that will forget.
+     */
+    this.active = true;
   }
 
   /**
@@ -30,6 +40,13 @@ export class WaveSpawner {
   beginWave(wave) {
     this.currentWave = wave;
     this.bossSpawned = false;
+    /**
+     * BOSS ARENA ISOLATION. A boss wave spawns no chaff at all — the only
+     * things on the field are the Dreadnought and the escorts it calls itself.
+     * Mixing a 200-enemy swarm into a boss fight hides the attack patterns the
+     * whole encounter is built out of.
+     */
+    this.active = !isBossWave(wave);
     this.cap = getEnemyCount(wave);
     this.interval = Math.max(
       SPAWN_CFG.MIN_INTERVAL,
@@ -46,6 +63,8 @@ export class WaveSpawner {
    * @returns {number} Number of enemies to spawn this step
    */
   update(dt, activeCount) {
+    if (!this.active) return 0;
+
     const room = this.cap - activeCount;
     if (room <= 0) {
       // Field is full: hold the timer ready so a kill refills promptly.
@@ -61,6 +80,16 @@ export class WaveSpawner {
     }
     if (this.timer < 0) this.timer = 0;
     return count;
+  }
+
+  /**
+   * Close the spawn window: no further arrivals this wave.
+   *
+   * Called when the wave's spawn clock runs out. What is already on the field
+   * stays there, and the wave ends when the last of it is dead.
+   */
+  close() {
+    this.active = false;
   }
 
   /**

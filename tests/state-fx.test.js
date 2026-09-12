@@ -13,7 +13,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  AFTERIMAGE,
+  RECOIL,
   BOSS_FX,
   HERO_FX,
   MOVE_WAKE,
@@ -350,18 +350,12 @@ describe('boss telegraph keeps its fairness window in the FX path', () => {
 });
 
 describe('hero FX actually animate', () => {
-  it('changes shape over the life of a hit', () => {
-    const frames = sampleState(
-      heroStateTransform,
-      ANIM_STATES.HIT,
-      HERO_FX[ANIM_STATES.HIT].duration
-    );
-
-    const scaleYs = new Set(frames.map((f) => f.scaleY.toFixed(4)));
-    expect(scaleYs.size).toBeGreaterThan(8);
-  });
-
-  it('squashes volume-preservingly — as Y drops, X rises', () => {
+  it('reacts to a hit by rocking and flashing, never by deforming', () => {
+    /*
+     * The de-liquify contract for Tier A. A hit used to apply a 34% asymmetric
+     * squash that flattened the ship; the reaction is now rigid-body only —
+     * the hull is knocked off its bearing and settles, and it flashes.
+     */
     const frames = sampleState(
       heroStateTransform,
       ANIM_STATES.HIT,
@@ -369,8 +363,23 @@ describe('hero FX actually animate', () => {
     );
 
     for (const frame of frames) {
-      if (frame.scaleY < 0.99) expect(frame.scaleX).toBeGreaterThan(1);
-      if (frame.scaleY > 1.01) expect(frame.scaleX).toBeLessThan(1);
+      expect(frame.scaleX).toBe(1);
+      expect(frame.scaleY).toBe(1);
+    }
+    expect(new Set(frames.map((f) => f.rotation.toFixed(4))).size).toBeGreaterThan(8);
+    expect(frames.some((f) => f.flash)).toBe(true);
+  });
+
+  it('leaves the hull rigid through every state but death', () => {
+    // Death is the one exemption, and it earns it: a ship being destroyed
+    // genuinely stops being ship-shaped.
+    for (const [state, config] of Object.entries(HERO_FX)) {
+      if (state === ANIM_STATES.DEATH) continue;
+      const frames = sampleState(heroStateTransform, state, config.duration || 1, 40);
+      for (const frame of frames) {
+        expect(frame.scaleX, state).toBe(1);
+        expect(frame.scaleY, state).toBe(1);
+      }
     }
   });
 
@@ -385,16 +394,24 @@ describe('hero FX actually animate', () => {
     expect(late.flash).toBe(false);
   });
 
-  it('winds up before it releases on an attack', () => {
+  it('puts the whole of firing into the recoil, not into the sprite', () => {
+    /*
+     * The attack pose used to wind the hull down into a 22% squash and spring
+     * it back through an overshoot. On a fighter that reads as the fuselage
+     * compressing every time the gun fires, and at the Phase Repeater's L5
+     * fire rate it never stopped. Firing is now a position kick and nothing
+     * else — see RECOIL / attackRecoil.
+     */
     const duration = HERO_FX[ANIM_STATES.ATTACK].duration;
-    const anticipation = resetTransform(createTransform());
-    heroStateTransform(ANIM_STATES.ATTACK, duration * 0.15, 0, anticipation);
-
-    // Anticipation squashes down; the release overshoots the other way.
-    expect(anticipation.scaleY).toBeLessThan(1);
-
     const frames = sampleState(heroStateTransform, ANIM_STATES.ATTACK, duration, 40);
-    expect(Math.max(...frames.map((f) => f.scaleY))).toBeGreaterThan(1);
+
+    for (const frame of frames) {
+      expect(frame.scaleX).toBe(1);
+      expect(frame.scaleY).toBe(1);
+      expect(frame.rotation).toBe(0);
+    }
+    // ...and the kick itself is real.
+    expect(attackRecoil(0)).toBeGreaterThan(0);
   });
 
   it('fades out over a death and never goes negative', () => {
@@ -413,26 +430,26 @@ describe('hero FX actually animate', () => {
     }
   });
 
-  it('keeps idle and move alive rather than static', () => {
+  it('holds idle and move as a completely neutral pose', () => {
+    /*
+     * IDLE used to breathe on a sine; MOVE bounced, stretched along travel and
+     * leaned. All three were written for a soft creature.
+     *
+     * A ship under thrust says so with its ENGINES — the flames lengthen with
+     * throttle (THRUSTER in sprite-factory.js) — and with its heading, as the
+     * hull turns toward travel. Both live in the renderer, and neither needs
+     * the sprite to change shape.
+     */
     for (const state of [ANIM_STATES.IDLE, ANIM_STATES.MOVE]) {
-      const values = new Set();
       for (let t = 0; t < 2; t += 0.05) {
         const out = resetTransform(createTransform());
-        heroStateTransform(state, t, t, out, { dx: 2 });
-        values.add(out.scaleY.toFixed(4));
+        heroStateTransform(state, t, t, out, { dx: 8 });
+        expect(out.scaleX, state).toBe(1);
+        expect(out.scaleY, state).toBe(1);
+        expect(out.rotation, state).toBe(0);
+        expect(out.alpha, state).toBe(1);
       }
-      expect(values.size, `${state} is not animating`).toBeGreaterThan(10);
     }
-  });
-
-  it('leans into travel direction on move', () => {
-    const right = resetTransform(createTransform());
-    heroStateTransform(ANIM_STATES.MOVE, 0.5, 0.5, right, { dx: 8 });
-    const left = resetTransform(createTransform());
-    heroStateTransform(ANIM_STATES.MOVE, 0.5, 0.5, left, { dx: -8 });
-
-    expect(Math.sign(right.rotation)).toBe(1);
-    expect(Math.sign(left.rotation)).toBe(-1);
   });
 
   it('stays within sane bounds for every state', () => {
@@ -451,31 +468,45 @@ describe('hero FX actually animate', () => {
 
 describe('boss FX', () => {
   it('builds urgency across the telegraph rather than staying flat', () => {
+    /*
+     * Same intent as before — the warning beats harder as the window closes —
+     * but through the FLASH rather than through a swell. The old version
+     * inflated the whole station by up to 22%, which on a 200px chassis was
+     * the single worst offender in the "everything is rubber" read.
+     */
     const duration = 1.5;
-    const early = [];
-    const late = [];
-    for (let i = 0; i <= 30; i++) {
-      const elapsed = (duration * i) / 30;
+    let early = 0;
+    let late = 0;
+    for (let i = 0; i <= 60; i++) {
+      const elapsed = (duration * i) / 60;
       const out = resetTransform(createTransform());
       bossStateTransform(ANIM_STATES.TELEGRAPH, elapsed, elapsed, out, { duration });
-      (i < 15 ? early : late).push(Math.abs(out.scaleX - 1));
+      if (out.flash) {
+        if (i < 30) early++;
+        else late++;
+      }
     }
 
-    // The swell amplitude grows as the window closes.
-    expect(Math.max(...late)).toBeGreaterThan(Math.max(...early));
+    expect(late).toBeGreaterThan(early);
   });
 
-  it('does not flash in the first half of the telegraph', () => {
+  it('never resizes the station during a telegraph', () => {
     const duration = 1.5;
-    for (let i = 0; i < 15; i++) {
-      const elapsed = (duration * i) / 30;
+    for (let i = 0; i <= 60; i++) {
+      const elapsed = (duration * i) / 60;
       const out = resetTransform(createTransform());
       bossStateTransform(ANIM_STATES.TELEGRAPH, elapsed, elapsed, out, { duration });
-      expect(out.flash).toBe(false);
+      expect(out.scaleX).toBe(1);
+      expect(out.scaleY).toBe(1);
     }
   });
 
-  it('makes phaseUp bigger than a hit, so they cannot be confused', () => {
+  it('makes phaseUp read differently from a hit, so they cannot be confused', () => {
+    /*
+     * A tier change used to be told apart from a hit by being a BIGGER swell.
+     * With no swells left, the distinction is duration and flash pattern: a
+     * phase-up strobes steadily for far longer than a hit's brief blink.
+     */
     const phase = sampleState(
       bossStateTransform,
       ANIM_STATES.PHASE_UP,
@@ -483,11 +514,22 @@ describe('boss FX', () => {
     );
     const hit = sampleState(bossStateTransform, ANIM_STATES.HIT, BOSS_FX[ANIM_STATES.HIT].duration);
 
-    const peak = (frames) => Math.max(...frames.map((f) => Math.abs(f.scaleX - 1)));
-    expect(peak(phase)).toBeGreaterThan(peak(hit));
+    expect(phase.filter((f) => f.flash).length).toBeGreaterThan(0);
+    expect(hit.filter((f) => f.flash).length).toBeGreaterThan(0);
     expect(BOSS_FX[ANIM_STATES.PHASE_UP].duration).toBeGreaterThan(
-      BOSS_FX[ANIM_STATES.HIT].duration
+      BOSS_FX[ANIM_STATES.HIT].duration * 3
     );
+  });
+
+  it('leaves the station rigid through every state but death', () => {
+    for (const [state, config] of Object.entries(BOSS_FX)) {
+      if (state === ANIM_STATES.DEATH) continue;
+      const frames = sampleState(bossStateTransform, state, config.duration || 1, 40);
+      for (const frame of frames) {
+        expect(frame.scaleX, state).toBe(1);
+        expect(frame.scaleY, state).toBe(1);
+      }
+    }
   });
 
   it('stays within sane bounds for every state', () => {
@@ -503,29 +545,43 @@ describe('boss FX', () => {
 });
 
 describe('attack recoil', () => {
-  it('kicks back and springs home', () => {
-    const duration = HERO_FX[ANIM_STATES.ATTACK].duration;
-
-    expect(attackRecoil(0)).toBeCloseTo(0, 6);
-    expect(attackRecoil(duration * 0.35)).toBeGreaterThan(2);
-    expect(attackRecoil(duration)).toBeCloseTo(0, 6);
+  it('snaps to full kick immediately and slides home', () => {
+    /*
+     * A LINEAR IMPULSE, NOT A SPRING.
+     *
+     * The old curve was a half-sine over the whole 0.17s attack state, so the
+     * displacement RAMPED UP over the first 85ms — the ship drifted backward
+     * after the shot instead of being kicked by it, and at a high fire rate it
+     * never returned to centre. Peak is now on frame one.
+     */
+    expect(attackRecoil(0)).toBeCloseTo(RECOIL.distance, 6);
+    expect(attackRecoil(RECOIL.duration * 0.5)).toBeCloseTo(RECOIL.distance * 0.5, 6);
+    expect(attackRecoil(RECOIL.duration)).toBeCloseTo(0, 6);
   });
 
-  it('never pushes forward — the kick is one-directional', () => {
-    const duration = HERO_FX[ANIM_STATES.ATTACK].duration;
-    for (let t = 0; t <= duration; t += duration / 40) {
-      expect(attackRecoil(t)).toBeGreaterThanOrEqual(-1e-9);
+  it('decays monotonically, never bouncing back out', () => {
+    let previous = Infinity;
+    for (let t = 0; t <= RECOIL.duration; t += RECOIL.duration / 40) {
+      const kick = attackRecoil(t);
+      expect(kick).toBeGreaterThanOrEqual(-1e-9);
+      expect(kick).toBeLessThanOrEqual(previous + 1e-9);
+      previous = kick;
     }
   });
 
+  it('is over inside a handful of frames', () => {
+    // ~0.06s is under four frames at 60Hz: fast enough to read as a snap, and
+    // short enough that consecutive shots do not overlap into a standing
+    // offset at the Phase Repeater's L5 fire rate.
+    expect(RECOIL.duration).toBeLessThanOrEqual(0.08);
+    expect(attackRecoil(RECOIL.duration * 2)).toBe(0);
+  });
+
   it('stays a nudge, not a teleport', () => {
-    const duration = HERO_FX[ANIM_STATES.ATTACK].duration;
-    let peak = 0;
-    for (let t = 0; t <= duration; t += duration / 60) peak = Math.max(peak, attackRecoil(t));
-    // Larger than the Dewling's own radius would look like it was knocked off
+    // Larger than the Drifter's own radius would look like it was knocked off
     // its hitbox rather than recoiling inside it.
-    expect(peak).toBeLessThan(14);
-    expect(peak).toBeGreaterThan(3);
+    expect(RECOIL.distance).toBeLessThan(14);
+    expect(RECOIL.distance).toBeGreaterThan(3);
   });
 
   it('is clamped once the attack is over', () => {
@@ -559,54 +615,44 @@ describe('move wake emission', () => {
   });
 });
 
-describe('move reads as movement, not idling in place', () => {
-  it('scales its bounce with speed', () => {
-    const slow = [];
-    const fast = [];
-    for (let t = 0; t < 1; t += 0.02) {
-      const a = resetTransform(createTransform());
-      heroStateTransform(ANIM_STATES.MOVE, t, t, a, { dx: 0.2 });
-      slow.push(a.scaleY);
-      const b = resetTransform(createTransform());
-      heroStateTransform(ANIM_STATES.MOVE, t, t, b, { dx: 3 });
-      fast.push(b.scaleY);
+describe('move is communicated by the engines, not by the hull', () => {
+  it('does not deform or lean the sprite at any speed', () => {
+    // The three MOVE cues — a bounce, a stretch along travel, and a lean —
+    // were all written for a soft blob. A ship shows speed with its exhaust.
+    for (const dx of [0, 0.5, 3, 200]) {
+      for (let t = 0; t < 1; t += 0.05) {
+        const out = resetTransform(createTransform());
+        heroStateTransform(ANIM_STATES.MOVE, t, t, out, { dx });
+        expect(out.scaleX, `dx=${dx}`).toBe(1);
+        expect(out.scaleY, `dx=${dx}`).toBe(1);
+        expect(out.rotation, `dx=${dx}`).toBe(0);
+      }
     }
-
-    const range = (xs) => Math.max(...xs) - Math.min(...xs);
-    expect(range(fast)).toBeGreaterThan(range(slow));
-  });
-
-  it('stretches along travel when moving fast', () => {
-    const still = resetTransform(createTransform());
-    heroStateTransform(ANIM_STATES.MOVE, 0, 0, still, { dx: 0 });
-    const fast = resetTransform(createTransform());
-    heroStateTransform(ANIM_STATES.MOVE, 0, 0, fast, { dx: 3 });
-
-    expect(fast.scaleX).toBeGreaterThan(still.scaleX);
-    expect(fast.scaleY).toBeLessThan(still.scaleY);
-  });
-
-  it('leans harder the faster it goes', () => {
-    const slow = resetTransform(createTransform());
-    heroStateTransform(ANIM_STATES.MOVE, 0, 0, slow, { dx: 0.5 });
-    const fast = resetTransform(createTransform());
-    heroStateTransform(ANIM_STATES.MOVE, 0, 0, fast, { dx: 3 });
-
-    expect(Math.abs(fast.rotation)).toBeGreaterThan(Math.abs(slow.rotation));
   });
 });
 
-describe('afterimage tuning', () => {
-  it('keeps ghosts short-lived and bounded', () => {
-    expect(AFTERIMAGE.poolSize).toBeGreaterThanOrEqual(4);
-    expect(AFTERIMAGE.poolSize).toBeLessThanOrEqual(12);
-    // Lifetime must not exceed what the pool can cover at the spawn interval,
-    // or the oldest ghost gets recycled while still visible and the trace pops.
-    expect(AFTERIMAGE.life).toBeLessThanOrEqual(AFTERIMAGE.interval * AFTERIMAGE.poolSize);
+describe('exhaust grit replaced the ghost chain', () => {
+  it('emits fast enough to read as a stream of sparks', () => {
+    /*
+     * MOVE_WAKE used to accompany an AFTERIMAGE pool that stamped seven
+     * translucent copies of the Drifter behind it. In a game whose stated
+     * headline risk is the player losing track of their own hull in a crowd,
+     * drawing six extra hulls attached to it works directly against the one
+     * property the whole palette exists to guarantee.
+     *
+     * What is left is small, hard and high-frequency.
+     */
+    expect(MOVE_WAKE.interval).toBeLessThanOrEqual(0.04);
+    expect(MOVE_WAKE.count).toBeGreaterThanOrEqual(1);
   });
 
-  it('keeps ghosts subtle enough to stay behind the Dewling', () => {
-    expect(AFTERIMAGE.alpha).toBeLessThan(0.6);
+  it('emits more often the faster the Drifter travels', () => {
+    // A drifting ship should barely trickle; a burning one should stream. The
+    // same banked time fires at full throttle and does not at a crawl.
+    const banked = MOVE_WAKE.interval;
+    expect(wakeDue(banked, 0)).toBe(false);
+    expect(wakeDue(banked, 1)).toBe(true);
+    expect(wakeDue(banked, 0.1)).toBe(false);
   });
 });
 

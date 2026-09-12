@@ -1,9 +1,11 @@
 /**
- * Sprite configuration and factory (Phase 6b).
+ * Sprite sizing and per-frame sync.
  *
- * Replaces the Phase 6 procedural `arc()`/`lineTo()` entity drawing. Every
- * character and enemy is now a PIXI.Sprite; this module owns how a simulation
- * entity maps onto one.
+ * This module owns how a simulation entity's NUMBERS land on a display object.
+ * What an entity LOOKS like — tint, scale multiplier, bioluminescence, the
+ * boss composite — lives in src/render/sprite-factory.js. The split is
+ * deliberate: re-skinning the game should not touch the per-frame hot path,
+ * and tuning the hot path should not require reading a palette table.
  *
  * TWO RULES THAT MATTER
  *
@@ -12,37 +14,48 @@
  *    collision centre the same point by construction.
  *
  * 2. Scale is DERIVED from the entity's collision radius, never authored per
- *    asset. `scale = (radius * 2 * SPRITE_FIT) / texture.width` means art can
- *    ship at any resolution and still line up with the hitbox. Artists change
- *    the PNG; nobody edits code.
+ *    asset. `scale = (radius * 2 * fit) / texture.width` means art can ship at
+ *    any resolution and still line up with the hitbox. Artists change the
+ *    atlas; nobody edits code.
  */
 
 import { Sprite } from 'pixi.js';
 import { getEnemyTextureKey, ASSET_KEYS } from '../core/assets.js';
 import { THEME } from './theme.js';
+import {
+  DAMAGE_TINT,
+  HERO_TINT,
+  HULL_ROTATION_OFFSET,
+  NO_TINT,
+  bioLuminance,
+  enemyFit,
+  enemyTint,
+  getEnemyView,
+} from './sprite-factory.js';
+
+export { NO_TINT, DAMAGE_TINT, HERO_TINT, HULL_ROTATION_OFFSET } from './sprite-factory.js';
 
 /**
- * Visual diameter as a multiple of the collision diameter.
- * Slightly over 1 because art usually carries soft edges and glow that should
- * not count as hitbox.
+ * Default visual diameter as a multiple of the collision diameter, for
+ * anything with no per-species row.
  */
 export const SPRITE_FIT = 1.15;
 
-/** Tint applied for one hit-flash frame. Pixi tints multiply, so white = off. */
-export const NO_TINT = 0xffffff;
-export const DAMAGE_TINT = 0xff8a6a;
-
 /**
- * Per-type visual tweaks that are genuinely about presentation, not gameplay.
- * `fit` overrides SPRITE_FIT; `spin` rotates with travel; `bob` adds idle sway.
+ * Per-type visual tweaks the renderer reads at view-construction time.
+ *
+ * `fit` comes from the theme spec's per-species scale (sprite-factory.js) so
+ * there is one number to tune, not two. `faceTravel` is kept as a hint for the
+ * boss path; the swarm derives facing from real velocity in juice.js.
  */
 export const ENEMY_SPRITE_CONFIG = {
-  tarling: { fit: 1.2, bob: 0.06 },
-  ashfish: { fit: 3.0, faceTravel: true },
-  cracked_wisp: { fit: 3.15, spin: 1.6 },
-  rustbloom: { fit: 2.3, bob: 0.04 },
-  smogmoth: { fit: 2.4, faceTravel: true, bob: 0.1 },
-  rustwhale: { fit: 2.5, faceTravel: true },
+  tarling: { fit: enemyFit('tarling') },
+  ashfish: { fit: enemyFit('ashfish'), faceTravel: true },
+  cracked_wisp: { fit: enemyFit('cracked_wisp'), faceTravel: true },
+  rustbloom: { fit: enemyFit('rustbloom') },
+  smogmoth: { fit: enemyFit('smogmoth'), faceTravel: true },
+  bio_goliath: { fit: enemyFit('bio_goliath'), faceTravel: true },
+  rustwhale: { fit: enemyFit('rustwhale'), faceTravel: true },
 };
 
 /**
@@ -56,13 +69,21 @@ export function getEnemySpriteConfig(typeId) {
 /**
  * Scale factor that makes a texture render at the requested world diameter.
  *
+ * Sized off the frame's LARGER dimension, not its width. The roster now draws
+ * from two atlases of wildly different aspect ratios — a dart hull is tall and
+ * narrow, a cruiser hull is wide and squat — and dividing by width alone would
+ * render the tall frames several times over their intended size. Fitting the
+ * bounding square means `radius * 2 * fit` is the diameter of the circle the
+ * sprite fits INSIDE, whatever shape it is, which is the guarantee the
+ * collision radius actually needs.
+ *
  * @param {{width: number, height: number}} texture
  * @param {number} radius - Collision radius in world px
  * @param {number} [fit]
  * @returns {number}
  */
 export function scaleForRadius(texture, radius, fit = SPRITE_FIT) {
-  const source = Math.max(texture?.width || 0, 1);
+  const source = Math.max(texture?.width || 0, texture?.height || 0, 1);
   return (radius * 2 * fit) / source;
 }
 
@@ -79,37 +100,40 @@ export function makeSprite(texture) {
 
 /**
  * Point an existing sprite at an enemy's current state, using a Tier B
- * transform (Phase 7).
+ * transform.
  *
  * Called every frame for every live enemy — up to 200 of them — so it
  * allocates nothing and only writes properties that actually change. All the
- * motion decisions were made by src/render/juice.js; this function just moves
- * numbers onto the sprite.
+ * motion decisions were made by src/render/juice.js; this function moves the
+ * numbers onto the sprite and layers the species' bioluminescence on top.
  *
- * Phase 7 note: this replaces the Phase 6b bob/spin/faceTravel handling that
- * used to live here. Those read from ENEMY_SPRITE_CONFIG and derived facing
- * from the vector to the Dewling; the Tier B transform derives it from the
- * enemy's real velocity instead, so sine-wave and zigzag movers now bank
- * through their curves rather than sliding sideways while pointing at the
- * player. `fit` is still read from ENEMY_SPRITE_CONFIG, at view construction.
- *
- * @param {{sprite: Sprite, baseScale: number}} view - Renderer-owned record
+ * @param {{sprite: Sprite, baseScale: number, tint?: number, view?: Object}} view
+ *   Renderer-owned record
  * @param {Object} entity - Simulation entity, or a dissolving snapshot
  * @param {{scaleX: number, scaleY: number, rotation: number, alpha: number, flash: boolean}} transform
+ * @param {number} [t] - Seconds, for the bioluminescent pulse. Omit to skip it.
  */
-export function syncEnemySprite(view, entity, transform) {
+export function syncEnemySprite(view, entity, transform, t = null) {
   const { sprite } = view;
 
   sprite.x = entity.x;
   sprite.y = entity.y;
-  sprite.rotation = transform.rotation;
+  sprite.rotation = transform.rotation + HULL_ROTATION_OFFSET;
   sprite.alpha = transform.alpha;
   sprite.scale.x = view.baseScale * transform.scaleX;
   sprite.scale.y = view.baseScale * transform.scaleY;
 
-  // Damage flash via GPU tint — no second sprite sheet, no filter allocation,
-  // and no per-entity shader pass (explicitly out of scope for Tier B).
-  sprite.tint = transform.flash ? DAMAGE_TINT : NO_TINT;
+  if (t !== null && view.view) {
+    const phaseOffset = entity.phaseOffset ?? 0;
+    // Multiplied, not assigned: the dissolve and spawn fades already wrote
+    // transform.alpha, and the shimmer (and the Phantom Stalker's cloak, which
+    // reads `entity.visibility`) must modulate those rather than erase them.
+    sprite.alpha = transform.alpha * bioLuminance(t, phaseOffset, view.view, entity);
+  }
+
+  // Damage flash via GPU tint — no second atlas, no filter allocation, and no
+  // per-entity shader pass. Off-flash, the sprite wears its species colour.
+  sprite.tint = transform.flash ? DAMAGE_TINT : view.tint ?? NO_TINT;
 }
 
 /**
@@ -121,17 +145,25 @@ export function enemyTextureKey(typeId) {
   return getEnemyTextureKey(typeId);
 }
 
-/** Texture key for the Dewling. */
-export const HERO_TEXTURE_KEY = ASSET_KEYS.DEWLING;
+/** Texture key for the Void Drifter. */
+export const HERO_TEXTURE_KEY = ASSET_KEYS.DRIFTER;
+
+/** Species tint, re-exported so the renderer has one import for sprite concerns. */
+export { enemyTint, getEnemyView };
 
 /**
- * Cosmetic variants recolour the hero sprite by tint rather than by shipping a
- * separate PNG per variant, so a new skin is a palette row.
+ * Cosmetic variants recolour the hero hull by tint rather than by shipping a
+ * separate frame per variant, so a new skin is a palette row.
+ *
+ * With nothing equipped this returns the Drifter's own hull colour, NOT white:
+ * the atlas frame is untinted white geometry, so "no cosmetic" has to mean the
+ * default livery rather than no livery at all.
+ *
  * @param {Object|null} cosmetic
  * @returns {number} Pixi tint
  */
 export function cosmeticTint(cosmetic) {
-  if (!cosmetic || !cosmetic.tint) return NO_TINT;
+  if (!cosmetic || !cosmetic.tint) return HERO_TINT;
   return hexToPixi(cosmetic.tint);
 }
 
@@ -144,22 +176,38 @@ export function hexToPixi(hex) {
   return parseInt(String(hex).replace('#', ''), 16);
 }
 
-/** Pixi tints for palette entries the renderer needs on Graphics/particles. */
+/**
+ * Pixi ints for the palette entries the renderer paints on Graphics.
+ *
+ * Only entries the renderer actually uses live here — THEME remains the full
+ * palette. A mirror that drifts ahead of its consumers is just a second place
+ * to look when a colour is wrong.
+ */
 export const PIXI_TINT = {
   heroCore: hexToPixi(THEME.hero.core),
   heroRim: hexToPixi(THEME.hero.rim),
   heroTrail: hexToPixi(THEME.hero.trail),
   heroShield: hexToPixi(THEME.hero.shield),
-  dewdrop: hexToPixi(THEME.offence.dewdrop),
-  petal: hexToPixi(THEME.offence.petal),
+  heroIon: hexToPixi(THEME.hero.ion),
+  /** Phase Repeater bolts. */
+  ion: hexToPixi(THEME.offence.ion),
+  /** Singularity Lance hot core. */
   beam: hexToPixi(THEME.offence.beam),
-  blade: hexToPixi(THEME.offence.blade),
+  /** Aegis Satellite drones. */
+  aegis: hexToPixi(THEME.offence.aegis),
+  /** Hyperion Shield bubble. */
   pulse: hexToPixi(THEME.offence.pulse),
-  tide: hexToPixi(THEME.offence.tide),
+  /** Graviton EMP ring. */
+  graviton: hexToPixi(THEME.offence.graviton),
   orb: hexToPixi(THEME.pickup.orb),
-  warning: hexToPixi(THEME.frutevil.warning),
-  rust: hexToPixi(THEME.frutevil.rust),
-  rustRim: hexToPixi(THEME.frutevil.rustRim),
+  /** Telegraph and eruption. */
+  danger: hexToPixi(THEME.danger.telegraph),
+  hazard: hexToPixi(THEME.danger.hazard),
+  hazardRim: hexToPixi(THEME.danger.hazardRim),
+  /** Bio-acid, for the telegraph's inner ring. */
+  acid: hexToPixi(THEME.bio.acid),
+  /** Swarm carapace black — the enemy health-bar track. */
+  chitin: hexToPixi(THEME.swarm.chitin),
   border: hexToPixi(THEME.background.border),
   grid: hexToPixi(THEME.background.grid),
 };

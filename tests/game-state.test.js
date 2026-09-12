@@ -26,19 +26,35 @@ describe('GameState Engine & Pure Simulation', () => {
     expect(waveStartFn).toHaveBeenCalledWith(expect.objectContaining({ wave: 1, maxEnemies: 14 }));
   });
 
-  it('should countdown wave timer on update() and trigger completeWave()', () => {
+  it('closes the spawn window on update() without ending the wave', () => {
     const bus = new EventBus();
     const waveCompleteFn = vi.fn();
+    const spawnClosedFn = vi.fn();
     bus.on('wave:complete', waveCompleteFn);
+    bus.on('wave:spawn_closed', spawnClosedFn);
 
     const game = new GameState(bus);
     game.startRun();
-    game.update(34.0); // 1 second remaining
+    const window = game.waveTimeRemaining;
+
+    game.update(window - 1); // 1 second of spawning left
+    expect(game.spawnWindowClosed).toBe(false);
     expect(game.currentState).toBe(GAME_STATES.RUNNING);
 
-    game.update(2.0); // timer <= 0
-    expect(game.currentState).toBe(GAME_STATES.WAVE_COMPLETE);
-    expect(waveCompleteFn).toHaveBeenCalledTimes(1);
+    game.update(2.0); // clock runs out
+    expect(game.spawnWindowClosed).toBe(true);
+    expect(spawnClosedFn).toHaveBeenCalledTimes(1);
+    /*
+     * THE WAVE IS NOT OVER. The clock only stops new arrivals; clearing the
+     * field is what ends it, and only the simulation knows whether the field
+     * is clear. Further ticks must not sneak a completion through.
+     */
+    expect(game.currentState).toBe(GAME_STATES.RUNNING);
+    expect(waveCompleteFn).not.toHaveBeenCalled();
+
+    game.update(10.0);
+    expect(spawnClosedFn).toHaveBeenCalledTimes(1);
+    expect(waveCompleteFn).not.toHaveBeenCalled();
   });
 
   it('should handle level up and XP thresholds', () => {

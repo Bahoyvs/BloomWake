@@ -37,7 +37,7 @@
  */
 
 import { CARDS, getCardById } from '../src/data/cards.js';
-import { CARD_MODEL } from '../src/core/constants.js';
+import { CARD_MODEL, PROJECTILE_CFG } from '../src/core/constants.js';
 
 /* ==========================================================================
  * Model assumptions
@@ -61,6 +61,17 @@ export const SCORING = {
    * so a pure-speed passive cannot be scored as if it were pure mitigation.
    */
   SPEED_TO_MITIGATION: 0.5,
+
+  /**
+   * Share of a piercing round's theoretical extra hits that actually land.
+   *
+   * A needle that can pass through N more enemies only does so if N more
+   * enemies are lined up behind the first. The density model says how many are
+   * in the strip; this haircut accounts for the ones that are in the strip but
+   * not on the LINE — the strip integral is an area, and a bolt is a ray
+   * through it.
+   */
+  PIERCE_ALIGNMENT: 0.55,
 
   /**
    * Ceiling on how much a mitigation card may be credited, as a fraction of the
@@ -100,6 +111,14 @@ export const CURRENT = {
   enemyHp: 16.6,
   /** Tarling 64 px/s x mean wave-1..12 speed multiplier (1.165). */
   enemySpeed: 74.6,
+  /**
+   * Size of ONE contact hit, in HP.
+   *
+   * Needed since the Hyperion Shield became a hit-negate rather than an HP
+   * pool: what a charge is worth is the size of the hit it eats, not a rate.
+   * Phase 1 content is Xeno Larva only, whose contactDamage is 8.
+   */
+  meanContactHit: 8,
   /** Mean enemies within radius (px) of the Dewling. */
   densityByRadius: {
     60: 0.43,
@@ -132,6 +151,12 @@ export const SWARM = {
   enemyHp: 34.1,
   /** Spawn-weighted roster mean 74.4 px/s x wave-15 speed multiplier (1.42). */
   enemySpeed: 105.7,
+  /**
+   * Spawn-weighted mean contactDamage across the six non-boss species:
+   * (8*10 + 10*7 + 6*8 + 14*4 + 9*5 + 18*3) / 37 = 9.54.
+   * Contact damage does not scale with wave, so there is no multiplier here.
+   */
+  meanContactHit: 9.5,
   densityByRadius: Object.fromEntries(
     Object.entries(CURRENT.densityByRadius).map(([r, n]) => [r, n * SWARM_SCALE])
   ),
@@ -296,20 +321,46 @@ function survivalExtension(mitigationRate, scenario) {
  * can be scored in a second pass against the build's damage core.
  * ======================================================================== */
 
-const SCORERS = {
-  /** Homing single-target volley: every projectile finds the nearest enemy. */
-  dewdrop_barrage: (lv, s) => ({
-    dps: (effectiveHit(lv.damage, s) * lv.count) / lv.cooldown,
-    note: `${lv.count}x${lv.damage} / ${lv.cooldown}s, single-target`,
-  }),
+/**
+ * Enemies one piercing round actually connects with.
+ *
+ * 1 for the first hit, plus up to `pierce` more — but never more than the
+ * density model says are in the bolt's path, discounted by PIERCE_ALIGNMENT.
+ * The cap is what keeps pierce honest: it is worth almost nothing in the
+ * CURRENT scenario's 20-enemy field and a lot in the 120-enemy SWARM, which is
+ * exactly the behaviour the card is supposed to have.
+ *
+ * @param {number} pierce - Extra enemies the round may pass through
+ * @param {Object} s - Scenario
+ * @returns {number} Expected enemies hit per round
+ */
+function hitsPerPiercingShot(pierce, s) {
+  if (!(pierce > 0)) return 1;
+  const inPath =
+    enemiesInStrip(s, MODEL.PETAL_SWEEP_WIDTH, PROJECTILE_CFG.TARGET_RANGE) *
+    SCORING.PIERCE_ALIGNMENT;
+  return 1 + Math.min(pierce, inPath);
+}
 
-  /** Fixed-direction piercing strip, re-ticking while active. */
-  sunbeam_lance: (lv, s) => {
-    const hit = enemiesInStrip(s, lv.width, MODEL.BEAM_LENGTH);
-    const ticks = lv.duration / MODEL.BEAM_TICK_SEC;
+const SCORERS = {
+  /** Homing volley; from L3 the needles pierce, which is most of the curve. */
+  dewdrop_barrage: (lv, s) => {
+    const hits = hitsPerPiercingShot(lv.pierce ?? 0, s);
     return {
-      dps: (effectiveHit(lv.damage, s) * ticks * hit) / lv.cooldown,
-      note: `${hit.toFixed(2)} in beam x ${ticks.toFixed(1)} ticks`,
+      dps: (effectiveHit(lv.damage, s) * lv.count * hits) / lv.cooldown,
+      note:
+        `${lv.count}x${lv.damage} / ${lv.cooldown}s` +
+        (lv.pierce ? `, pierce ${lv.pierce} (${hits.toFixed(2)} hit/shot)` : ', single-target'),
+    };
+  },
+
+  /** Tesla Arc / Chain Lightning — auto-targets nearest enemy and chains to nearby targets. */
+  sunbeam_lance: (lv, s) => {
+    const totalTargets = 1 + (lv.bounces ?? 1);
+    const hit = Math.min(totalTargets, s.activeEnemies);
+    return {
+      dps: (effectiveHit(lv.damage, s) * hit) / lv.cooldown,
+      note: `${hit} targets hit (${lv.bounces ?? 1} bounces) / ${lv.cooldown}s`,
     };
   },
 
@@ -334,31 +385,50 @@ const SCORERS = {
     };
   },
 
-  /** Periodic ring blast centred on the Dewling. */
-  aurora_pulse: (lv, s) => {
-    const hit = enemiesWithin(s, lv.radius);
-    return {
-      dps: (effectiveHit(lv.damage, s) * hit) / lv.cooldown,
-      note: `${hit.toFixed(2)} in radius ${lv.radius}`,
-    };
-  },
+  /**
+   * Nanite Swarm — guided micro-missiles, so effectively every one connects.
+   *
+   * Scored as pure single-target, with no density term at all. That is the
+   * point of the card and also its ceiling: it cannot benefit from a crowd the
+   * way the AoE ring it replaced did, so its numbers can be generous without
+   * the SWARM projection running away with them.
+   */
+  aurora_pulse: (lv, s) => ({
+    dps: (effectiveHit(lv.damage, s) * lv.count) / lv.cooldown,
+    note: `${lv.count}x${lv.damage} guided / ${lv.cooldown}s, highest-HP target`,
+  }),
 
-  /** Pure mitigation: absorbs shieldHp every rechargeTime seconds. */
+  /**
+   * Hyperion Shield — negates ONE hit per rechargeTime.
+   *
+   * Worth `meanContactHit` HP every cycle, which is a rate the same mitigation
+   * machinery can score. Note it can no longer read [IMMUNE] at any level in
+   * either scenario: a single hit per cycle is bounded by definition, where the
+   * old draining HP pool could out-heal the incoming rate outright.
+   */
   bloomshield: (lv, s) => {
-    const rate = lv.shieldHp / lv.rechargeTime;
+    const rate = (s.meanContactHit * (lv.negates ?? 1)) / lv.rechargeTime;
     const { extension, immune, capped } = survivalExtension(rate, s);
     return {
       utilityOf: (core) => core * extension,
       note:
-        `${rate.toFixed(2)} HP/s vs ${s.incomingDpsUnderPressure.toFixed(1)} incoming` +
+        `1 hit / ${lv.rechargeTime}s = ${rate.toFixed(2)} HP/s vs ` +
+        `${s.incomingDpsUnderPressure.toFixed(1)} incoming` +
         `${immune ? ' [IMMUNE]' : ''}${capped ? ' [capped]' : ''}`,
       immune,
     };
   },
 
   /**
-   * Multiplicative passive: scales the whole build, plus dodge from speed.
-   * The speed half is routed through the same mitigation cap as the shields so
+   * Tactical Wingman — a multiplicative passive AND a pair of turrets.
+   *
+   * The drone bolts are scored as flat single-target DPS (additive), while the
+   * stat half still scales the whole build (multiplicative). Splitting them
+   * matters: it is the only card that contributes to both the damage core and
+   * the utility pass, and folding the drones into the multiplier would let
+   * them scale off themselves.
+   *
+   * The speed bonus is routed through the same mitigation cap as the shields so
    * a passive cannot sidestep the defensive ceiling.
    */
   buddy_boost: (lv, s) => {
@@ -367,18 +437,32 @@ const SCORERS = {
       dodgeFraction * s.incomingDpsUnderPressure,
       s
     );
+    const drones = lv.drones ?? 0;
+    const droneDps = drones
+      ? (effectiveHit(lv.droneDamage, s) * drones) / lv.droneCooldown
+      : 0;
     return {
+      dps: droneDps,
       utilityOf: (core) => core * lv.damageBonus + core * extension,
-      note: `+${(lv.damageBonus * 100).toFixed(0)}% dmg, +${(lv.moveSpeedBonus * 100).toFixed(0)}% spd`,
+      note:
+        `${drones} drone x${lv.droneDamage} / ${lv.droneCooldown}s, ` +
+        `+${(lv.damageBonus * 100).toFixed(0)}% dmg, +${(lv.moveSpeedBonus * 100).toFixed(0)}% spd`,
     };
   },
 
-  /** AoE damage plus knockback, which buys back contact-damage-free seconds. */
+  /**
+   * Graviton EMP — AoE damage, knockback AND a flat stun.
+   *
+   * Contact-free time per cycle is `stun + walk-back`: the enemy is frozen for
+   * CARD_MODEL.EMP_STUN_SEC and then has to cover the knockback distance
+   * again. Both halves have to be in the model or the card scores as the
+   * pre-stun version and its cooldown curve looks unnecessarily long.
+   */
   tidewave: (lv, s) => {
     const hit = enemiesWithin(s, lv.radius);
     const direct = (effectiveHit(lv.damage, s) * hit) / lv.cooldown;
     const returnTime = lv.knockback / s.enemySpeed;
-    const uptime = Math.min(1, returnTime / lv.cooldown);
+    const uptime = Math.min(1, (returnTime + MODEL.EMP_STUN_SEC) / lv.cooldown);
     const { extension, immune, capped } = survivalExtension(
       uptime * s.incomingDpsUnderPressure,
       s
@@ -387,7 +471,7 @@ const SCORERS = {
       dps: direct,
       utilityOf: (core) => core * extension,
       note:
-        `${hit.toFixed(2)} hit, ${(uptime * 100).toFixed(0)}% pushed off` +
+        `${hit.toFixed(2)} hit, ${(uptime * 100).toFixed(0)}% off (stun+push)` +
         `${immune ? ' [IMMUNE]' : ''}${capped ? ' [capped]' : ''}`,
       immune,
     };

@@ -40,14 +40,29 @@ describe('Wave Calculations & Formulas (GDD Section 6)', () => {
   });
 
   it('should calculate Rustwhale boss HP based on wave tier', () => {
-    // 400 + (wave/5) * 250
-    expect(getBossHp(5)).toBe(650); // Tier 1: 400 + 250
-    expect(getBossHp(10)).toBe(900); // Tier 2: 400 + 500
-    expect(getBossHp(15)).toBe(1150); // Tier 3: 400 + 750
+    // 1000 + (wave/5) * 625 (Base HP x 2.5)
+    expect(getBossHp(5)).toBe(1625); // Tier 1: 1000 + 625
+    expect(getBossHp(10)).toBe(2250); // Tier 2: 1000 + 1250
+    expect(getBossHp(15)).toBe(2875); // Tier 3: 1000 + 1875
   });
 
-  it('should provide default wave duration', () => {
-    expect(getWaveDuration(1)).toBe(35);
-    expect(getWaveDuration(5)).toBe(35);
+  it('opens the spawn window at the floor and ramps it to the ceiling', () => {
+    // getWaveDuration is the SPAWN WINDOW, not the wave length — a wave now
+    // ends when the field is empty. See the note on the function.
+    expect(getWaveDuration(1)).toBe(WAVE_CONSTANTS.WAVE_SPAWN_SEC_MIN);
+    expect(getWaveDuration(WAVE_CONSTANTS.WAVE_SPAWN_RAMP_TO)).toBe(
+      WAVE_CONSTANTS.WAVE_SPAWN_SEC_MAX
+    );
+    // Holds at the ceiling rather than growing without bound.
+    expect(getWaveDuration(50)).toBe(WAVE_CONSTANTS.WAVE_SPAWN_SEC_MAX);
+  });
+
+  it('ramps the spawn window monotonically', () => {
+    let previous = 0;
+    for (let wave = 1; wave <= 15; wave++) {
+      const duration = getWaveDuration(wave);
+      expect(duration).toBeGreaterThanOrEqual(previous);
+      previous = duration;
+    }
   });
 });

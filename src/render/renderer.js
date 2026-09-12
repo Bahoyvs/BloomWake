@@ -1,26 +1,35 @@
 /**
- * PixiJS sprite renderer (Phase 6b).
+ * PixiJS sprite renderer.
  *
- * Replaces the Phase 6 immediate-mode Canvas 2D renderer. Entities are sprites;
- * only VFX with no authored art (AoE rings, beam, blades, telegraph, arena
- * edge) remain vector, drawn as PIXI.Graphics.
+ * Entities are sprites; only VFX with no authored art (AoE rings, the lance,
+ * satellites, telegraph, arena edge) remain vector, drawn as PIXI.Graphics.
  *
  * LAYERING
  * Z_ORDER from theme.js is realised as real Containers added in order, so the
- * Visual Soup rule — nothing paints above the Dewling — is now structural
+ * Visual Soup rule — nothing paints above the Drifter — is now structural
  * rather than a convention about call order. Adding a draw call in the wrong
  * place cannot break it; you would have to add it to the wrong container.
  *
  * PERFORMANCE
  * Sprites are pooled per texture key and parked with `visible = false` instead
- * of being removed, so a wave wipe costs no display-list churn. Pixi batches
- * same-texture sprites automatically, which is the whole reason for the pivot.
+ * of being removed, so a wave wipe costs no display-list churn. Every swarm
+ * hull comes off ONE atlas and differs only by tint, so Pixi batches all 200 of
+ * them into a single draw call — which is what makes the Chitin Swarm's density
+ * affordable in the first place.
+ *
+ * THE BOSS IS THE ONE EXCEPTION. The Dreadnought Station is a five-sprite
+ * composite (see src/render/sprite-factory.js) rather than a single pooled
+ * Sprite, so every path that touches a view — acquire, park, tint, scale —
+ * has to handle both shapes. That is the cost of the boss reading as a machine
+ * at 200px, and it is paid in this file so nothing else has to know.
  */
 
-import { Application, Container, Graphics, Sprite, TilingSprite } from 'pixi.js';
-import { WORLD, PLAYER_CFG } from '../core/constants.js';
+import { Application, Container, Graphics, Sprite } from 'pixi.js';
+import { WORLD, PLAYER_CFG, UNIT_PX } from '../core/constants.js';
 import { clamp } from '../core/math.js';
 import { assets as defaultAssets, ASSET_KEYS } from '../core/assets.js';
+import { CHARGE_STATE } from '../core/simulation.js';
+import { ENEMIES } from '../data/enemies.js';
 import { EVENTS } from '../core/event-bus.js';
 import {
   ANIM_STATES,
@@ -32,10 +41,10 @@ import { SpriteAnimator } from './spriteAnimator.js';
 import { createSlicer, formatMissingSheetReport, loadAnimationManifests } from './sheet-probe.js';
 import { applyJuice, createTransform, resetTransform, sharedCycleFrame, DEATH_DISSOLVE_SEC } from './juice.js';
 import {
-  AFTERIMAGE,
   BOSS_FX,
   HERO_FX,
   MOVE_WAKE,
+  RECOIL,
   attackRecoil,
   bossStateTransform,
   heroStateTransform,
@@ -44,7 +53,7 @@ import {
   wakeDue,
 } from './state-fx.js';
 import { Background } from './background.js';
-import { THEME, getEnemyPalette } from './theme.js';
+import { PALETTE, THEME } from './theme.js';
 import {
   makeSprite,
   scaleForRadius,
@@ -53,15 +62,72 @@ import {
   enemyTextureKey,
   cosmeticTint,
   HERO_TEXTURE_KEY,
+  HULL_ROTATION_OFFSET,
   PIXI_TINT,
   NO_TINT,
   DAMAGE_TINT,
 } from './sprites.js';
+import {
+  DEATH_SPRAY,
+  DREADNOUGHT,
+  THRUSTER,
+  createDreadnought,
+  getDreadnoughtParts,
+  dreadnoughtPulse,
+  enemyTint,
+  getEnemyView,
+  thrusterFlame,
+} from './sprite-factory.js';
 import { ParticleSystem } from './particles.js';
 import { ScreenShake, TRAUMA } from './screen-shake.js';
 
 const TRAIL_SAMPLES = 14;
 const GRID_SIZE = 140;
+
+/**
+ * Hull visual diameter as a multiple of the player's collision diameter.
+ *
+ * The hero frame carries wings well outside its hitbox, which is intended: the
+ * ship should look like it occupies more space than it can be hit in, and a
+ * generous hull is what makes the canopy and wing plates legible at all. It is
+ * also the only sprite the player looks at for a whole run, so it is the one
+ * worth spending pixels on.
+ */
+const HERO_FIT = 2.6;
+
+/**
+ * Fraction of the remaining turn the hull closes per 60Hz frame.
+ *
+ * The other half of giving the ship mass. Positional inertia alone still reads
+ * as mechanical if the hull can swap facing between two frames; at 0.15 a
+ * full reversal takes roughly a fifth of a second to come round, which is slow
+ * enough to see and fast enough not to fight.
+ */
+const HERO_TURN_LERP = 0.15;
+
+/**
+ * Step an angle toward a target along the SHORT arc, frame-rate independent.
+ *
+ * Wrapping is the whole difficulty: lerping 170deg toward -170deg the naive
+ * way sends the hull the long way round, spinning through a full turn to cover
+ * 20 degrees. Normalising the delta into (-PI, PI] first picks the short arc.
+ *
+ * @param {number} current - Radians
+ * @param {number} target - Radians
+ * @param {number} lerp - Fraction closed per 60Hz frame
+ * @param {number} dt - Seconds
+ * @returns {number} Radians
+ */
+export function approachAngle(current, target, lerp, dt) {
+  let delta = (target - current) % (Math.PI * 2);
+  if (delta > Math.PI) delta -= Math.PI * 2;
+  if (delta < -Math.PI) delta += Math.PI * 2;
+
+  // Exponential approach, so a slow frame turns as far as the frames it
+  // replaced rather than lagging behind.
+  const k = 1 - Math.pow(1 - lerp, dt * 60);
+  return current + delta * k;
+}
 
 /**
  * Pull the minimum display times out of an FX table for the animator.
@@ -132,13 +198,17 @@ export class Renderer {
     this.bossAnimator = null;
     /** Boss entity id currently bound to bossAnimator. */
     this.bossId = null;
-    /** Last non-zero travel of the Dewling, for the sprite flip and the wake. */
+    /** Last non-zero travel of the Drifter, for the sprite flip and the wake. */
     this.lastPlayerDx = 0;
     this.lastPlayerDy = 0;
-    this.lastPlayerX = undefined;
-    this.lastPlayerY = undefined;
+    /** Hull angle, interpolated toward the travel heading rather than assigned. */
+    this.heroFacing = 0;
+    /** 0..1 engine throttle, from the simulation's velocity. */
+    this.throttle = 0;
     /** Direction of the most recent shot, for the muzzle spray and recoil. */
     this.lastFireAngle = 0;
+    /** Seconds left on the hard recoil kick. See drawPlayer. */
+    this.recoilTimer = 0;
 
     /**
      * Views of enemies that have died but are still dissolving. The simulation
@@ -178,7 +248,7 @@ export class Renderer {
       canvas,
       width: window.innerWidth,
       height: window.innerHeight,
-      backgroundColor: 0x03080f,
+      backgroundColor: PALETTE.background,
       antialias: true,
       resolution: Math.min(window.devicePixelRatio || 1, 2),
       autoDensity: true,
@@ -224,7 +294,9 @@ export class Renderer {
   }
 
   buildBackground() {
-    this.backgroundSystem = new Background(this.app);
+    this.backgroundSystem = new Background(this.app, {
+      voidTile: this.assets.get(ASSET_KEYS.BG_VOID),
+    });
     this.backgroundLayer.addChild(this.backgroundSystem.container);
   }
 
@@ -240,84 +312,120 @@ export class Renderer {
     this.telegraphGfx = new Graphics();
     this.effectGfx = new Graphics();
     this.beamGfx = new Graphics();
-    this.bladeGfx = new Graphics();
     this.healthGfx = new Graphics();
     this.trailGfx = new Graphics();
     this.shieldGfx = new Graphics();
 
     this.layers.hazard.addChild(this.hazardGfx);
     this.layers.telegraph.addChild(this.telegraphGfx);
-    this.layers.cardEffect.addChild(this.effectGfx, this.beamGfx, this.bladeGfx);
+    this.layers.cardEffect.addChild(this.effectGfx, this.beamGfx);
     this.layers.enemy.addChild(this.healthGfx);
     this.layers.playerTrail.addChild(this.trailGfx);
     this.layers.player.addChild(this.shieldGfx);
   }
 
   buildPlayer() {
-    // Ghosts live in the trail layer so they always sit BEHIND the Dewling —
-    // an afterimage drawn over the character reads as a rendering fault.
-    this.afterimages = [];
-    for (let i = 0; i < AFTERIMAGE.poolSize; i++) {
-      const sprite = makeSprite(this.assets.get(HERO_TEXTURE_KEY));
-      sprite.visible = false;
-      this.layers.playerTrail.addChild(sprite);
-      this.afterimages.push({ sprite, life: 0, baseX: 1, baseY: 1 });
-    }
-    /** Seconds banked toward the next ghost and the next wake droplet. */
-    this.afterimageTimer = 0;
+    /*
+     * THERE IS NO AFTERIMAGE POOL ANY MORE.
+     *
+     * The Drifter used to stamp seven translucent copies of its own sprite
+     * behind it while moving. In a game whose stated headline risk is the
+     * player losing track of their own hull in a crowd, drawing six extra
+     * hulls attached to it is working against the one thing the whole palette
+     * is built to guarantee — and it was a soft, smeary effect on hardware that
+     * is meant to read as machined.
+     *
+     * What replaces it is exhaust: hard sparks off the two nozzles (see
+     * emitContinuousFx) plus the existing motion trail, neither of which is
+     * ship-shaped.
+     */
+    /** Seconds banked toward the next exhaust emission. */
     this.wakeTimer = 0;
 
     this.heroSprite = makeSprite(this.assets.get(HERO_TEXTURE_KEY));
     this.layers.player.addChild(this.heroSprite);
+
+    this.shieldSprite = makeSprite(this.assets.get(ASSET_KEYS.SHIELD));
+    this.shieldSprite.anchor.set(0.5);
+    this.shieldSprite.tint = PIXI_TINT.heroShield;
+    this.shieldSprite.visible = false;
+    this.layers.player.addChild(this.shieldSprite);
+
+    /*
+     * Twin engine flames.
+     *
+     * Anchored at (0.5, 0) — the TOP of the flame frame — so the sprite grows
+     * away from the nozzle it is pinned to rather than around its own centre.
+     * With the hull's rotation applied, sprite-local +Y points astern, which is
+     * exactly where a flame should go.
+     *
+     * They live in the trail layer, so they can never paint over the hull.
+     */
+    /** Where the flames ended up this frame; the exhaust spawns from here. */
+    this.nozzles = [
+      { x: 0, y: 0 },
+      { x: 0, y: 0 },
+    ];
+
+    this.thrusters = [-1, 1].map(() => {
+      const flame = new Sprite(this.assets.get(ASSET_KEYS.THRUSTER));
+      flame.anchor.set(0.5, 0);
+      flame.tint = THRUSTER.tint;
+      flame.visible = false;
+      this.layers.playerTrail.addChild(flame);
+      return flame;
+    });
   }
 
   /**
-   * Stamp a ghost of the Dewling's current pose at its current position.
+   * Place and size the engine flames behind the hull.
    *
-   * Reuses the oldest slot rather than allocating, so the effect is bounded at
-   * AFTERIMAGE.poolSize sprites no matter how long the player runs.
+   * Everything is derived from the hull's rendered diameter and its current
+   * facing, so the exhausts stay glued to the ship at any scale and through
+   * every turn. Length and alpha ride the throttle, which is why a coasting
+   * Drifter shows two dim pilot lights and a burning one shows two long
+   * flames — the clearest read the player gets that thrust and motion are now
+   * different things.
+   *
+   * @param {number} originX - Hull position, after recoil
+   * @param {number} originY
    */
-  placeAfterimage() {
-    let slot = this.afterimages[0];
-    for (const candidate of this.afterimages) {
-      if (candidate.life < slot.life) slot = candidate;
-    }
+  drawThrusters(originX, originY) {
+    if (!this.thrusters) return;
 
-    const hero = this.heroSprite;
-    slot.sprite.texture = hero.texture;
-    slot.sprite.x = hero.x;
-    slot.sprite.y = hero.y;
-    slot.sprite.rotation = hero.rotation;
-    // The pose is captured ONCE here. updateAfterimages must scale from this
-    // baseline rather than from the sprite's live scale, or the per-frame
-    // shrink compounds and the ghost collapses to nothing in a few frames.
-    slot.baseX = hero.scale.x;
-    slot.baseY = hero.scale.y;
-    slot.sprite.scale.set(slot.baseX, slot.baseY);
-    slot.sprite.tint = PIXI_TINT.heroTrail;
-    slot.sprite.visible = true;
-    slot.life = AFTERIMAGE.life;
-  }
+    const texture = this.assets.get(ASSET_KEYS.THRUSTER);
+    const hullDiameter = PLAYER_CFG.RADIUS * 2 * HERO_FIT;
+    const burn = thrusterFlame(this.throttle ?? 0, this.time);
 
-  /**
-   * Fade every live ghost and park the expired ones.
-   * @param {number} dt
-   */
-  updateAfterimages(dt) {
-    for (const slot of this.afterimages) {
-      if (slot.life <= 0) continue;
-      slot.life -= dt;
+    const angle = this.heroFacing - HULL_ROTATION_OFFSET;
+    const backX = -Math.cos(angle);
+    const backY = -Math.sin(angle);
+    // Perpendicular, to split the pair across the ship's beam.
+    const sideX = -Math.sin(angle);
+    const sideY = Math.cos(angle);
 
-      if (slot.life <= 0) {
-        slot.sprite.visible = false;
+    for (let i = 0; i < this.thrusters.length; i++) {
+      const flame = this.thrusters[i];
+      const side = i === 0 ? -1 : 1;
+
+      if (!this.heroSprite.visible) {
+        flame.visible = false;
         continue;
       }
 
-      const t = slot.life / AFTERIMAGE.life;
-      slot.sprite.alpha = t * AFTERIMAGE.alpha;
-      // Shrink slightly as it fades so the ghosts recede rather than just dim.
-      const shrink = 0.82 + t * 0.18;
-      slot.sprite.scale.set(slot.baseX * shrink, slot.baseY * shrink);
+      flame.visible = true;
+      flame.rotation = this.heroFacing;
+      flame.alpha = burn.alpha * this.heroSprite.alpha;
+      flame.x = originX + backX * hullDiameter * THRUSTER.back + sideX * hullDiameter * THRUSTER.side * side;
+      flame.y = originY + backY * hullDiameter * THRUSTER.back + sideY * hullDiameter * THRUSTER.side * side;
+
+      flame.scale.x = (hullDiameter * THRUSTER.width) / Math.max(texture?.width || 1, 1);
+      flame.scale.y = (hullDiameter * burn.length) / Math.max(texture?.height || 1, 1);
+
+      // Remembered so the exhaust particles can be shed from the nozzles
+      // rather than from the middle of the ship.
+      this.nozzles[i].x = flame.x;
+      this.nozzles[i].y = flame.y;
     }
   }
 
@@ -326,12 +434,15 @@ export class Renderer {
 
     bus.on('enemy:damaged', (data) => {
       if (data.x === undefined) return;
-      this.particles.burst(data.x, data.y, THEME.offence.dewdrop, 3);
+      this.particles.burst(data.x, data.y, THEME.offence.ion, 3);
       this.shake.add(TRAUMA.ENEMY_HIT);
     });
 
     bus.on('enemy:death', (data) => {
-      this.particles.death(data.x, data.y, getEnemyPalette(data.typeId), data.radius);
+      // Bio-acid and hive magenta, NOT the enemy's own tint — a corpse burst
+      // painted in the body colour vanishes into the enemies still alive
+      // around it. See DEATH_SPRAY.
+      this.particles.death(data.x, data.y, DEATH_SPRAY, data.radius);
       this.beginDissolve(data);
       if (data.isBoss) this.shake.add(TRAUMA.BOSS_SPAWN);
     });
@@ -372,14 +483,16 @@ export class Renderer {
 
     bus.on('player:damage', () => {
       const p = this.sim.state.player;
-      this.particles.burst(p.x, p.y, THEME.frutevil.warning, 10);
+      this.particles.burst(p.x, p.y, THEME.danger.telegraph, 10);
       this.shake.add(TRAUMA.PLAYER_DAMAGE);
     });
 
     // Captured before the animation state arrives, so the muzzle spray and the
-    // recoil both know which way the shot went.
+    // recoil both know which way the shot went. Firing also arms the kick,
+    // which runs on its own short clock rather than the attack state's.
     bus.on(EVENTS.WEAPON_FIRE, (data) => {
       if (typeof data?.angle === 'number') this.lastFireAngle = data.angle;
+      this.recoilTimer = RECOIL.duration;
     });
 
     bus.on('orb:collected', () => {
@@ -399,8 +512,8 @@ export class Renderer {
     bus.on('boss:telegraph_erupt', (data) => {
       const x = data?.x ?? this.sim.state.player.x;
       const y = data?.y ?? this.sim.state.player.y;
-      this.particles.ring(x, y, data?.radius ?? 160, THEME.frutevil.warning);
-      this.particles.burst(x, y, THEME.frutevil.warning, 18);
+      this.particles.ring(x, y, data?.radius ?? 160, THEME.danger.telegraph);
+      this.particles.burst(x, y, THEME.danger.telegraph, 18);
       this.shake.add(TRAUMA.BOSS_ERUPT);
     });
 
@@ -415,10 +528,6 @@ export class Renderer {
     for (const id of [...this.enemyViews.keys()]) this.releaseEnemyView(id);
     for (const view of this.dyingViews) this.parkSprite(view);
     this.dyingViews.length = 0;
-    for (const slot of this.afterimages) {
-      slot.sprite.visible = false;
-      slot.life = 0;
-    }
     this.bossId = null;
     this.bossAnimator = null;
     this.heroAnimator.forceState(ANIM_STATES.IDLE);
@@ -446,11 +555,18 @@ export class Renderer {
   /* ------------------------------------------------------------------ */
 
   /**
-   * Take a sprite for a texture key, reusing a parked one when available.
+   * Take a display object for a texture key, reusing a parked one when
+   * available.
+   *
+   * `composite` asks for the boss's two-layer container instead of a plain
+   * Sprite. Both shapes pool under the same key, because a key only ever
+   * belongs to one or the other.
+   *
    * @param {string} key
-   * @returns {Sprite}
+   * @param {boolean} [composite]
+   * @returns {Sprite|Container}
    */
-  acquireSprite(key) {
+  acquireSprite(key, composite = false) {
     let pool = this.spritePools.get(key);
     if (!pool) {
       pool = [];
@@ -463,13 +579,21 @@ export class Renderer {
       return parked;
     }
 
-    const sprite = makeSprite(this.assets.get(key));
-    this.layers.enemy.addChild(sprite);
-    return sprite;
+    const display = composite
+      ? createDreadnought(
+        this.assets.get(key),
+        this.assets.get(ASSET_KEYS.DREADNOUGHT_TURRET),
+        this.assets.get(ASSET_KEYS.DREADNOUGHT_REACTOR),
+        this.assets.get(ASSET_KEYS.DREADNOUGHT_BEAM)
+      ).container
+      : makeSprite(this.assets.get(key));
+    this.layers.enemy.addChild(display);
+    return display;
   }
 
   /**
-   * Park a sprite rather than destroying it — no display-list churn on a wipe.
+   * Park a display object rather than destroying it — no display-list churn on
+   * a wipe.
    *
    * Every property the animation layer may have changed is reset here, because
    * the next enemy to take this sprite inherits whatever it is left in. A
@@ -480,10 +604,12 @@ export class Renderer {
   parkSprite(view) {
     const sprite = view.sprite;
     sprite.visible = false;
-    sprite.tint = NO_TINT;
     sprite.alpha = 1;
     sprite.rotation = 0;
     sprite.scale.set(view.baseScale);
+    // A Container has no tint of its own, so the composite's layers are reset
+    // through the tintTargets list the factory handed back.
+    for (const target of view.tintTargets) target.tint = NO_TINT;
     this.spritePools.get(view.key)?.push(sprite);
   }
 
@@ -519,16 +645,16 @@ export class Renderer {
 
     this.drawHazards();
     this.drawTelegraph();
+    this.drawLockOns();
+    this.drawDeathRay();
+    this.drawEnemyBullets();
     this.drawEffects();
     this.drawBeam();
-    this.drawBlades();
+    this.drawSatellites();
+    this.drawWingmen();
     this.drawHealthBars();
     this.drawTrail();
     this.drawPlayer(dt);
-    // Ghosts fade on their own clock, outside drawPlayer — which returns early
-    // during the invulnerability blink and would otherwise freeze them
-    // mid-fade for the whole 0.7s window.
-    this.updateAfterimages(dt);
     this.drawShield();
     this.scrollBackdrop(dt);
 
@@ -583,12 +709,12 @@ export class Renderer {
 
     switch (spec.kind) {
       case 'burst': {
-        // Muzzle blast: a cone down the firing line, thrown from the Dewling's
+        // Muzzle blast: a cone down the firing line, thrown from the Drifter's
         // edge rather than its centre so it leaves the body instead of
         // erupting out of it. A radial burst here said "something happened";
         // an aimed cone says "the shot went THAT way".
         const angle = this.lastFireAngle;
-        this.particles.spray(player.x, player.y, angle, THEME.offence.dewdrop, {
+        this.particles.spray(player.x, player.y, angle, THEME.offence.ion, {
           count: spec.count,
           spread: 0.42,
           speed: 190,
@@ -604,15 +730,15 @@ export class Renderer {
         break;
       }
       case 'impact':
-        this.particles.burst(player.x, player.y, THEME.frutevil.warning, spec.count);
-        this.particles.ring(player.x, player.y, PLAYER_CFG.RADIUS * 3.4, THEME.frutevil.warning);
+        this.particles.burst(player.x, player.y, THEME.danger.telegraph, spec.count);
+        this.particles.ring(player.x, player.y, PLAYER_CFG.RADIUS * 3.4, THEME.danger.telegraph);
         break;
       case 'dissolve':
         this.particles.bubbles(player.x, player.y, THEME.hero.rim, spec.count);
         this.particles.ring(player.x, player.y, PLAYER_CFG.RADIUS * 6, THEME.hero.rim);
         break;
       case 'ring':
-        this.particles.ring(player.x, player.y, PLAYER_CFG.RADIUS * 5, THEME.frutevil.warning);
+        this.particles.ring(player.x, player.y, PLAYER_CFG.RADIUS * 5, THEME.danger.telegraph);
         break;
       default:
         break;
@@ -620,29 +746,31 @@ export class Renderer {
   }
 
   /**
-   * Horizontal travel direction of the Dewling, for the Tier A sprite flip.
+   * Travel heading and throttle for the Drifter.
    *
-   * The simulation stores the player's position but not its velocity, and
-   * adding one purely for a render concern would push a render need into
-   * src/core/. Differencing the position here keeps that boundary intact. The
-   * zero-motion case deliberately leaves the last facing alone, so a Dewling
-   * that stops does not snap back to facing right.
+   * Read straight off the simulation's velocity. This used to difference the
+   * player's position frame to frame, because momentum did not exist and there
+   * was nothing else to read — which meant it also picked up the position
+   * clamp at the arena edge and reported a ship pinned against a wall as
+   * stationary. Now that the ship carries real velocity (PLAYER_CFG.ACCEL),
+   * using it is both simpler and more honest.
+   *
+   * The zero-motion case deliberately leaves the last heading alone, so a
+   * Drifter that comes to rest keeps pointing the way it was going.
    */
   trackPlayerFacing() {
-    const { x, y } = this.sim.state.player;
+    const vx = this.sim.playerVx ?? 0;
+    const vy = this.sim.playerVy ?? 0;
 
-    if (this.lastPlayerX !== undefined) {
-      const dx = x - this.lastPlayerX;
-      const dy = y - this.lastPlayerY;
-      // Both axes: dx drives the sprite flip and the lean, and the pair gives
-      // the wake a real travel heading so droplets trail the actual path
-      // rather than always shedding horizontally.
-      if (dx !== 0) this.lastPlayerDx = dx;
-      if (dx !== 0 || dy !== 0) this.lastPlayerDy = dy;
+    if (vx !== 0 || vy !== 0) {
+      this.lastPlayerDx = vx;
+      this.lastPlayerDy = vy;
     }
 
-    this.lastPlayerX = x;
-    this.lastPlayerY = y;
+    const speed = Math.hypot(vx, vy);
+    const top = this.sim.state.player.moveSpeed * this.sim.cards.moveSpeedMultiplier * UNIT_PX;
+    /** 0 (drifting) .. 1 (full burn) — drives the engine flames. */
+    this.throttle = top > 0 ? clamp(speed / top, 0, 1) : 0;
   }
 
   recordTrail() {
@@ -664,9 +792,17 @@ export class Renderer {
     if (view) return view;
 
     const key = enemyTextureKey(enemy.typeId);
-    const sprite = this.acquireSprite(key);
+    const sprite = this.acquireSprite(key, Boolean(enemy.isBoss));
     const config = getEnemySpriteConfig(enemy.typeId);
-    const baseScale = scaleForRadius(sprite.texture, enemy.radius, config.fit);
+    const parts = getDreadnoughtParts(sprite);
+
+    // The composite normalises its layers to a 1x1 box, so its scale IS the
+    // world diameter and needs no texture width in the maths. A plain sprite
+    // still derives its scale from the frame it happens to be drawn at.
+    const baseScale = parts
+      ? enemy.radius * 2
+      : scaleForRadius(sprite.texture, enemy.radius, config.fit);
+
     sprite.scale.set(baseScale);
     sprite.alpha = 1;
 
@@ -674,6 +810,19 @@ export class Renderer {
       sprite,
       baseScale,
       key,
+      /** Species colour. Overwritten by the damage flash for one frame. */
+      tint: enemyTint(enemy.typeId),
+      /** Presentation row: bioluminescence, sway, per-species scale. */
+      view: getEnemyView(enemy.typeId),
+      /** Every sprite a tint has to reach — one, or the composite's three. */
+      tintTargets: parts ? parts.tintTargets : [sprite],
+      parts,
+      /**
+       * The reactor's normalised scale, captured before anything animates it.
+       * Its swell multiplies this rather than the live value, or the swell
+       * would compound frame over frame and the core would inflate off-screen.
+       */
+      reactorScale: parts ? parts.reactor.scale.x : 1,
       // Dissolve snapshot, filled in on death.
       typeId: enemy.typeId,
       x: 0,
@@ -709,7 +858,7 @@ export class Renderer {
 
       // TIER B — the whole swarm animation system, one shared transform.
       applyJuice(enemy, t, this.juiceTransform);
-      syncEnemySprite(view, enemy, this.juiceTransform);
+      syncEnemySprite(view, enemy, this.juiceTransform, t);
       this.applySwarmCycle(view, enemy, t);
 
       // Track the last velocity so a corpse keeps facing the way it swam
@@ -727,8 +876,28 @@ export class Renderer {
   }
 
   /**
-   * TIER A for the boss. Bound lazily because the Rustwhale only exists on boss
-   * waves, and rebound if a later wave spawns a new one.
+   * TIER A for the Dreadnought Station. Bound lazily because the boss only
+   * exists on boss waves, and rebound if a later wave spawns a new one.
+   *
+   * Four motions stack here, and they are deliberately independent:
+   *
+   *   1. The Tier A state FX (hit lurch, telegraph wind-up, death) — authored
+   *      reactions, driven by the animator.
+   *   2. A slow axial SPIN. This is the signal that the station is under power;
+   *      at DREADNOUGHT.spin it takes most of a minute to come round, which
+   *      reads as mass rather than as motion.
+   *   3. A shallow scale pulse between DREADNOUGHT.scaleMin and scaleMax, so
+   *      the hull is never perfectly static between attacks.
+   *   4. The reactor's glow and swell, and the turrets' slow sweep — each on
+   *      its own clock, so the parts never look welded into one sprite.
+   *
+   * Stacking rather than switching is what keeps the boss alive through its
+   * quiet frames without the pulse ever fighting an authored pose: the pulse
+   * multiplies the FX scale, so a death clip's collapse still wins.
+   *
+   * THE BOSS DOES NOT FACE ITS TRAVEL. Everything else on screen turns to point
+   * where it is going; a station does not, and making it do so would undo the
+   * whole "heavy, indifferent" read. Its rotation is the spin alone.
    *
    * @param {Object} view
    * @param {Object} boss
@@ -745,10 +914,10 @@ export class Renderer {
     }
 
     const sprite = view.sprite;
+    const parts = view.parts;
     sprite.x = boss.x;
     sprite.y = boss.y;
     sprite.alpha = 1;
-    sprite.tint = boss.hitFlash > 0 ? DAMAGE_TINT : NO_TINT;
 
     this.bossAnimator.update(dt);
     this.bossAnimator.setFacing(boss.vx);
@@ -758,22 +927,50 @@ export class Renderer {
       duration: this.bossAnimator.fallbackDuration,
     });
 
+    // Authored frames, when the art exists, replace the keel only — the
+    // turrets and the reactor are this renderer's own layers, never in a sheet.
     if (!this.bossAnimator.isFallback) {
       const texture = this.bossAnimator.currentTexture();
-      if (texture) sprite.texture = texture;
+      if (texture) {
+        if (parts) parts.spine.texture = texture;
+        else sprite.texture = texture;
+      }
     }
 
-    // Facing travel is the boss's baseline pose; the FX rotation is a lean on
-    // top of it, not a replacement. A multi-frame strip is authored facing +X
-    // and uses the flip instead, so it keeps rotation at 0.
-    const usesStrip = !this.bossAnimator.isFallback && !this.bossAnimator.isStaticPose();
-    const facing = usesStrip ? 0 : Math.atan2(boss.vy, boss.vx);
+    // The reactor visibly spins up while a death ray is charging, which is the
+    // only warning the player gets before the cone appears.
+    const charging = this.sim.deathRay?.active && !this.sim.deathRay.firing;
+    const pulse = dreadnoughtPulse(this.time, fx, Boolean(charging));
 
-    sprite.rotation = facing + fx.rotation;
-    sprite.scale.x = view.baseScale * fx.scaleX;
-    sprite.scale.y = view.baseScale * fx.scaleY;
+    sprite.rotation = pulse.hullRotation + fx.rotation;
+    // pulse.scale is a CONSTANT now — the hull does not breathe. Only an
+    // authored state FX (the death collapse) can change the chassis size.
+    sprite.scale.x = view.baseScale * pulse.scale * fx.scaleX;
+    sprite.scale.y = view.baseScale * pulse.scale * fx.scaleY;
     sprite.alpha = fx.alpha;
-    if (fx.flash) sprite.tint = DAMAGE_TINT;
+
+    const flash = fx.flash || boss.hitFlash > 0;
+    if (parts) {
+      parts.spine.tint = flash ? DAMAGE_TINT : DREADNOUGHT.hullTint;
+      parts.beam.tint = flash ? DAMAGE_TINT : DREADNOUGHT.beamTint;
+      for (const turret of parts.turrets) {
+        turret.tint = flash ? DAMAGE_TINT : DREADNOUGHT.turretTint;
+        // Local rotation only. These inherit the container's spin because they
+        // are bolted to it — an earlier pass cancelled the spin here, which
+        // made the platforms hold their world angle while the keel turned under
+        // them and read as two objects flying in loose formation. The rotation
+        // is continuous rather than a sine: bearings turn, plates wobble.
+        turret.rotation = pulse.turretSpin;
+      }
+      // The reactor keeps its warning colour through a hit flash: it is the
+      // weak point the player is aiming at, and losing it to the flash hides
+      // the target at exactly the moment they are hitting it.
+      parts.reactor.tint = DREADNOUGHT.reactorTint;
+      parts.reactor.alpha = pulse.reactorAlpha;
+      parts.reactor.scale.set(view.reactorScale * pulse.reactorScale);
+    } else {
+      sprite.tint = flash ? DAMAGE_TINT : DREADNOUGHT.hullTint;
+    }
   }
 
   /**
@@ -825,6 +1022,8 @@ export class Renderer {
       }
 
       applyJuice(view, t, this.juiceTransform);
+      // No `t` here: a corpse should not keep shimmering. The dissolve owns
+      // its alpha from this point on.
       syncEnemySprite(view, view, this.juiceTransform);
     }
   }
@@ -869,19 +1068,61 @@ export class Renderer {
    * they are tiny, uniform, and there are up to 50+ of them, so one geometry
    * beats 50 display objects.
    */
+  /**
+   * Player ordnance.
+   *
+   * Split in two by cost. Bolts and drone fire are tiny, uniform and numerous,
+   * so they stay one Graphics batch. Nanite missiles are few (at most six per
+   * salvo), individually identifiable and need to point along their own
+   * heading, so they get real sprites — the arc a guided missile flies is the
+   * whole appeal of that card, and a dot cannot show it.
+   */
   syncProjectiles() {
     if (!this.projectileGfx) {
       this.projectileGfx = new Graphics();
       this.layers.projectile.addChild(this.projectileGfx);
     }
+    if (!this.missiles) this.missiles = [];
+
     const g = this.projectileGfx;
     g.clear();
 
+    let missileCount = 0;
     for (const p of this.sim.projectiles) {
       if (!p.alive) continue;
+
+      if (p.turnRate > 0) {
+        const sprite = this.acquireMissile(missileCount++);
+        sprite.visible = true;
+        sprite.x = p.x;
+        sprite.y = p.y;
+        sprite.rotation = Math.atan2(p.vy, p.vx) + HULL_ROTATION_OFFSET;
+        sprite.scale.set(scaleForRadius(sprite.texture, p.radius, 2.4));
+        continue;
+      }
+
       g.circle(p.x, p.y, p.radius);
     }
-    g.fill({ color: PIXI_TINT.dewdrop, alpha: 0.95 });
+    g.fill({ color: PIXI_TINT.ion, alpha: 0.95 });
+
+    for (let i = missileCount; i < this.missiles.length; i++) {
+      this.missiles[i].visible = false;
+    }
+  }
+
+  /**
+   * @param {number} index
+   * @returns {Sprite} A pooled missile sprite, created on first use
+   */
+  acquireMissile(index) {
+    let sprite = this.missiles[index];
+    if (!sprite) {
+      sprite = makeSprite(this.assets.get(ASSET_KEYS.NANITE_MISSILE));
+      sprite.tint = PIXI_TINT.heroIon;
+      this.layers.projectile.addChild(sprite);
+      this.missiles[index] = sprite;
+    }
+    return sprite;
   }
 
   syncOrbs() {
@@ -908,7 +1149,7 @@ export class Renderer {
   }
 
   /**
-   * TIER A for the Dewling.
+   * TIER A for the Drifter.
    *
    * @param {number} dt - Frame time in seconds
    */
@@ -927,13 +1168,19 @@ export class Renderer {
     // Blink through invulnerability frames so the hit lands visually — but
     // never while dying. On game over the simulation stops stepping, which
     // freezes invulnTimer mid-blink; if that frozen value happened to land on
-    // an "off" frame the Dewling stayed hidden and the death dissolve was never
-    // drawn at all. A dying Dewling dissolves instead of blinking.
+    // an "off" frame the Drifter stayed hidden and the death dissolve was never
+    // drawn at all. A dying Drifter dissolves instead of blinking.
     const dying = this.heroAnimator.state === ANIM_STATES.DEATH;
     const blinking =
       !dying && this.sim.invulnTimer > 0 && Math.floor(this.sim.invulnTimer * 12) % 2 === 0;
     sprite.visible = !blinking;
-    if (blinking) return;
+    if (blinking) {
+      // The flames are separate display objects in another layer, so hiding
+      // the hull does not hide them. Two engine plumes hanging in space around
+      // an invisible ship is a worse tell than no blink at all.
+      if (this.thrusters) for (const flame of this.thrusters) flame.visible = false;
+      return;
+    }
 
     sprite.x = player.x;
     sprite.y = player.y;
@@ -950,7 +1197,7 @@ export class Renderer {
       if (texture) sprite.texture = texture;
     }
 
-    const baseScale = scaleForRadius(sprite.texture, PLAYER_CFG.RADIUS, 1.9);
+    const baseScale = scaleForRadius(sprite.texture, PLAYER_CFG.RADIUS, HERO_FIT);
 
     // Procedural pose for the current state. This runs on every path: with a
     // single-image pose per state it IS the animation, with a multi-frame strip
@@ -960,21 +1207,60 @@ export class Renderer {
       dx: this.lastPlayerDx,
     });
 
-    const flip = this.heroAnimator.flipX ? -1 : 1;
+    /*
+     * The Drifter banks into its travel direction, and TURNS to get there.
+     *
+     * The hull angle is interpolated toward the heading rather than assigned to
+     * it. Snapping was the other half of the "feels like a cursor" problem: a
+     * ship that changes facing in one frame has no rotational inertia, and no
+     * amount of positional drift compensates for that. HERO_TURN_LERP is the
+     * fraction of the remaining angle closed per 60Hz frame.
+     *
+     * Same strip rule as the boss: an authored multi-frame strip is drawn
+     * facing +X and conveys direction with the horizontal flip, so rotating it
+     * as well would double up.
+     *
+     * Facing comes from TRAVEL, not from the firing angle: the weapon
+     * re-targets several times a second, and a hull chasing it would spin on
+     * the spot.
+     */
+    const usesStrip = !this.heroAnimator.isFallback && !this.heroAnimator.isStaticPose();
+    const flip = usesStrip && this.heroAnimator.flipX ? -1 : 1;
+
+    if (usesStrip) {
+      this.heroFacing = 0;
+    } else {
+      const target = Math.atan2(this.lastPlayerDy, this.lastPlayerDx) + HULL_ROTATION_OFFSET;
+      this.heroFacing = approachAngle(this.heroFacing, target, HERO_TURN_LERP, dt);
+    }
+
     sprite.scale.x = baseScale * fx.scaleX * flip;
     sprite.scale.y = baseScale * fx.scaleY;
-    sprite.rotation = fx.rotation;
+    sprite.rotation = this.heroFacing + fx.rotation;
     sprite.alpha = fx.alpha;
     if (fx.flash) sprite.tint = DAMAGE_TINT;
 
-    // Recoil shoves the Dewling off its own shot. Applied to the SPRITE only,
-    // never to the simulation position — the hitbox must not move because of a
-    // visual effect.
-    if (this.heroAnimator.state === ANIM_STATES.ATTACK) {
-      const kick = attackRecoil(this.heroAnimator.elapsed);
+    /*
+     * Recoil shoves the Drifter off its own shot.
+     *
+     * ON ITS OWN CLOCK, not the animator's. `recoilTimer` is started by the
+     * weapon:fire event and runs for RECOIL.duration (~0.06s), which is far
+     * shorter than the 0.17s ATTACK state it used to be tied to — the kick is
+     * meant to be a snap, and reading the state's elapsed time stretched it
+     * into a visible backward drift.
+     *
+     * Applied to the SPRITE only, never to the simulation position: the hitbox
+     * must not move because of a visual effect.
+     */
+    if (this.recoilTimer > 0) {
+      this.recoilTimer = Math.max(0, this.recoilTimer - dt);
+      const kick = attackRecoil(RECOIL.duration - this.recoilTimer);
       sprite.x -= Math.cos(this.lastFireAngle) * kick;
       sprite.y -= Math.sin(this.lastFireAngle) * kick;
     }
+
+    // After the recoil, so the flames stay welded to the nozzles through it.
+    this.drawThrusters(sprite.x, sprite.y);
 
     this.emitContinuousFx(dt);
   }
@@ -990,30 +1276,36 @@ export class Renderer {
    */
   emitContinuousFx(dt) {
     const moving = this.heroAnimator.state === ANIM_STATES.MOVE;
-    const speedFactor = Math.min(1, Math.abs(this.lastPlayerDx) / 3);
+    /*
+     * Throttle, not raw dx.
+     *
+     * This used to be `|lastPlayerDx| / 3`, which was a sane 0..1 ramp back
+     * when that field held a per-frame position delta of a couple of px. It now
+     * holds velocity in px/s, which tops out near 154 — so the expression
+     * pinned to 1 the instant the ship moved at all and the emission rate
+     * stopped varying with speed. The simulation already computes the ratio.
+     */
+    const speedFactor = this.throttle;
 
     if (moving) {
-      this.afterimageTimer += dt;
-      if (this.afterimageTimer >= AFTERIMAGE.interval) {
-        this.afterimageTimer = 0;
-        this.placeAfterimage();
-      }
-
       this.wakeTimer += dt;
       if (wakeDue(this.wakeTimer, speedFactor)) {
         this.wakeTimer = 0;
-        const player = this.sim.state.player;
-        this.particles.wake(
-          player.x,
-          player.y,
-          Math.atan2(this.lastPlayerDy, this.lastPlayerDx),
-          THEME.hero.trail,
-          MOVE_WAKE.count
-        );
+        /*
+         * Exhaust grit, shed from the two nozzles.
+         *
+         * This is the whole of the engine trail now — the ghost chain that used
+         * to accompany it is gone (see buildPlayer). Emitting from the nozzles
+         * rather than the hull's centre matters more than ever: the flames are
+         * drawn there, so sparks appearing anywhere else read as a second,
+         * unexplained effect rather than as the same one.
+         */
+        const heading = Math.atan2(this.lastPlayerDy, this.lastPlayerDx);
+        for (const nozzle of this.nozzles) {
+          this.particles.wake(nozzle.x, nozzle.y, heading, THEME.hero.ion, MOVE_WAKE.count);
+        }
       }
     } else {
-      // Bank a little so the first ghost lands promptly on the next step off.
-      this.afterimageTimer = AFTERIMAGE.interval;
       this.wakeTimer = 0;
     }
   }
@@ -1040,6 +1332,50 @@ export class Renderer {
     g.stroke({ color: PIXI_TINT.heroRim, width: 1, alpha: 0.18 });
   }
 
+  /**
+   * The Dart Ravager's lock-on warning.
+   *
+   * Drawn for exactly as long as the simulation holds the enemy in its WINDUP
+   * state, which is the same window the player has to step out of the line —
+   * so the warning cannot drift out of sync with the dodge it is warning about.
+   *
+   * Two marks, each doing a different job: a shrinking ring over the Ravager is
+   * a countdown, and a line along its locked heading says WHICH WAY it is about
+   * to go. The ring alone tells the player something is coming but not where
+   * from, which is the wrong half of the information.
+   */
+  drawLockOns() {
+    if (!this.lockGfx) {
+      this.lockGfx = new Graphics();
+      this.layers.telegraph.addChild(this.lockGfx);
+    }
+    const g = this.lockGfx;
+    g.clear();
+
+    for (const enemy of this.sim.enemies) {
+      if (!enemy.alive || enemy.chargeState !== CHARGE_STATE.WINDUP) continue;
+
+      const view = getEnemyView(enemy.typeId);
+      const lock = view?.lockOn;
+      if (!lock) continue;
+
+      const reach = enemy.radius * 6;
+      g.moveTo(enemy.x, enemy.y);
+      g.lineTo(enemy.x + enemy.chargeDirX * reach, enemy.y + enemy.chargeDirY * reach);
+      g.stroke({ color: lock.tint, width: 1.5, alpha: 0.5 });
+
+      // Rings collapse inward as the wind-up runs out, so the radius is a
+      // clock the player can read without counting anything.
+      const def = ENEMIES[enemy.typeId];
+      const remaining = clamp(enemy.chargeTimer / (def?.chargeWindup || 1), 0, 1);
+      for (let i = 0; i < lock.rings; i++) {
+        const spread = 1 + i * 0.6;
+        g.circle(enemy.x, enemy.y, enemy.radius * (1.4 + remaining * 2.2 * spread));
+      }
+      g.stroke({ color: lock.tint, width: 2, alpha: 0.35 + (1 - remaining) * 0.5 });
+    }
+  }
+
   drawHazards() {
     const g = this.hazardGfx;
     g.clear();
@@ -1048,12 +1384,29 @@ export class Renderer {
       if (!pool.alive) continue;
       const fade = Math.min(1, pool.life / 1.0);
       g.circle(pool.x, pool.y, pool.radius);
-      g.fill({ color: PIXI_TINT.rust, alpha: 0.3 * fade });
+      g.fill({ color: PIXI_TINT.hazard, alpha: 0.3 * fade });
       g.circle(pool.x, pool.y, pool.radius * (0.55 + Math.sin(this.time * 2) * 0.04));
-      g.stroke({ color: PIXI_TINT.rustRim, width: 1.5, alpha: 0.5 * fade });
+      g.stroke({ color: PIXI_TINT.hazardRim, width: 1.5, alpha: 0.5 * fade });
     }
   }
 
+  /**
+   * The Bio-Acid Bloom warning circle.
+   *
+   * Three rings, and each one is doing a different job:
+   *
+   *   - The FILLED disc grows with `progress`, so its radius is a clock. The
+   *     player reads time-to-impact off how close the fill is to the outline,
+   *     not off a number.
+   *   - The OUTLINE sits at the final radius from frame one, so the danger
+   *     zone's edge never moves. A telegraph whose boundary grows is one the
+   *     player cannot commit to standing outside of.
+   *   - The inner ACID ring is decoration: a second, faster pulse that makes
+   *     the AoE read as biological rather than as a UI overlay.
+   *
+   * The colour is deliberately outside the Swarm's darkness ceiling — see the
+   * note in theme.js on why signals are exempt.
+   */
   drawTelegraph() {
     const g = this.telegraphGfx;
     g.clear();
@@ -1062,12 +1415,18 @@ export class Renderer {
     if (!tele || !tele.active) return;
 
     const progress = Math.min(1, tele.elapsedMs / tele.totalMs);
-    g.circle(tele.x, tele.y, tele.radius * progress);
-    g.fill({ color: PIXI_TINT.warning, alpha: 0.22 });
 
+    g.circle(tele.x, tele.y, tele.radius * progress);
+    g.fill({ color: PIXI_TINT.danger, alpha: 0.18 + progress * 0.16 });
+
+    // Urgency ramps with progress: the flicker gets faster as the AoE nears.
     const pulse = 0.55 + Math.sin(this.time * (6 + progress * 14)) * 0.25;
     g.circle(tele.x, tele.y, tele.radius);
-    g.stroke({ color: PIXI_TINT.warning, width: 3, alpha: pulse });
+    g.stroke({ color: PIXI_TINT.danger, width: 3, alpha: pulse });
+
+    const acidPulse = 0.35 + Math.sin(this.time * (9 + progress * 18)) * 0.2;
+    g.circle(tele.x, tele.y, tele.radius * (0.82 + Math.sin(this.time * 3.5) * 0.04));
+    g.stroke({ color: PIXI_TINT.acid, width: 1.5, alpha: acidPulse });
   }
 
   drawEffects() {
@@ -1077,7 +1436,7 @@ export class Renderer {
     for (const fx of this.sim.effects) {
       if (!fx.alive) continue;
       const progress = 1 - fx.life / fx.maxLife;
-      const color = fx.kind === 'tide' ? PIXI_TINT.tide : PIXI_TINT.pulse;
+      const color = fx.kind === 'tide' ? PIXI_TINT.graviton : PIXI_TINT.pulse;
       const radius = fx.radius * (0.55 + progress * 0.45);
 
       g.circle(fx.x, fx.y, radius);
@@ -1094,28 +1453,243 @@ export class Renderer {
     const beam = this.sim.cards.getBeamState();
     if (!beam) return;
 
-    const player = this.sim.state.player;
     g.setTransform?.(1, 0, 0, 1, 0, 0);
-    const angle = Math.atan2(beam.dy, beam.dx);
+    g.position.set(0, 0);
+    g.rotation = 0;
 
-    // Build the strip in local space then rotate the Graphics object itself.
-    g.rect(0, -beam.width / 2, beam.length, beam.width);
-    g.fill({ color: PIXI_TINT.beam, alpha: 0.55 * beam.fade });
-    g.rect(0, -beam.width * 0.12, beam.length, beam.width * 0.24);
-    g.fill({ color: PIXI_TINT.heroCore, alpha: 0.55 * beam.fade });
+    // Tesla Arc / Chain Lightning: draw jagged neon electric arcs
+    const origin = beam.origin || this.sim.state.player;
+    const chain = beam.chain && beam.chain.length > 0 ? beam.chain : null;
 
-    g.position.set(player.x, player.y);
-    g.rotation = angle;
+    if (chain) {
+      let currentFrom = origin;
+      for (let c = 0; c < chain.length; c++) {
+        const target = chain[c];
+        const dist = Math.hypot(target.x - currentFrom.x, target.y - currentFrom.y);
+        const steps = Math.max(3, Math.min(8, Math.floor(dist / 28)));
+        const normalX = -(target.y - currentFrom.y) / (dist || 1);
+        const normalY = (target.x - currentFrom.x) / (dist || 1);
+
+        // Compute jagged midpoints along the arc
+        const points = [{ x: currentFrom.x, y: currentFrom.y }];
+        for (let s = 1; s < steps; s++) {
+          const t = s / steps;
+          const jitter =
+            (Math.sin(s * 7.1 + this.time * 25 + c * 3) * 11 + ((s % 2 === 0 ? 1 : -1) * 7)) *
+            (1 - Math.abs(t - 0.5) * 0.4);
+          points.push({
+            x: currentFrom.x + (target.x - currentFrom.x) * t + normalX * jitter,
+            y: currentFrom.y + (target.y - currentFrom.y) * t + normalY * jitter,
+          });
+        }
+        points.push({ x: target.x, y: target.y });
+
+        // Outer electric glow (neon cyan/purple)
+        const outerColor = c === 0 ? 0x00f0ff : 0xa855f7;
+        const innerColor = 0xe0f7fa;
+
+        for (let i = 0; i < points.length - 1; i++) {
+          const pA = points[i];
+          const pB = points[i + 1];
+          g.moveTo(pA.x, pA.y);
+          g.lineTo(pB.x, pB.y);
+        }
+        g.stroke({ color: outerColor, width: 4.5, alpha: 0.65 * beam.fade });
+
+        // Inner hot core
+        for (let i = 0; i < points.length - 1; i++) {
+          const pA = points[i];
+          const pB = points[i + 1];
+          g.moveTo(pA.x, pA.y);
+          g.lineTo(pB.x, pB.y);
+        }
+        g.stroke({ color: innerColor, width: 1.8, alpha: 0.95 * beam.fade });
+
+        // Target impact spark halo
+        g.circle(target.x, target.y, 9);
+        g.fill({ color: outerColor, alpha: 0.5 * beam.fade });
+        g.circle(target.x, target.y, 4);
+        g.fill({ color: 0xffffff, alpha: 0.9 * beam.fade });
+
+        currentFrom = target;
+      }
+    } else {
+      // Fallback straight beam
+      const player = this.sim.state.player;
+      const angle = Math.atan2(beam.dy, beam.dx);
+      g.position.set(player.x, player.y);
+      g.rotation = angle;
+      g.rect(0, -beam.width / 2, beam.length, beam.width);
+      g.fill({ color: PIXI_TINT.danger, alpha: 0.32 * beam.fade });
+      g.rect(0, -beam.width * 0.12, beam.length, beam.width * 0.24);
+      g.fill({ color: PIXI_TINT.heroCore, alpha: 0.85 * beam.fade });
+    }
   }
 
-  drawBlades() {
-    const g = this.bladeGfx;
+  /**
+   * Aegis Satellites — real satellite bodies, one sprite each.
+   *
+   * These used to be `Graphics.ellipse` calls, which is why they read as soft
+   * blue pills orbiting the ship: a filled ellipse has no facets, no panels and
+   * no edges, so nothing about it said "machine". They are pooled and reused
+   * across level-ups rather than rebuilt, because the count changes (2 at L1,
+   * 6 at L5) every time the card is taken.
+   */
+  drawSatellites() {
+    if (!this.satellites) this.satellites = [];
+
+    const blades = this.sim.cards.blades;
+    const texture = this.assets.get(ASSET_KEYS.AEGIS_SAT);
+
+    while (this.satellites.length < blades.length) {
+      const sprite = makeSprite(texture);
+      sprite.tint = PIXI_TINT.aegis;
+      this.layers.cardEffect.addChild(sprite);
+      this.satellites.push(sprite);
+    }
+
+    for (let i = 0; i < this.satellites.length; i++) {
+      const sprite = this.satellites[i];
+      const blade = blades[i];
+      if (!blade) {
+        sprite.visible = false;
+        continue;
+      }
+
+      sprite.visible = true;
+      sprite.x = blade.x;
+      sprite.y = blade.y;
+      sprite.scale.set(scaleForRadius(sprite.texture, blade.radius, 1.5));
+      // Each satellite holds its own bearing relative to the orbit, so the
+      // ring reads as a formation of stationkeeping drones rather than as a
+      // set of identical decals sliding round a circle.
+      sprite.rotation =
+        Math.atan2(blade.y - this.sim.state.player.y, blade.x - this.sim.state.player.x) +
+        HULL_ROTATION_OFFSET;
+    }
+  }
+
+  /**
+   * Tactical Wingman escort drones.
+   *
+   * Pooled the same way as the satellites, and for the same reason: the count
+   * changes with the card's level. They use a DIFFERENT hull frame from the
+   * Drifter's, so an escort can never be mistaken for the player's own ship —
+   * which is the failure mode of every "friendly copy of you" effect.
+   */
+  drawWingmen() {
+    if (!this.wingmen) this.wingmen = [];
+
+    const drones = this.sim.cards.drones;
+    const texture = this.assets.get(ASSET_KEYS.WINGMAN);
+
+    while (this.wingmen.length < drones.length) {
+      const sprite = makeSprite(texture);
+      sprite.tint = PIXI_TINT.heroTrail;
+      sprite.alpha = 0.95;
+      this.layers.cardEffect.addChild(sprite);
+      this.wingmen.push(sprite);
+    }
+
+    for (let i = 0; i < this.wingmen.length; i++) {
+      const sprite = this.wingmen[i];
+      const drone = drones[i];
+      if (!drone) {
+        sprite.visible = false;
+        continue;
+      }
+
+      sprite.visible = true;
+      sprite.x = drone.x;
+      sprite.y = drone.y;
+      sprite.scale.set(scaleForRadius(sprite.texture, PLAYER_CFG.RADIUS, 1.5));
+      // The drone points where its TURRET is aimed, which the card system
+      // already computed — so the escort visibly tracks targets independently
+      // of where the player is flying.
+      sprite.rotation = drone.angle + HULL_ROTATION_OFFSET;
+    }
+  }
+
+  /**
+   * The Dreadnought's radial ordnance.
+   *
+   * One Graphics batch, same as the player's bolts: they are small, uniform,
+   * and up to a hundred can be in flight, so one geometry beats a hundred
+   * display objects. Painted in the danger red, never in a swarm carapace
+   * colour — a bullet the player must dodge has to read as a warning.
+   */
+  drawEnemyBullets() {
+    if (!this.enemyBulletGfx) {
+      this.enemyBulletGfx = new Graphics();
+      this.layers.projectile.addChild(this.enemyBulletGfx);
+    }
+    const g = this.enemyBulletGfx;
     g.clear();
 
-    for (const blade of this.sim.cards.blades) {
-      g.ellipse(blade.x, blade.y, blade.radius, blade.radius * 0.55);
+    const bullets = this.sim.enemyBullets;
+    if (!bullets || bullets.length === 0) return;
+
+    // Outer glow first, hot core second, so each bullet has an edge against a
+    // black backdrop and still reads at speed.
+    for (const b of bullets) {
+      if (!b.alive) continue;
+      g.circle(b.x, b.y, b.radius * 1.6);
     }
-    g.fill({ color: PIXI_TINT.blade, alpha: 0.85 });
+    g.fill({ color: PIXI_TINT.danger, alpha: 0.25 });
+
+    for (const b of bullets) {
+      if (!b.alive) continue;
+      g.circle(b.x, b.y, b.radius);
+    }
+    g.fill({ color: PIXI_TINT.danger, alpha: 0.95 });
+  }
+
+  /**
+   * The Dreadnought's phase-3 death ray: warning cone, then the beam.
+   *
+   * THE CONE AND THE BEAM ARE THE SAME SHAPE. The warning is drawn at the angle
+   * and width the beam will occupy, so what the player learns to avoid during
+   * the telegraph is exactly what arrives — a telegraph that only approximates
+   * its attack teaches the wrong lesson.
+   */
+  drawDeathRay() {
+    if (!this.rayGfx) {
+      this.rayGfx = new Graphics();
+      // Above the hazard layer but below entities: the beam is a floor hazard,
+      // not something that paints over the ship the player is trying to see.
+      this.layers.telegraph.addChild(this.rayGfx);
+    }
+    const g = this.rayGfx;
+    g.clear();
+
+    const ray = this.sim.deathRay;
+    if (!ray || !ray.active) return;
+
+    g.position.set(ray.x, ray.y);
+    g.rotation = ray.angle;
+
+    if (!ray.firing) {
+      // Wind-up: a thin, brightening warning strip. Its alpha is a clock, so
+      // the player reads time-to-fire off how solid the line has become.
+      const progress = Math.min(1, ray.elapsed / Math.max(ray.telegraphSec, 0.0001));
+      const flicker = 0.35 + Math.sin(this.time * (14 + progress * 26)) * 0.2;
+
+      g.rect(0, -ray.halfWidth, ray.length, ray.halfWidth * 2);
+      g.fill({ color: PIXI_TINT.danger, alpha: 0.06 + progress * 0.12 });
+      g.rect(0, -ray.halfWidth, ray.length, ray.halfWidth * 2);
+      g.stroke({ color: PIXI_TINT.danger, width: 2, alpha: flicker * (0.4 + progress * 0.6) });
+      return;
+    }
+
+    // Firing: three nested strips, hot core innermost, so the beam has depth
+    // and a hard edge rather than being one flat red bar.
+    const throb = 0.86 + Math.sin(this.time * 22) * 0.14;
+    g.rect(0, -ray.halfWidth, ray.length, ray.halfWidth * 2);
+    g.fill({ color: PIXI_TINT.danger, alpha: 0.3 * throb });
+    g.rect(0, -ray.halfWidth * 0.55, ray.length, ray.halfWidth * 1.1);
+    g.fill({ color: PIXI_TINT.hazardRim, alpha: 0.65 * throb });
+    g.rect(0, -ray.halfWidth * 0.2, ray.length, ray.halfWidth * 0.4);
+    g.fill({ color: PIXI_TINT.heroCore, alpha: 0.9 * throb });
   }
 
   drawHealthBars() {
@@ -1124,16 +1698,18 @@ export class Renderer {
 
     for (const enemy of this.sim.enemies) {
       if (!enemy.alive || enemy.hp >= enemy.maxHp) continue;
-      if (!enemy.isBoss && enemy.radius < HEALTH_BAR_MIN_RADIUS) continue;
+      // Boss health is displayed on the fixed top-screen HUD bar, not above its hull
+      if (enemy.isBoss) continue;
+      if (enemy.radius < HEALTH_BAR_MIN_RADIUS) continue;
 
       const width = enemy.radius * 2;
       const ratio = Math.max(0, enemy.hp / enemy.maxHp);
       const y = enemy.y - enemy.radius - 9;
 
       g.rect(enemy.x - enemy.radius, y, width, 3);
-      g.fill({ color: 0x000000, alpha: 0.6 });
+      g.fill({ color: PIXI_TINT.chitin, alpha: 0.75 });
       g.rect(enemy.x - enemy.radius, y, width * ratio, 3);
-      g.fill({ color: PIXI_TINT.warning });
+      g.fill({ color: PIXI_TINT.danger });
     }
   }
 
@@ -1148,32 +1724,73 @@ export class Renderer {
 
     // The trail thickens and brightens on the states that matter. It is already
     // drawn every frame, so reacting to state costs one multiply and gives the
-    // Dewling a sense of weight that a static sprite cannot.
+    // Drifter a sense of weight that a static sprite cannot.
     const intensity = trailIntensity(this.heroAnimator.state, this.heroAnimator.elapsed);
 
     for (let i = 0; i < this.trail.length - 1; i++) {
       const point = this.trail[i];
       const t = i / this.trail.length;
+      // The wake cools as it dissipates: cyan at the engine, ion blue by the
+      // time it is a few frames old. Index 0 is the OLDEST sample.
+      const color = t < 0.45 ? PIXI_TINT.heroIon : PIXI_TINT.heroTrail;
       g.circle(point.x, point.y, PLAYER_CFG.RADIUS * t * 0.9 * intensity);
-      g.fill({ color: PIXI_TINT.heroTrail, alpha: Math.min(0.85, t * 0.35 * intensity) });
+      g.fill({ color, alpha: Math.min(0.85, t * 0.35 * intensity) });
     }
   }
 
+  /**
+   * The Hyperion Shield — circular arc barrier encompassing the Drifter.
+   * Uses Kenney shield texture and locks directly to the ship's facing direction.
+   */
   drawShield() {
-    const g = this.shieldGfx;
-    g.clear();
+    const state = this.sim.cards.getShieldState();
+    if (!this.shieldSprite) return;
 
-    const charge = this.sim.cards.shieldCharge;
-    if (charge <= 0) return;
-    const stats = this.sim.cards.getStats('bloomshield');
-    if (!stats) return;
+    if (!state) {
+      this.shieldSprite.visible = false;
+      this.shieldGfx.clear();
+      return;
+    }
+
+    if (this.assets && this.shieldSprite) {
+      const shieldTex = this.assets.get(ASSET_KEYS.SHIELD);
+      if (shieldTex && this.shieldSprite.texture !== shieldTex) {
+        this.shieldSprite.texture = shieldTex;
+      }
+    }
 
     const player = this.sim.state.player;
-    const ratio = Math.max(0, Math.min(1, charge / stats.shieldHp));
-    const radius = PLAYER_CFG.RADIUS + 13;
+    this.shieldSprite.x = this.heroSprite?.x ?? player.x;
+    this.shieldSprite.y = this.heroSprite?.y ?? player.y;
 
-    g.arc(player.x, player.y, radius, -Math.PI / 2, -Math.PI / 2 + ratio * Math.PI * 2);
-    g.stroke({ color: PIXI_TINT.heroShield, width: 2 + ratio * 3, alpha: 0.3 + ratio * 0.55 });
+    // Direct orientation to always face the exact same direction as the ship
+    this.shieldSprite.rotation = this.heroSprite?.rotation ?? 0;
+
+    const targetSize = PLAYER_CFG.RADIUS * 13.4;
+    const texWidth = this.shieldSprite.texture?.width || 143;
+    const baseScale = targetSize / texWidth;
+
+    if (state.ready) {
+      this.shieldSprite.visible = true;
+      // Gentle breathing pulse (alpha 0.5 -> 0.8)
+      const pulse = 0.65 + Math.sin(this.time * 3.2) * 0.15;
+      this.shieldSprite.alpha = pulse;
+      const scaleWobble = 1.0 + Math.sin(this.time * 2.2) * 0.025;
+      this.shieldSprite.scale.set(baseScale * scaleWobble);
+      this.shieldGfx.clear();
+    } else {
+      // Spent: faint ghost of the shield ring plus recharge progress arc
+      this.shieldSprite.visible = true;
+      const ratio = state.rechargeTime > 0 ? Math.max(0, 1 - state.timer / state.rechargeTime) : 1;
+      this.shieldSprite.alpha = 0.12 + ratio * 0.22;
+      this.shieldSprite.scale.set(baseScale * 0.95);
+
+      const g = this.shieldGfx;
+      g.clear();
+      const radius = targetSize * 0.52;
+      g.arc(player.x, player.y, radius, -Math.PI / 2, -Math.PI / 2 + ratio * Math.PI * 2);
+      g.stroke({ color: PIXI_TINT.heroShield, width: 2, alpha: 0.2 + ratio * 0.45 });
+    }
   }
 
   /** Release GPU resources. */

@@ -2,9 +2,18 @@ import { describe, it, expect, vi } from 'vitest';
 import { Simulation } from '../src/core/simulation.js';
 import { GameState, GAME_STATES } from '../src/core/game-state.js';
 import { EventBus } from '../src/core/event-bus.js';
-import { UNIT_PX, WORLD, PLAYER_CFG, PHASE1, ORB_CFG } from '../src/core/constants.js';
+import {
+  UNIT_PX,
+  WORLD,
+  PLAYER_CFG,
+  PHASE1,
+  ORB_CFG,
+  FRENZY_CFG,
+  CARD_MODEL,
+} from '../src/core/constants.js';
 import { getEnemyCount, getWaveDuration } from '../src/core/wave.js';
 import { CARDS, getCardById } from '../src/data/cards.js';
+import { ENEMY_TYPES, getBossPhase } from '../src/data/enemies.js';
 
 const STEP = 1 / 60;
 
@@ -52,11 +61,24 @@ function advanceUntil(sim, predicate, maxSeconds = 600) {
   for (let i = 0; i < steps; i++) {
     if (predicate(sim)) return true;
     autoPick(sim);
+    /*
+     * God mode, for the wave-FLOW tests only (they set maxHp to 1e6).
+     *
+     * The boss branch has always been here: a level-1 starter weapon cannot
+     * chew through 400+ boss HP inside a test budget, and these tests are
+     * about the wave state machine, not about damage.
+     *
+     * The swarm branch is the same idea for the "clear the swarm" rule. A wave
+     * no longer ends on a timer — it ends when the field is empty — so a
+     * stationary dummy with one L1 weapon would sit in the clear-out tail
+     * forever. Killing the stragglers once the spawn window has closed is the
+     * scripted stand-in for the player doing it.
+     */
     if (sim.state.player.maxHp > 1000) {
+      const clearing = sim.state.spawnWindowClosed;
       for (const e of sim.enemies) {
-        if (e.isBoss && e.alive) {
-          sim.damageEnemy(e, 99999);
-        }
+        if (!e.alive) continue;
+        if (e.isBoss || clearing) sim.damageEnemy(e, 99999);
       }
     }
     sim.update(STEP, { x: 0, y: 0 });
@@ -72,13 +94,79 @@ describe('Simulation — Phase 1 core survival loop', () => {
       expect(sim.state.player.y).toBe(WORLD.HEIGHT / 2);
     });
 
-    it('moves at the configured speed in units/sec', () => {
+    it('reaches exactly the configured speed in units/sec', () => {
+      // Measured AFTER the ramp, not from a standing start. The ship has mass
+      // now (PLAYER_CFG.ACCEL), so "moves at the configured speed" is a
+      // statement about terminal velocity — which is the figure the GDD, the
+      // kiting distance and the whole balance envelope actually depend on.
       const sim = makeSim();
-      const startX = sim.state.player.x;
+      advance(sim, 1.0, { x: 1, y: 0 }); // spend the ramp
 
+      const startX = sim.state.player.x;
       advance(sim, 1.0, { x: 1, y: 0 });
 
       expect(sim.state.player.x - startX).toBeCloseTo(sim.state.player.moveSpeed * UNIT_PX, 0);
+    });
+
+    it('ramps up rather than snapping to top speed', () => {
+      const sim = makeSim();
+      const speed = sim.state.player.moveSpeed * UNIT_PX;
+
+      sim.update(STEP, { x: 1, y: 0 });
+
+      // One frame in, the ship is moving but nowhere near top speed. This is
+      // the whole difference between a ship and a cursor.
+      expect(sim.playerVx).toBeGreaterThan(0);
+      expect(sim.playerVx).toBeLessThan(speed * 0.5);
+    });
+
+    it('coasts to a stop instead of halting on the frame input ends', () => {
+      const sim = makeSim();
+      advance(sim, 1.0, { x: 1, y: 0 });
+      const releasedAt = sim.state.player.x;
+
+      // One frame of no input: still moving, because momentum does not vanish.
+      sim.update(STEP, { x: 0, y: 0 });
+      expect(sim.playerVx).toBeGreaterThan(0);
+      expect(sim.state.player.x).toBeGreaterThan(releasedAt);
+
+      // ...but it does settle, and settles to exactly zero rather than
+      // creeping forever on an exponential tail.
+      advance(sim, 1.5, { x: 0, y: 0 });
+      expect(sim.playerVx).toBe(0);
+      expect(sim.playerVy).toBe(0);
+    });
+
+    it('drifts through a hard reversal instead of teleporting into it', () => {
+      const sim = makeSim();
+      advance(sim, 1.0, { x: 1, y: 0 });
+
+      // Slam the opposite direction. A cursor would be at full speed the other
+      // way immediately; a ship has to bleed off what it had first.
+      sim.update(STEP, { x: -1, y: 0 });
+      expect(sim.playerVx).toBeGreaterThan(0);
+    });
+
+    it('does not bank momentum against the arena wall', () => {
+      // Holding into an edge for a long time must not store thrust that then
+      // has to be spent peeling away from it.
+      const sim = makeSim();
+      advance(sim, 40, { x: -1, y: 0 });
+
+      expect(sim.state.player.x).toBe(PLAYER_CFG.RADIUS);
+      expect(sim.playerVx).toBe(0);
+    });
+
+    it('reports movement INTENT, not velocity, to the animation director', () => {
+      // The director drives idle-vs-move poses. A coasting ship has already
+      // cut its engines, so it must read as idle even while still sliding.
+      const sim = makeSim();
+      advance(sim, 0.5, { x: 1, y: 0 });
+      expect(sim.playerMoving).toBe(true);
+
+      sim.update(STEP, { x: 0, y: 0 });
+      expect(sim.playerMoving).toBe(false);
+      expect(sim.playerVx).toBeGreaterThan(0);
     });
 
     it('normalizes diagonal input so it is no faster than cardinal', () => {
@@ -435,8 +523,19 @@ describe('Simulation — Phase 1 core survival loop', () => {
     it('is winnable by a competent player and survives a full playthrough', () => {
       const sim = makeSim();
 
-      // Competent player policy: kite away from threats, avoid arena edges, upgrade owned cards.
-      for (let step = 0; step < 60 * 60 * 15; step++) {
+      /*
+       * Competent player policy: kite away from threats, avoid arena edges,
+       * upgrade owned cards.
+       *
+       * The 20-minute budget is not slack — a full run measures around 14
+       * minutes now that a wave lasts its spawn window PLUS however long the
+       * field takes to clear. It also guards the property that matters most
+       * about the clear-the-swarm rule: this bot outruns most of the roster,
+       * so without the clear-out frenzy (FRENZY_CFG) a single straggler it
+       * cannot catch holds a wave open forever, and this test hangs on wave 2
+       * rather than failing on damage numbers.
+       */
+      for (let step = 0; step < 60 * 60 * 20; step++) {
         const status = sim.state.currentState;
         if (status === GAME_STATES.VICTORY || status === GAME_STATES.GAME_OVER) break;
 
@@ -462,32 +561,46 @@ describe('Simulation — Phase 1 core survival loop', () => {
 
         let inputX = 0;
         let inputY = 0;
-
-        // Evade Boss Telegraph AoE warning aggressively
+        let inTelegraph = false;
+        // Evade Boss Telegraph AoE warning with highest priority
         if (sim.bossTelegraph.active) {
           const teleDx = player.x - sim.bossTelegraph.x;
           const teleDy = player.y - sim.bossTelegraph.y;
           const dist = Math.hypot(teleDx, teleDy);
-          if (dist < sim.bossTelegraph.radius + 80) {
-            inputX += (teleDx / (dist || 1)) * 400;
-            inputY += (teleDy / (dist || 1)) * 400;
+          if (dist < sim.bossTelegraph.radius + 60) {
+            inTelegraph = true;
+            inputX = (teleDx / (dist || 1)) * 800;
+            inputY = (teleDy / (dist || 1)) * 800;
           }
         }
 
-        if (threat) {
-          const dx = threat.x - player.x;
-          const dy = threat.y - player.y;
-          const dist = Math.hypot(dx, dy);
+        if (!inTelegraph) {
+          // Evade Boss Death Ray laterally
+          if (sim.deathRay?.active && boss) {
+            const toBossX = player.x - boss.x;
+            const toBossY = player.y - boss.y;
+            inputX += -toBossY * 2.5;
+            inputY += toBossX * 2.5;
+          }
 
-          if (dist < 180) {
-            inputX -= dx;
-            inputY -= dy;
-          } else if (dist > 360) {
-            inputX += dx;
-            inputY += dy;
-          } else {
-            inputX -= dy;
-            inputY += dx;
+          if (threat) {
+            const dx = threat.x - player.x;
+            const dy = threat.y - player.y;
+            const dist = Math.hypot(dx, dy);
+
+            const minDist = threat.isBoss ? 240 : 180;
+            const maxDist = threat.isBoss ? 400 : 360;
+
+            if (dist < minDist) {
+              inputX -= dx;
+              inputY -= dy;
+            } else if (dist > maxDist) {
+              inputX += dx;
+              inputY += dy;
+            } else {
+              inputX -= dy;
+              inputY += dx;
+            }
           }
         }
 
@@ -519,3 +632,466 @@ function makeEnemyAt(sim, x, y) {
   enemy.y = y;
   return enemy;
 }
+
+/* ==========================================================================
+ * Wave flow: "clear the swarm to advance"
+ * ======================================================================== */
+
+describe('Clear the swarm to advance', () => {
+  it('closes the spawn window on the clock without ending the wave', () => {
+    const sim = makeSim();
+    sim.state.player.maxHp = 1e6;
+    sim.state.player.hp = 1e6;
+
+    advance(sim, getWaveDuration(1) + 1);
+
+    expect(sim.state.spawnWindowClosed).toBe(true);
+    expect(sim.spawner.active).toBe(false);
+    // The whole point: a live field means the wave is still running.
+    expect(sim.enemies.length).toBeGreaterThan(0);
+    expect(sim.state.currentState).toBe(GAME_STATES.RUNNING);
+  });
+
+  it('stops producing new enemies once the window has closed', () => {
+    const sim = makeSim();
+    sim.state.player.maxHp = 1e6;
+    sim.state.player.hp = 1e6;
+
+    advance(sim, getWaveDuration(1) + 1);
+    for (const enemy of sim.enemies) sim.damageEnemy(enemy, 99999);
+    advance(sim, 1 / 60);
+
+    // Everything died and the field stayed empty — nothing refilled it.
+    expect(sim.enemies.length).toBe(0);
+  });
+
+  it('completes the wave on the frame the last enemy dies', () => {
+    const sim = makeSim();
+    const complete = vi.fn();
+    sim.bus.on('wave:complete', complete);
+    sim.state.player.maxHp = 1e6;
+    sim.state.player.hp = 1e6;
+
+    advance(sim, getWaveDuration(1) + 1);
+    expect(complete).not.toHaveBeenCalled();
+
+    for (const enemy of sim.enemies) sim.damageEnemy(enemy, 99999);
+    advance(sim, 1 / 60);
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(sim.state.currentState).toBe(GAME_STATES.WAVE_COMPLETE);
+  });
+
+  it('never ends a wave on the clock while enemies are alive', () => {
+    // The regression this rule exists to prevent: cutting to the card screen
+    // mid-fight, with a live swarm still on the field.
+    const sim = makeSim();
+    sim.state.player.maxHp = 1e6;
+    sim.state.player.hp = 1e6;
+
+    advance(sim, getWaveDuration(1) + 30);
+
+    expect(sim.enemies.length).toBeGreaterThan(0);
+    expect(sim.state.currentState).toBe(GAME_STATES.RUNNING);
+  });
+});
+
+describe('The clear-out frenzy', () => {
+  it('leaves the roster alone while the spawn window is open', () => {
+    // During the wave proper, the speed spread IS the roster.
+    const sim = makeSim();
+    advance(sim, 2);
+    expect(sim.getFrenzyFloor()).toBe(0);
+  });
+
+  it('applies a balanced enrage multiplier to survivors during clear-out tail', () => {
+    const sim = makeSim();
+    sim.state.player.maxHp = 1e6;
+    sim.state.player.hp = 1e6;
+
+    advance(sim, getWaveDuration(1) + 1);
+    expect(sim.getFrenzyFloor()).toBeGreaterThan(0);
+
+    // Wind the ramp forward rather than stepping through it: the dummy is
+    // armed, and ten more seconds of live fire would clear the field and end
+    // the wave before the assertion.
+    sim.frenzyStart = sim.elapsed - FRENZY_CFG.RAMP_SEC;
+    expect(sim.getFrenzyFloor()).toBeCloseTo(FRENZY_CFG.MAX_ENRAGE_MULTIPLIER, 3);
+    expect(sim.getFrenzyFloor()).toBeLessThanOrEqual(1.10);
+    expect(sim.getFrenzyFloor()).toBeGreaterThanOrEqual(1.05);
+
+    // And it reaches the entities, not just the accessor.
+    advance(sim, 1 / 60);
+    const aliveEnemies = sim.enemies.filter((e) => e.alive && !e.isBoss);
+    for (const enemy of aliveEnemies) {
+      expect(enemy.speed).toBeCloseTo(enemy.baseSpeed * FRENZY_CFG.MAX_ENRAGE_MULTIPLIER, 2);
+    }
+  });
+
+  it('does not override a stun', () => {
+    // A frozen enemy must stay frozen: the Graviton EMP's whole value is the
+    // seconds it buys, and a floor that lifted a stunned enemy would erase them.
+    const sim = makeSim();
+    sim.state.player.maxHp = 1e6;
+    sim.state.player.hp = 1e6;
+    advance(sim, getWaveDuration(1) + FRENZY_CFG.RAMP_SEC + 1);
+
+    const victim = sim.enemies[0];
+    expect(victim).toBeDefined();
+    victim.stunTimer = 1.0;
+    advance(sim, 1 / 60);
+
+    expect(victim.speed).toBe(0);
+  });
+});
+
+/* ==========================================================================
+ * The six-class roster
+ * ======================================================================== */
+
+describe('Roster behaviours', () => {
+  /** Put one enemy of a type on an otherwise empty field, near the player. */
+  function soloEnemy(sim, typeId, offsetX = 300, offsetY = 0) {
+    for (const e of sim.enemies) sim.enemyPool.release(e);
+    sim.enemies.length = 0;
+    return sim.spawnEnemy(typeId, {
+      x: sim.state.player.x + offsetX,
+      y: sim.state.player.y + offsetY,
+    });
+  }
+
+  it('bursts a Brood Spore into four Xeno Larvae when it dies', () => {
+    const sim = makeSim();
+    const spore = soloEnemy(sim, ENEMY_TYPES.RUSTBLOOM);
+
+    sim.killEnemy(spore);
+
+    const larvae = sim.enemies.filter((e) => e.alive && e.typeId === ENEMY_TYPES.TARLING);
+    expect(larvae).toHaveLength(4);
+    // Thrown outward from the corpse, not stacked on it.
+    for (const larva of larvae) {
+      expect(Math.hypot(larva.x - spore.x, larva.y - spore.y)).toBeGreaterThan(10);
+    }
+  });
+
+  it('runs the Dart Ravager through lock, brace and dash', () => {
+    const sim = makeSim();
+    const ravager = soloEnemy(sim, ENEMY_TYPES.CRACKED_WISP);
+    ravager.chargeTimer = 0;
+
+    // Next tick takes the lock and starts the wind-up.
+    advance(sim, 1 / 60);
+    expect(ravager.chargeState).toBe('windup');
+    // Braced in place — this is the window the player dodges in.
+    expect(ravager.speed).toBe(0);
+    const lockedX = ravager.chargeDirX;
+    const lockedY = ravager.chargeDirY;
+
+    advance(sim, 0.6);
+    expect(ravager.chargeState).toBe('dashing');
+    expect(ravager.speed).toBeGreaterThan(ravager.baseSpeed * 1.5);
+    // The dash flies the direction it LOCKED, not wherever the player has
+    // since moved to. That commitment is what makes the wind-up worth reading.
+    expect(ravager.chargeDirX).toBe(lockedX);
+    expect(ravager.chargeDirY).toBe(lockedY);
+  });
+
+  it('cloaks a Phantom Stalker at range and reveals it in strike range', () => {
+    const sim = makeSim();
+    const stalker = soloEnemy(sim, ENEMY_TYPES.SMOGMOTH, 500);
+    advance(sim, 1 / 60);
+
+    expect(stalker.cloaked).toBe(true);
+    expect(stalker.visibility).toBeCloseTo(0.2, 5);
+    // Faster while dark: that is what it is buying with the exposure.
+    expect(stalker.speed).toBeGreaterThan(stalker.baseSpeed);
+
+    stalker.x = sim.state.player.x + 40;
+    advance(sim, 1 / 60);
+    expect(stalker.cloaked).toBe(false);
+    expect(stalker.visibility).toBe(1);
+  });
+
+  it('strips a round of its pierce when it hits a Bio-Goliath', () => {
+    /*
+     * The species' entire reason to exist: it is a WALL, not just a big target.
+     * A fully-levelled Phase Repeater needle stops in the armour instead of
+     * carrying on through whatever is sheltering behind it.
+     */
+    const sim = makeSim();
+    const guard = soloEnemy(sim, ENEMY_TYPES.BIO_GOLIATH, 60);
+
+    const bolt = sim.spawnProjectile({
+      x: guard.x,
+      y: guard.y,
+      vx: 400,
+      vy: 0,
+      damage: 5,
+      radius: 5,
+      life: 2,
+      pierce: 2,
+    });
+
+    sim.spatialGrid.clear();
+    sim.spatialGrid.insert(guard);
+    sim.resolveCollisions();
+
+    expect(bolt.pierce).toBe(0);
+    expect(bolt.alive).toBe(false);
+  });
+
+  it('lets a pierced round carry on through ordinary chaff', () => {
+    const sim = makeSim();
+    const larva = soloEnemy(sim, ENEMY_TYPES.TARLING, 60);
+
+    const bolt = sim.spawnProjectile({
+      x: larva.x,
+      y: larva.y,
+      vx: 400,
+      vy: 0,
+      damage: 1,
+      radius: 5,
+      life: 2,
+      pierce: 2,
+    });
+
+    sim.spatialGrid.clear();
+    sim.spatialGrid.insert(larva);
+    sim.resolveCollisions();
+
+    expect(bolt.alive).toBe(true);
+    expect(bolt.pierce).toBe(1);
+
+    // ...and it does not chew the same target twice on the way through.
+    const hp = larva.hp;
+    sim.resolveCollisions();
+    expect(larva.hp).toBe(hp);
+  });
+
+  it('knocks a struck enemy backward along the shot line', () => {
+    // Impact is displacement, not deformation — see the header of juice.js.
+    // Parked outside PROJECTILE_CFG.TARGET_RANGE so the auto-cannon cannot
+    // reach it and top the impulse back up mid-assertion.
+    const sim = makeSim();
+    const larva = soloEnemy(sim, ENEMY_TYPES.TARLING, 700);
+    larva.knockVx = 0;
+
+    sim.damageEnemy(larva, 1, 400, 0);
+    expect(larva.knockVx).toBeGreaterThan(0);
+    expect(larva.knockVy).toBe(0);
+
+    // ...and it rings out fast rather than becoming a shove.
+    advance(sim, 0.5);
+    expect(larva.knockVx).toBe(0);
+  });
+});
+
+/* ==========================================================================
+ * The Dreadnought Station
+ * ======================================================================== */
+
+describe('Boss encounter', () => {
+  /** Jump straight to a boss wave with a live Dreadnought on the field. */
+  function bossSim() {
+    const sim = makeSim();
+    sim.state.wave = 5;
+    sim.state.waveTimeRemaining = getWaveDuration(5);
+    sim.bus.emit('wave:start', sim.state.getWaveData());
+    const boss = sim.spawnBoss();
+    return { sim, boss };
+  }
+
+  it('isolates the arena: no chaff spawns on a boss wave', () => {
+    const sim = makeSim();
+    advance(sim, 3);
+    expect(sim.enemies.length).toBeGreaterThan(0);
+
+    sim.state.wave = 5;
+    sim.bus.emit('wave:start', sim.state.getWaveData());
+
+    // Everything that was on the field is gone, and the spawner is shut.
+    expect(sim.enemies.length).toBe(0);
+    expect(sim.spawner.active).toBe(false);
+
+    advance(sim, 20);
+    // Only the boss and the escorts it called itself may be present.
+    for (const enemy of sim.enemies) {
+      expect(enemy.isBoss || enemy.typeId === ENEMY_TYPES.CRACKED_WISP, enemy.typeId).toBe(
+        true
+      );
+    }
+  });
+
+  it('sprays a radial bullet ring from phase 1', () => {
+    const { sim } = bossSim();
+    advance(sim, 3);
+    expect(sim.enemyBullets.length).toBeGreaterThan(0);
+
+    // Evenly spread, not a cone: the ring has to threaten every direction.
+    const angles = sim.enemyBullets.filter((b) => b.alive).map((b) => Math.atan2(b.vy, b.vx));
+    const span = Math.max(...angles) - Math.min(...angles);
+    expect(span).toBeGreaterThan(Math.PI);
+  });
+
+  it('accumulates its phases rather than trading them', () => {
+    // A boss that swaps one attack for another gets EASIER as it dies.
+    expect(getBossPhase(1.0)).toMatchObject({ phase: 1, escort: false, ray: false });
+    expect(getBossPhase(0.6)).toMatchObject({ phase: 2, escort: true, ray: false });
+    expect(getBossPhase(0.2)).toMatchObject({ phase: 3, escort: true, ray: true });
+    for (const fraction of [1.0, 0.6, 0.2]) {
+      expect(getBossPhase(fraction).radial).toBe(true);
+    }
+  });
+
+  it('calls four Dart Ravager escorts in phase 2', () => {
+    const { sim, boss } = bossSim();
+    boss.hp = boss.maxHp * 0.5;
+    boss.escortTimer = 0;
+    advance(sim, 1 / 60);
+
+    const escorts = sim.enemies.filter(
+      (e) => e.alive && e.typeId === ENEMY_TYPES.CRACKED_WISP
+    );
+    expect(escorts).toHaveLength(4);
+  });
+
+  it('telegraphs the death ray before it does any damage', () => {
+    const { sim, boss } = bossSim();
+    boss.hp = boss.maxHp * 0.2;
+    boss.rayTimer = 0;
+    advance(sim, 1 / 60);
+
+    expect(sim.deathRay.active).toBe(true);
+    expect(sim.deathRay.firing).toBe(false);
+
+    // Standing in the cone costs nothing while it is only a warning.
+    const x = sim.deathRay.x + Math.cos(sim.deathRay.angle) * 300;
+    const y = sim.deathRay.y + Math.sin(sim.deathRay.angle) * 300;
+    expect(sim.pointInRay(x, y, PLAYER_CFG.RADIUS)).toBe(false);
+
+    advance(sim, 2.0);
+    expect(sim.deathRay.firing).toBe(true);
+    expect(sim.pointInRay(sim.deathRay.x + Math.cos(sim.deathRay.angle) * 300,
+      sim.deathRay.y + Math.sin(sim.deathRay.angle) * 300, PLAYER_CFG.RADIUS)).toBe(true);
+  });
+
+  it('stops the death ray when the station dies', () => {
+    const { sim, boss } = bossSim();
+    boss.hp = boss.maxHp * 0.2;
+    boss.rayTimer = 0;
+    advance(sim, 2.0);
+    expect(sim.deathRay.active).toBe(true);
+
+    sim.damageEnemy(boss, 99999);
+    advance(sim, 1 / 60);
+    expect(sim.deathRay.active).toBe(false);
+  });
+});
+
+describe('The damage flash is gated so the swarm stays dark', () => {
+  /*
+   * The flash is pure white, which is the only tint that can brighten a
+   * near-black carapace (a Pixi tint multiplies and cannot add light). The cost
+   * is that a flashing enemy shows its UNTINTED source frame, and the Kenney
+   * hulls are white with red and yellow accents.
+   *
+   * A maxed build lands several hits a second on everything in reach, so
+   * without a refractory gap the flash never expires and the whole swarm sits
+   * permanently white-and-red — the palette's darkness contract switching
+   * itself off exactly when the screen is busiest.
+   */
+  function soloTarget(sim) {
+    for (const e of sim.enemies) sim.enemyPool.release(e);
+    sim.enemies.length = 0;
+    const enemy = sim.spawnEnemy(ENEMY_TYPES.BIO_GOLIATH, {
+      x: sim.state.player.x + 200,
+      y: sim.state.player.y,
+    });
+    enemy.hp = 1e6;
+    enemy.maxHp = 1e6;
+    return enemy;
+  }
+
+  it('flashes on a hit', () => {
+    const sim = makeSim();
+    const enemy = soloTarget(sim);
+    sim.damageEnemy(enemy, 1);
+    expect(enemy.hitFlash).toBeGreaterThan(0);
+  });
+
+  it('refuses to re-flash inside the refractory window', () => {
+    const sim = makeSim();
+    const enemy = soloTarget(sim);
+
+    sim.damageEnemy(enemy, 1);
+    const firstFlashAt = enemy.lastHitTime;
+
+    // A second weapon connecting on the very next tick must not extend it.
+    advance(sim, 1 / 60);
+    sim.damageEnemy(enemy, 1);
+    expect(enemy.lastHitTime).toBe(firstFlashAt);
+  });
+
+  it('holds the swarm dark for most of a second under sustained fire', () => {
+    // The property that actually matters, measured the way the player sees it.
+    const sim = makeSim();
+    const enemy = soloTarget(sim);
+
+    let litFrames = 0;
+    const frames = 300; // five seconds
+    for (let i = 0; i < frames; i++) {
+      sim.damageEnemy(enemy, 1); // every single frame
+      advance(sim, 1 / 60);
+      if (enemy.hitFlash > 0) litFrames++;
+    }
+
+    expect(litFrames / frames).toBeLessThan(0.35);
+    // ...but it is not suppressed into invisibility either.
+    expect(litFrames).toBeGreaterThan(0);
+  });
+});
+
+describe('Tesla Arc targets the nearest enemy and chains', () => {
+  it('automatically targets the nearest enemy within range regardless of ship facing', () => {
+    const sim = makeSim();
+    sim.updateSpawning = () => {};
+    for (const e of sim.enemies) sim.enemyPool.release(e);
+    sim.enemies.length = 0;
+    sim.state.activeCards.clear();
+    sim.cards.runtime.clear();
+    for (let i = 0; i < 5; i++) sim.state.selectCard('sunbeam_lance');
+    sim.cards.onCardChanged('sunbeam_lance');
+
+    // Place an enemy to the right (+X), while pointing the ship straight up (-Y)
+    const enemy = sim.enemyPool.acquire();
+    enemy.alive = true;
+    enemy.x = sim.state.player.x + 150;
+    enemy.y = sim.state.player.y;
+    enemy.hp = 1000;
+    enemy.maxHp = 1000;
+    sim.enemies.push(enemy);
+
+    // Point ship straight up (-Y)
+    advance(sim, 0.5, { x: 0, y: -1 });
+    let beam = null;
+    for (let i = 0; i < 300 && !beam; i++) {
+      sim.update(1 / 60, { x: 0, y: -1 });
+      beam = sim.cards.getBeamState();
+    }
+
+    expect(beam).not.toBeNull();
+    expect(beam.chain.length).toBeGreaterThan(0);
+    expect(beam.chain[0].x).toBeCloseTo(enemy.x, 1);
+  });
+
+  it('keeps its heading when the ship comes to a stop', () => {
+    // Velocity goes to zero when the player lets go; facing must not, or a
+    // parked ship would fire sideways along +X.
+    const sim = makeSim();
+    advance(sim, 0.5, { x: 0, y: -1 });
+    advance(sim, 3.0, { x: 0, y: 0 });
+
+    expect(sim.playerVy).toBe(0);
+    expect(sim.getFacing().y).toBeCloseTo(-1, 5);
+  });
+});

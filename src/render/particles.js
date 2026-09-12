@@ -1,13 +1,13 @@
 /**
- * Particle system on pooled PIXI sprites (Phase 6b).
+ * Particle system on pooled PIXI sprites.
  *
- * Rewritten from the Phase 6 immediate-mode canvas version. Every particle is
- * now a Sprite drawn from `bubble_particle.png` or `lens_flare.png`, recycled
- * through an object pool and parked (visible = false) rather than destroyed —
- * a 200-enemy wipe must not allocate or touch the display list structure.
+ * Every particle is a Sprite drawn from one of two glow frames in the raider
+ * atlas, recycled through an object pool and parked (visible = false) rather
+ * than destroyed — a 200-enemy wipe must not allocate or touch the display list
+ * structure.
  *
- * Still purely decorative and still outside src/core/: particles never feed
- * back into the simulation.
+ * Purely decorative and outside src/core/: particles never feed back into the
+ * simulation.
  */
 
 import { Container } from 'pixi.js';
@@ -19,9 +19,9 @@ import { THEME } from './theme.js';
 export const PARTICLE_KINDS = {
   /** Fast streak sprayed on an enemy hit. */
   SPARK: 'spark',
-  /** Slow drifting mote — Frutevil dissolving. */
+  /** Slow drifting mote — a carapace dissolving. */
   MOTE: 'mote',
-  /** Rising Aero bubble for pickups and level-ups. */
+  /** Rising spark for pickups and level-ups. */
   BUBBLE: 'bubble',
   /** Expanding flare ring for big moments. */
   RING: 'ring',
@@ -45,7 +45,7 @@ export class ParticleSystem {
 
   /** Pool factory: a parked sprite plus its motion state. */
   createParticle() {
-    const sprite = makeSprite(this.assets.get(ASSET_KEYS.BUBBLE_PARTICLE));
+    const sprite = makeSprite(this.assets.get(ASSET_KEYS.PLASMA_MOTE));
     sprite.visible = false;
     this.container.addChild(sprite);
 
@@ -87,7 +87,7 @@ export class ParticleSystem {
 
     const flare = p.kind === PARTICLE_KINDS.RING;
     const texture = this.assets.get(
-      flare ? ASSET_KEYS.LENS_FLARE : ASSET_KEYS.BUBBLE_PARTICLE
+      flare ? ASSET_KEYS.LENS_FLARE : ASSET_KEYS.PLASMA_MOTE
     );
     if (texture) p.sprite.texture = texture;
 
@@ -204,7 +204,7 @@ export class ParticleSystem {
   }
 
   /**
-   * Droplets shed behind a moving Dewling.
+   * Ion wash shed behind a moving Drifter.
    *
    * Thrown BACKWARD along travel with a little lateral scatter, so the swarm
    * reads the player's heading from the wake alone. Deliberately cheap and
@@ -239,17 +239,26 @@ export class ParticleSystem {
   }
 
   /**
-   * Frutevil dissolving: dark motes plus a rim flash.
+   * A carapace rupturing: bio-acid and hive-parasite motes, plus an acid ring.
+   *
+   * The two colours are mixed per particle rather than per kill, so one death
+   * throws both — a kill that came out uniformly green next to one that came
+   * out uniformly magenta would read as two different events.
+   *
    * @param {number} x
    * @param {number} y
-   * @param {{fill: string, rim: string}} palette
+   * @param {{primary: string, secondary: string, secondaryShare: number}} spray
+   *   DEATH_SPRAY from src/render/sprite-factory.js
    * @param {number} [radius]
    */
-  death(x, y, palette, radius = 12) {
-    const fillTint = hexToPixi(palette.fill);
-    for (let i = 0; i < 7; i++) {
+  death(x, y, spray, radius = 12) {
+    const primary = hexToPixi(spray.primary);
+    const secondary = hexToPixi(spray.secondary);
+    const share = spray.secondaryShare ?? 0.4;
+
+    for (let i = 0; i < 9; i++) {
       const angle = Math.random() * Math.PI * 2;
-      const speed = 20 + Math.random() * 70;
+      const speed = 30 + Math.random() * 90;
       this.spawn({
         x,
         y,
@@ -257,12 +266,12 @@ export class ParticleSystem {
         vy: Math.sin(angle) * speed - 20,
         life: 0.36 + Math.random() * 0.3,
         size: 2 + Math.random() * radius * 0.3,
-        tint: fillTint,
+        tint: Math.random() < share ? secondary : primary,
         kind: PARTICLE_KINDS.MOTE,
         drag: 0.86,
       });
     }
-    this.ring(x, y, radius * 2.4, palette.rim);
+    this.ring(x, y, radius * 2.4, spray.primary);
   }
 
   /**

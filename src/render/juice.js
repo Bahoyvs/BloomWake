@@ -1,8 +1,24 @@
 /**
  * Tier B procedural animation (Phase 7) — the swarm's entire animation system.
  *
+ * ---------------------------------------------------------------------------
+ * RIGID BODIES ONLY
+ * ---------------------------------------------------------------------------
+ * There is no squash-and-stretch here any more. The original Tier B gave every
+ * swimmer an 8% sine squash on scaleY and the stationary types a slow breathe,
+ * which is the correct language for something soft and precisely wrong for a
+ * fleet of hulls — with two hundred of them on screen it read as the whole
+ * swarm being made of jelly.
+ *
+ * What remains is transform work a rigid object can honestly do: point along
+ * your velocity, scale in once when you arrive, fade out when you die, and
+ * flash white for two frames when you are hit. The kinetic half of an impact —
+ * the backward jolt — lives in the simulation as real velocity
+ * (HIT_KICK_IMPULSE), not as a fake transform, so a shoved enemy is genuinely
+ * somewhere else rather than merely drawn somewhere else.
+ *
  * WHY THIS EXISTS INSTEAD OF SPRITE SHEETS
- * Tier A (src/render/spriteAnimator.js) animates the Dewling and the Rustwhale,
+ * Tier A (src/render/spriteAnimator.js) animates the Drifter and the Dreadnought,
  * of which there is exactly one each. Swarm enemies run to 150-200 simultaneous
  * instances under the Phase 2 bounded-swarm cap, so anything paid per-instance
  * is paid two hundred times per frame. These transforms are a handful of
@@ -35,11 +51,6 @@
  * transform on an ordinary batched sprite.
  */
 
-/** Flutter cycle speed in radians/sec. */
-export const FLUTTER_SPEED = 6.5;
-/** Flutter amplitude — 8% vertical squash, per the Tier B spec. */
-export const FLUTTER_AMPLITUDE = 0.08;
-
 /** Spawn grow-in duration (ms in the spec, seconds here). */
 export const SPAWN_GROW_SEC = 0.18;
 /** Death dissolve duration. */
@@ -48,10 +59,6 @@ export const DEATH_DISSOLVE_SEC = 0.25;
 export const DEATH_SCALE_DROP = 0.25;
 /** Hit flash window — two frames at 60Hz. */
 export const HIT_FLASH_SEC = 0.033;
-
-/** Idle breathe rate and amplitude, for stationary types only. */
-export const BREATHE_SPEED = 2.2;
-export const BREATHE_AMPLITUDE = 0.014;
 
 /** Overshoot constant for the spawn ease — a small pop, not a bounce. */
 const EASE_OVERSHOOT = 1.2;
@@ -111,26 +118,9 @@ function easeOutBack(p) {
 /* ------------------------------------------------------------------ */
 
 /**
- * Vertical squash-and-stretch, the "swimming" tell.
- *
- * entity.phaseOffset is what stops 150 Ashfish from pulsing in lockstep. It is
- * assigned once at spawn from the pool and is a single number on the entity —
- * there is no per-instance animator object anywhere in Tier B.
- *
- * @param {Object} entity - Needs phaseOffset
- * @param {number} t - Simulation time, seconds
- * @param {Object} [out]
- * @returns {Object} out, with scaleY set
- */
-export function flutter(entity, t, out = createTransform()) {
-  out.scaleY = 1 + Math.sin(t * FLUTTER_SPEED + entity.phaseOffset) * FLUTTER_AMPLITUDE;
-  return out;
-}
-
-/**
  * Point the sprite along its own velocity.
  *
- * Uses real velocity rather than the vector to the Dewling, so a sine-wave
+ * Uses real velocity rather than the vector to the Drifter, so a sine-wave
  * Ashfish banks into its curve and a zigzagging Smogmoth actually leans through
  * the turn. A stationary entity keeps rotation 0 instead of snapping to an
  * arbitrary angle.
@@ -200,27 +190,6 @@ export function deathDissolve(entity, t, out = createTransform()) {
   return out;
 }
 
-/**
- * Slow breathing for stationary types (Rustbloom). Amplitude is 1.4% — enough
- * to stop the sprite reading as a static decal, small enough not to compete
- * with the swarm's motion for attention.
- *
- * Note: no phaseOffset term, matching the Tier B spec. At this amplitude
- * unison is not perceptible, and Rustblooms are rare enough that they seldom
- * share a screen.
- *
- * @param {Object} entity
- * @param {number} t
- * @param {Object} [out]
- * @returns {Object} out, with scale multiplied
- */
-export function idleBreathe(entity, t, out = createTransform()) {
-  const scale = 1 + Math.sin(t * BREATHE_SPEED) * BREATHE_AMPLITUDE;
-  out.scaleX *= scale;
-  out.scaleY *= scale;
-  return out;
-}
-
 /* ------------------------------------------------------------------ */
 /* Composition                                                         */
 /* ------------------------------------------------------------------ */
@@ -229,19 +198,27 @@ export function idleBreathe(entity, t, out = createTransform()) {
  * Which juice a type gets. Data-driven in the same spirit as
  * ENEMY_SPRITE_CONFIG — a new swarm enemy is a row here, not a code change.
  *
- * `stationary` types breathe instead of fluttering and do not rotate to face
- * travel; everything else swims.
+ * THE `flutter` AND `stationary` FLAGS ARE GONE. Both drove sine deformations
+ * on `scale.x/y` — an 8% vertical squash for the swimmers, a 1.4% breathe for
+ * the stationary ones — which is the organic wobble this pass removed. These
+ * are machines: a hull holds its shape, and the only thing left to decide
+ * per-species is whether it turns to face where it is going.
+ *
+ * `face: false` is for hulls with no meaningful front. The Xeno Larva is a
+ * faceted diamond and the Brood Spore is radially symmetric; rotating either to
+ * its heading is invisible work done 200 times a frame.
  */
 export const JUICE_PROFILE = {
-  tarling: { flutter: true, face: false },
-  ashfish: { flutter: true, face: true },
-  cracked_wisp: { flutter: true, face: true },
-  rustbloom: { stationary: true },
-  smogmoth: { flutter: true, face: true },
+  tarling: { face: false },
+  ashfish: { face: true },
+  cracked_wisp: { face: true },
+  rustbloom: { face: false },
+  smogmoth: { face: true },
+  bio_goliath: { face: true },
 };
 
 /** Fallback for any future swarm type not listed above. */
-export const DEFAULT_PROFILE = { flutter: true, face: false };
+export const DEFAULT_PROFILE = { face: true };
 
 /**
  * @param {string} typeId
@@ -255,9 +232,9 @@ export function getJuiceProfile(typeId) {
  * Full Tier B transform for one entity. This is the function the renderer
  * calls, once per enemy per frame.
  *
- * Order matters: flutter/breathe establish the base scale, spawnGrow and
- * deathDissolve multiply into it, so an enemy killed mid-flutter still shrinks
- * from wherever its flutter had it.
+ * Order matters: facing sets the rotation, then spawnGrow and deathDissolve
+ * multiply into the scale, so an enemy killed as it spawns still shrinks from
+ * wherever its grow-in had it.
  *
  * The reset on entry is the load-bearing line for the "no state leaks between
  * entities" property — `out` is shared across all 200 calls in a frame.
@@ -272,12 +249,7 @@ export function applyJuice(entity, t, out = createTransform(), profile = null) {
   resetTransform(out);
   const config = profile ?? getJuiceProfile(entity.typeId);
 
-  if (config.stationary) {
-    idleBreathe(entity, t, out);
-  } else {
-    if (config.flutter) flutter(entity, t, out);
-    if (config.face) facingRotation(entity, out);
-  }
+  if (config.face) facingRotation(entity, out);
 
   spawnGrow(entity, t, out);
   hitFlash(entity, t, out);

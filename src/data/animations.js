@@ -10,7 +10,7 @@
  * from real image dimensions at load time.
  *
  * fps IS written here, because playback speed is a design decision rather than
- * a property of the file — with one exception. The Rustwhale telegraph carries
+ * a property of the file — with one exception. The Dreadnought telegraph carries
  * `fps: null`: its speed is DERIVED at runtime from the Black Tide fairness
  * formula so the wind-up animation finishes exactly when the AoE lands. See
  * telegraphFps() below.
@@ -22,7 +22,7 @@
 import { calculateTelegraphMs } from './enemies.js';
 
 /** Where sprite sheets live, matching the existing art-drop convention. */
-export const SHEET_ROOT = 'assets/sprites/';
+export const SHEET_ROOT = 'assets/ships/';
 
 /**
  * Sheet layout conventions.
@@ -37,27 +37,27 @@ export const SHEET_LAYOUT = {
 };
 
 /**
- * The Tier A animation table. Tier A is Dewling + Rustwhale ONLY — they are the
+ * The Tier A animation table. Tier A is Drifter + Dreadnought ONLY — they are the
  * two entities that exist exactly once on screen, which is what makes
  * per-instance frame animation affordable. Swarm enemies are Tier B and are
  * deliberately absent from this table (see src/render/juice.js).
  */
 export const ANIMATION_MANIFEST = {
   dewling: {
-    idle: { sheet: 'dewling_idle.png', frames: null, fps: 6, loop: true },
-    move: { sheet: 'dewling_move.png', frames: null, fps: 10, loop: true },
-    attack: { sheet: 'dewling_attack.png', frames: null, fps: 14, loop: false },
-    hit: { sheet: 'dewling_hit.png', frames: null, fps: 16, loop: false },
-    death: { sheet: 'dewling_death.png', frames: null, fps: 10, loop: false },
+    idle: { sheet: 'drifter_idle.png', frames: null, fps: 6, loop: true },
+    move: { sheet: 'drifter_move.png', frames: null, fps: 10, loop: true },
+    attack: { sheet: 'drifter_attack.png', frames: null, fps: 14, loop: false },
+    hit: { sheet: 'drifter_hit.png', frames: null, fps: 16, loop: false },
+    death: { sheet: 'drifter_death.png', frames: null, fps: 10, loop: false },
   },
   rustwhale: {
-    idle: { sheet: 'rustwhale_idle.png', frames: null, fps: 4, loop: true },
+    idle: { sheet: 'leviathan_idle.png', frames: null, fps: 4, loop: true },
     // fps null => computed per-playback from the telegraph duration (Step A2).
-    telegraph: { sheet: 'rustwhale_telegraph.png', frames: null, fps: null, loop: false },
-    attack: { sheet: 'rustwhale_attack.png', frames: null, fps: 12, loop: false },
-    hit: { sheet: 'rustwhale_hit.png', frames: null, fps: 16, loop: false },
-    phaseUp: { sheet: 'rustwhale_phaseup.png', frames: null, fps: 10, loop: false },
-    death: { sheet: 'rustwhale_death.png', frames: null, fps: 8, loop: false },
+    telegraph: { sheet: 'leviathan_telegraph.png', frames: null, fps: null, loop: false },
+    attack: { sheet: 'leviathan_attack.png', frames: null, fps: 12, loop: false },
+    hit: { sheet: 'leviathan_hit.png', frames: null, fps: 16, loop: false },
+    phaseUp: { sheet: 'leviathan_phaseup.png', frames: null, fps: 10, loop: false },
+    death: { sheet: 'leviathan_death.png', frames: null, fps: 8, loop: false },
   },
 };
 
@@ -72,8 +72,8 @@ export const ANIMATION_MANIFEST = {
  * until swarm art beyond static PNGs exists.
  */
 export const SWARM_CYCLE_MANIFEST = {
-  ashfish: { sheet: 'ashfish_swim.png', frames: null, fps: 8, loop: true },
-  smogmoth: { sheet: 'smogmoth_flap.png', frames: null, fps: 12, loop: true },
+  ashfish: { sheet: 'strider_swim.png', frames: null, fps: 8, loop: true },
+  smogmoth: { sheet: 'stalker_flap.png', frames: null, fps: 12, loop: true },
 };
 
 /**
@@ -233,7 +233,7 @@ export function listMissingSheets(resolved, flat = false) {
  *
  *     telegraph_ms = (AoE_radius / dewling_speed) * 1000 + 300
  *
- * i.e. long enough for a Dewling standing at the centre to walk clear, plus a
+ * i.e. long enough for a Drifter standing at the centre to walk clear, plus a
  * 300ms reaction margin. That number already exists as calculateTelegraphMs in
  * src/data/enemies.js and is computed once per cast in Simulation —
  * it is NEVER recomputed here.
@@ -241,7 +241,7 @@ export function listMissingSheets(resolved, flat = false) {
  * The animation must therefore stretch to the duration, not the other way
  * round. Frame count is whatever the artist drew; fps absorbs the difference.
  * A fixed fps would mean the visual warning and the real hit window drift apart
- * the moment either the AoE radius or the Dewling's speed is tuned — and a
+ * the moment either the AoE radius or the Drifter's speed is tuned — and a
  * telegraph that finishes early or late is exactly the bug that makes a
  * deterministic boss feel cheap.
  *

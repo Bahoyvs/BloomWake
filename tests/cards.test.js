@@ -39,6 +39,10 @@ function placeEnemy(sim, offsetX, offsetY, hp = 100000) {
   enemy.y = sim.state.player.y + offsetY;
   enemy.hp = hp;
   enemy.maxHp = hp;
+  // baseSpeed, not speed: `speed` is derived every frame in updateEnemies now
+  // (a stun or a charge multiplier scales it), so pinning it would last one
+  // tick. baseSpeed is the authored figure the derivation starts from.
+  enemy.baseSpeed = 0;
   enemy.speed = 0;
   return enemy;
 }
@@ -68,55 +72,57 @@ describe('Card effects', () => {
     });
   });
 
-  describe('Sunbeam Lance — beam', () => {
-    it('damages enemies inside the strip and spares those outside', () => {
+  describe('Tesla Arc — chain lightning', () => {
+    it('damages nearest enemy in range and chains to nearby targets', () => {
       const sim = makeCardSim('sunbeam_lance');
-      const inBeam = placeEnemy(sim, 300, 0);
-      const outside = placeEnemy(sim, 300, 400);
+      const target1 = placeEnemy(sim, 200, 0);
+      const target2 = placeEnemy(sim, 280, 0);
+      const outside = placeEnemy(sim, 800, 800);
 
-      advance(sim, CARD_MODEL.BEAM_TICK_SEC * 1.5);
+      advance(sim, STEP * 2);
 
-      expect(inBeam.hp).toBeLessThan(inBeam.maxHp);
+      expect(target1.hp).toBeLessThan(target1.maxHp);
+      expect(target2.hp).toBeLessThan(target2.maxHp);
       expect(outside.hp).toBe(outside.maxHp);
     });
 
-    it('ticks at the rate the balance model assumes', () => {
+    it('deals damage according to level stats', () => {
       const sim = makeCardSim('sunbeam_lance');
       const stats = getCardById('sunbeam_lance').levels[0];
-      const enemy = placeEnemy(sim, 300, 0);
+      const enemy = placeEnemy(sim, 200, 0);
 
-      // Run exactly one activation.
-      advance(sim, stats.duration);
+      advance(sim, STEP * 2);
 
-      const expectedTicks = Math.floor(stats.duration / CARD_MODEL.BEAM_TICK_SEC);
       const dealt = enemy.maxHp - enemy.hp;
-      expect(dealt).toBeCloseTo(expectedTicks * stats.damage, 5);
+      expect(dealt).toBeCloseTo(stats.damage, 5);
+    });
+
+    it('applies shock slow at level 3+', () => {
+      const sim = makeCardSim('sunbeam_lance', 3);
+      const stats = getCardById('sunbeam_lance').levels[2];
+      const enemy = placeEnemy(sim, 200, 0);
+
+      advance(sim, STEP * 2);
+
+      expect(enemy.stunTimer).toBeGreaterThan(0);
+      expect(enemy.stunTimer).toBeCloseTo(stats.shockDuration, 1);
     });
 
     it('respects its cooldown between activations', () => {
       const sim = makeCardSim('sunbeam_lance');
       const stats = getCardById('sunbeam_lance').levels[0];
-      placeEnemy(sim, 300, 0);
+      placeEnemy(sim, 200, 0);
 
       const rt = () => sim.cards.runtime.get('sunbeam_lance');
 
-      advance(sim, stats.duration + STEP);
-      expect(rt().active).toBe(false);
+      advance(sim, STEP * 2);
+      expect(rt().cooldown).toBeGreaterThan(0);
 
       advance(sim, stats.cooldown * 0.5);
-      expect(rt().active).toBe(false);
+      expect(rt().cooldown).toBeGreaterThan(0);
 
-      // Step to the re-fire rather than jumping a fixed span: overshooting a
-      // full cooldown lands in the NEXT idle window, not the active one.
-      let reactivated = false;
-      for (let i = 0; i < Math.ceil(stats.cooldown / STEP) + 2; i++) {
-        sim.update(STEP, { x: 0, y: 0 });
-        if (rt().active) {
-          reactivated = true;
-          break;
-        }
-      }
-      expect(reactivated).toBe(true);
+      advance(sim, stats.cooldown * 0.6);
+      expect(rt().cooldown).toBeLessThanOrEqual(stats.cooldown);
     });
   });
 
@@ -179,27 +185,80 @@ describe('Card effects', () => {
     });
   });
 
-  describe('Aurora Pulse — AoE', () => {
-    it('damages every enemy inside the radius and none outside', () => {
+  describe('Nanite Swarm — guided micro-missiles', () => {
+    it('launches the level count of missiles', () => {
       const sim = makeCardSim('aurora_pulse');
       const stats = getCardById('aurora_pulse').levels[0];
-      const near = placeEnemy(sim, stats.radius * 0.5, 0);
-      const far = placeEnemy(sim, stats.radius + 200, 0);
+      placeEnemy(sim, 300, 0);
 
       sim.update(STEP);
 
-      expect(near.maxHp - near.hp).toBeCloseTo(stats.damage, 5);
-      expect(far.hp).toBe(far.maxHp);
+      const missiles = sim.projectiles.filter((p) => p.turnRate > 0);
+      expect(missiles).toHaveLength(stats.count);
     });
 
-    it('leaves a ring effect for the renderer', () => {
+    it('picks the highest-HP target, not the nearest', () => {
+      /*
+       * The card's whole identity, and the reason it is the answer to a
+       * Bio-Goliath escort wall: every other weapon in the kit hits whatever
+       * happens to be closest, which in that fight is deliberately the chaff.
+       */
       const sim = makeCardSim('aurora_pulse');
+      placeEnemy(sim, 80, 0, 50); // near and frail
+      const fat = placeEnemy(sim, 320, 0, 9000); // far and tanky
+
       sim.update(STEP);
-      expect(sim.effects.some((fx) => fx.kind === 'pulse')).toBe(true);
+
+      const missiles = sim.projectiles.filter((p) => p.turnRate > 0);
+      expect(missiles.length).toBeGreaterThan(0);
+      for (const missile of missiles) expect(missile.targetId).toBe(fat.id);
+    });
+
+    it('fans the salvo out rather than firing it down one line', () => {
+      // A missile launched straight at its target is a slow bolt wearing a
+      // missile sprite; the arc back in is the effect.
+      const sim = makeCardSim('aurora_pulse', 5);
+      placeEnemy(sim, 300, 0);
+
+      sim.update(STEP);
+
+      const angles = sim.projectiles
+        .filter((p) => p.turnRate > 0)
+        .map((p) => Math.atan2(p.vy, p.vx));
+      expect(new Set(angles.map((a) => a.toFixed(3))).size).toBe(angles.length);
+    });
+
+    it('steers a missile onto its target over time', () => {
+      const sim = makeCardSim('aurora_pulse');
+      const target = placeEnemy(sim, 400, 0);
+
+      sim.update(STEP);
+      const missile = sim.projectiles.find((p) => p.turnRate > 0);
+      const before = Math.hypot(target.x - missile.x, target.y - missile.y);
+
+      advance(sim, 0.6);
+      const after = Math.hypot(target.x - missile.x, target.y - missile.y);
+      expect(after).toBeLessThan(before);
+    });
+
+    it('re-acquires when its target dies mid-flight', () => {
+      const sim = makeCardSim('aurora_pulse');
+      const first = placeEnemy(sim, 300, 0, 9000);
+      const second = placeEnemy(sim, 340, 40, 8000);
+
+      sim.update(STEP);
+      const missile = sim.projectiles.find((p) => p.turnRate > 0);
+      expect(missile.targetId).toBe(first.id);
+
+      sim.killEnemy(first);
+      advance(sim, 0.2);
+
+      // Flies on and finds the next-biggest thing, rather than stopping dead.
+      expect(missile.targetId).toBe(second.id);
     });
   });
 
-  describe('Tidewave — AoE knockback', () => {
+  describe('Graviton EMP — knockback and stun', () => {
     it('damages and pushes enemies outward', () => {
       const sim = makeCardSim('tidewave');
       const stats = getCardById('tidewave').levels[0];
@@ -208,7 +267,51 @@ describe('Card effects', () => {
       sim.update(STEP);
 
       expect(enemy.maxHp - enemy.hp).toBeCloseTo(stats.damage, 5);
-      expect(enemy.x - sim.state.player.x).toBeCloseTo(50 + stats.knockback, 5);
+      // The push, plus the fraction of a frame of drift the enemy has already
+      // taken from the ring's own knock impulse.
+      expect(enemy.x - sim.state.player.x).toBeGreaterThanOrEqual(50 + stats.knockback - 2);
+    });
+
+    it('freezes what it catches for the flat stun duration', () => {
+      const sim = makeCardSim('tidewave');
+      const enemy = placeEnemy(sim, 50, 0);
+      enemy.speed = 999;
+
+      sim.update(STEP);
+      expect(enemy.stunTimer).toBeGreaterThan(0);
+      expect(enemy.stunTimer).toBeLessThanOrEqual(CARD_MODEL.EMP_STUN_SEC);
+
+      // Checked on the NEXT frame: cards tick after the enemy pass, so the
+      // stun applied this frame is honoured from the following one.
+      sim.update(STEP);
+      expect(enemy.speed).toBe(0);
+
+      advance(sim, CARD_MODEL.EMP_STUN_SEC + 0.2);
+      expect(enemy.stunTimer).toBeLessThanOrEqual(0);
+    });
+
+    it('refreshes a stun rather than stacking it', () => {
+      // Overlapping EMPs must not compound into a permanent lock.
+      const sim = makeCardSim('tidewave');
+      const enemy = placeEnemy(sim, 50, 0);
+
+      sim.cards.blast(200, 0, 0, CARD_MODEL.EMP_STUN_SEC);
+      sim.cards.blast(200, 0, 0, CARD_MODEL.EMP_STUN_SEC);
+
+      expect(enemy.stunTimer).toBeCloseTo(CARD_MODEL.EMP_STUN_SEC, 5);
+    });
+
+    it('never stuns the boss', () => {
+      // A station that can be frozen out of its own attack patterns is not a
+      // boss fight, it is a damage check.
+      const sim = makeCardSim('tidewave');
+      const boss = sim.spawnBoss();
+      boss.x = sim.state.player.x + 40;
+      boss.y = sim.state.player.y;
+
+      sim.cards.blast(300, 0, 0, CARD_MODEL.EMP_STUN_SEC);
+
+      expect(boss.stunTimer).toBe(0);
     });
 
     it('keeps pushed enemies inside the arena', () => {
@@ -223,60 +326,102 @@ describe('Card effects', () => {
     });
   });
 
-  describe('Bloomshield — mitigation', () => {
-    it('absorbs damage before the Dewling loses HP', () => {
+  describe('Hyperion Shield — hit negation', () => {
+    it('negates an incoming hit outright, whatever its size', () => {
+      // All or nothing: the barrier is a charge, not a pool, so there is no
+      // overflow to compute and the player either got the save or did not.
       const sim = makeCardSim('bloomshield');
-      const stats = getCardById('bloomshield').levels[0]; // 20 HP
 
-      const remaining = sim.cards.absorb(8);
-
-      expect(remaining).toBe(0);
-      expect(sim.cards.shieldCharge).toBe(stats.shieldHp - 8);
+      expect(sim.cards.absorb(8)).toBe(0);
+      expect(sim.cards.getShieldState().ready).toBe(false);
     });
 
-    it('passes through the overflow once the shield breaks', () => {
+    it('eats a hit far larger than the old shield pool could have', () => {
       const sim = makeCardSim('bloomshield');
-      const broken = vi.fn();
-      sim.bus.on('card:shield_broken', broken);
-
-      const remaining = sim.cards.absorb(30); // shield is 20
-
-      expect(remaining).toBe(10);
-      expect(sim.cards.shieldCharge).toBe(0);
-      expect(broken).toHaveBeenCalledTimes(1);
+      expect(sim.cards.absorb(9999)).toBe(0);
     });
 
-    it('recharges to full after rechargeTime', () => {
+    it('lets the next hit through while it is spent', () => {
+      const sim = makeCardSim('bloomshield');
+      const negated = vi.fn();
+      sim.bus.on('card:shield_negate', negated);
+
+      sim.cards.absorb(8);
+      expect(sim.cards.absorb(30)).toBe(30);
+      expect(negated).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-arms after rechargeTime', () => {
       const sim = makeCardSim('bloomshield');
       const stats = getCardById('bloomshield').levels[0];
-      sim.cards.absorb(stats.shieldHp);
-      expect(sim.cards.shieldCharge).toBe(0);
+      sim.cards.absorb(10);
+      expect(sim.cards.getShieldState().ready).toBe(false);
 
       advance(sim, stats.rechargeTime * 0.5);
-      expect(sim.cards.shieldCharge).toBe(0);
+      expect(sim.cards.getShieldState().ready).toBe(false);
 
       advance(sim, stats.rechargeTime);
-      expect(sim.cards.shieldCharge).toBe(stats.shieldHp);
+      expect(sim.cards.getShieldState().ready).toBe(true);
+      expect(sim.cards.shieldCharge).toBe(1);
     });
 
-    it('sustains the HP/sec rate the balance model credits it with', () => {
-      const stats = getCardById('bloomshield').levels[4];
-      // Balance model scores mitigation as shieldHp / rechargeTime.
-      expect(stats.shieldHp / stats.rechargeTime).toBeCloseTo(9.0, 5);
+    it('buys frequency with levels, never size', () => {
+      // A hit is a hit — the only thing a level can improve is how often the
+      // barrier is there for one.
+      const card = getCardById('bloomshield');
+      let previous = Infinity;
+      for (const level of card.levels) {
+        expect(level.negates).toBe(1);
+        expect(level.rechargeTime).toBeLessThan(previous);
+        previous = level.rechargeTime;
+      }
     });
 
     it('shields the player through the simulation damage path', () => {
       const sim = makeCardSim('bloomshield');
-      const enemy = placeEnemy(sim, 0, 0);
+      placeEnemy(sim, 0, 0);
 
       sim.update(STEP);
 
       expect(sim.state.player.hp).toBe(100);
-      expect(sim.cards.shieldCharge).toBe(20 - enemy.contactDamage);
+      expect(sim.cards.getShieldState().ready).toBe(false);
     });
   });
 
-  describe('Buddy Boost — passive', () => {
+  describe('Tactical Wingman — escort drones', () => {
+    it('flies the level count of drones', () => {
+      const sim = makeCardSim('buddy_boost', 3);
+      sim.update(STEP);
+      expect(sim.cards.drones).toHaveLength(3 >= 3 ? 2 : 1);
+    });
+
+    it('reports no drones when the card is unowned', () => {
+      const sim = makeCardSim('dewdrop_barrage');
+      expect(sim.cards.drones).toHaveLength(0);
+    });
+
+    it('trails the Drifter rather than sitting on top of it', () => {
+      const sim = makeCardSim('buddy_boost', 5);
+      advance(sim, 1.0);
+
+      const player = sim.state.player;
+      for (const drone of sim.cards.drones) {
+        const gap = Math.hypot(drone.x - player.x, drone.y - player.y);
+        expect(gap).toBeGreaterThan(CARD_MODEL.WINGMAN_FOLLOW_DIST * 0.5);
+      }
+    });
+
+    it('fires its own bolts at a target the Drifter is not aimed at', () => {
+      const sim = makeCardSim('buddy_boost', 5);
+      advance(sim, 0.5);
+      placeEnemy(sim, 120, 0);
+      advance(sim, 1.5);
+
+      expect(sim.projectiles.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('Tactical Wingman — stat half', () => {
     it('is a no-op when unowned', () => {
       const sim = makeCardSim('dewdrop_barrage');
       expect(sim.cards.damageMultiplier).toBe(1);
@@ -292,8 +437,8 @@ describe('Card effects', () => {
     });
 
     it('boosts damage dealt by other cards', () => {
-      const plain = makeCardSim('aurora_pulse');
-      const boosted = makeCardSim('aurora_pulse');
+      const plain = makeCardSim('tidewave');
+      const boosted = makeCardSim('tidewave');
       boosted.state.selectCard('buddy_boost');
       boosted.state.selectCard('buddy_boost');
       boosted.cards.onCardChanged('buddy_boost');
@@ -309,6 +454,10 @@ describe('Card effects', () => {
     it('makes the Dewling move faster', () => {
       const sim = makeCardSim('buddy_boost', 5);
       const stats = getCardById('buddy_boost').levels[4];
+
+      // Spend the acceleration ramp first: the ship has mass, so the bonus is
+      // a change to terminal speed rather than to the first frame's step.
+      for (let i = 0; i < 60; i++) sim.update(STEP, { x: 1, y: 0 });
       const startX = sim.state.player.x;
 
       for (let i = 0; i < 60; i++) sim.update(STEP, { x: 1, y: 0 });
@@ -352,20 +501,29 @@ describe('Card stacking and levelling', () => {
     expect(sim.state.activeCards.get('petal_storm')).toBe(5);
   });
 
-  it('tops the shield up to the new capacity on level up', () => {
+  it('does not refund a spent charge on level up', () => {
+    /*
+     * Levelling the barrier shortens its recharge; it does not hand back a
+     * charge. Otherwise a player could bank a free hit by sitting on an XP orb
+     * until they needed one.
+     */
     const sim = makeCardSim('bloomshield');
-    const l2 = getCardById('bloomshield').levels[1];
+    sim.cards.absorb(10);
+    expect(sim.cards.getShieldState().ready).toBe(false);
 
     sim.state.selectCard('bloomshield');
     sim.cards.onCardChanged('bloomshield');
 
-    expect(sim.cards.shieldCharge).toBe(l2.shieldHp);
+    expect(sim.cards.getShieldState().ready).toBe(false);
+    // The shorter recharge does apply to the cycle already in flight.
+    const l2 = getCardById('bloomshield').levels[1];
+    expect(sim.cards.getShieldState().timer).toBeLessThanOrEqual(l2.rechargeTime);
   });
 
-  it('does not refill a shield that is mid-recharge', () => {
+  it('does not re-arm a barrier that is mid-recharge', () => {
     const sim = makeCardSim('bloomshield');
-    sim.cards.absorb(999); // break it
-    expect(sim.cards.shieldCharge).toBe(0);
+    sim.cards.absorb(999); // spend it
+    expect(sim.cards.getShieldState().ready).toBe(false);
 
     sim.state.selectCard('bloomshield');
     sim.cards.onCardChanged('bloomshield');

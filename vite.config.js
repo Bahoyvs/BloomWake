@@ -1,38 +1,26 @@
-import { cpSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 
 /**
- * Copy the art folder into the build output.
+ * Vite config.
  *
- * The manifest in src/core/assets.js points at `/assets/sprites/...`, and the
- * art lives in `assets/` at the project root. Vite's dev server happens to
- * serve project-root files, so this works in dev with no help — but only
- * `publicDir` is copied on build, so a production bundle would ship with every
- * texture 404ing and fall back to placeholders.
+ * ASSET PIPELINE
+ * Game art is staged into `public/assets/` by `npm run assets`
+ * (tools/build-assets.mjs), which converts the Kenney vendor packs in
+ * `assets/` into the two JSON spritesheets and the handful of UI plates the
+ * game actually loads. Vite copies `publicDir` verbatim on build, so the
+ * manifest's `assets/ships/fleet.json` resolves identically in dev and in a
+ * production bundle with no plugin involved.
  *
- * Rather than move the folder (the art drop location is a fixed convention) or
- * pull in vite-plugin-static-copy, copy it during `closeBundle`.
+ * This replaces an earlier `closeBundle` hook that copied the whole `assets/`
+ * tree into `dist/`. That shipped all 1100+ raw vendor files — every UI colour
+ * variant, both unused spritesheets, the fonts — for the sake of the dozen the
+ * game reads, and it wrote them to the same `dist/assets/` path publicDir now
+ * owns. Staging first and serving only the staged output is both smaller and
+ * unambiguous about which copy is live.
  */
-function copyGameAssets() {
-  return {
-    name: 'bloomwake-copy-assets',
-    apply: 'build',
-    closeBundle() {
-      const from = resolve(__dirname, 'assets');
-      if (!existsSync(from)) {
-        this.warn('assets/ not found — build will run on placeholder textures');
-        return;
-      }
-      cpSync(from, resolve(__dirname, 'dist', 'assets'), { recursive: true });
-    },
-  };
-}
-
 export default defineConfig({
   root: '.',
   publicDir: 'public',
-  plugins: [copyGameAssets()],
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
@@ -42,6 +30,7 @@ export default defineConfig({
     port: 3000,
     open: false,
     watch: {
+      // The vendor packs are inputs to `npm run assets`, not to the dev server.
       ignored: ['**/assets/**'],
     },
   },

@@ -23,12 +23,15 @@ import {
 import { THEME, contrastRatio, MIN_HERO_CONTRAST } from '../src/render/theme.js';
 
 describe('caustics palette', () => {
-  it('uses the art-directed floor, marine glow and cyan core', () => {
-    expect(CAUSTICS_PALETTE.deep).toBe('#051121');
-    expect(CAUSTICS_PALETTE.core).toBe('#40e0d0');
+  it('uses the deep-space floor and the violet filament core', () => {
+    // The floor is the theme's own background colour, not a near-miss of it —
+    // the lattice has to sit ON the void, not float above a slightly different
+    // shade of it.
+    expect(CAUSTICS_PALETTE.deep).toBe(THEME.background.top);
+    expect(CAUSTICS_PALETTE.core).toBe('#b9a8ff');
   });
 
-  it('keeps the FLOOR colours below the Frutevil luminance ceiling', () => {
+  it('keeps the FLOOR colours below the Swarm luminance ceiling', () => {
     // The large-area colours are the ones that set perceived screen
     // brightness, and they still obey the original contract outright.
     for (const name of ['deep', 'abyss', 'glow']) {
@@ -140,7 +143,7 @@ describe('aesthetic tuning constraints', () => {
     const toHex = (c) => Math.round(c).toString(16).padStart(2, '0');
     const litHex = `#${lit.map(toHex).join('')}`;
 
-    // A haloed pixel must stay far below the Frutevil enemy ceiling — it is
+    // A haloed pixel must stay far below the Swarm enemy ceiling — it is
     // background, so it has to lose to everything, not merely to the hero.
     expect(paletteLuminance(litHex)).toBeLessThan(0.05);
     // ...and still be distinguishable from the base, or there is no texture.

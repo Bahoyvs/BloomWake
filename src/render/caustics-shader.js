@@ -28,27 +28,35 @@
 /**
  * Background palette, per the art direction for this pass.
  *
- * These are deliberately dark: the "Visual Soup" rule says the Dewling stays
+ * These are deliberately dark: the "Visual Soup" rule says the Drifter stays
  * findable in a 200-enemy swarm only because nothing else approaches its
- * luminance. A bright cyan pool floor would break that for the whole screen at
- * once, which is worse than any single sprite doing it.
+ * luminance. A bright field would break that for the whole screen at once,
+ * which is worse than any single sprite doing it.
+ *
+ * RETHEMED FOR THE VOID. The same lattice that read as pool caustics reads as
+ * a drifting energy field once the floor goes to deep-space black, the wide
+ * halo goes nebula violet, and the time scale slows to something that does not
+ * undulate. The geometry did not need to change — only what colour it is and
+ * how fast it moves — which is why this is a palette edit and not a new shader.
  */
 export const CAUSTICS_PALETTE = {
-  /** Deep navy floor. */
-  deep: '#051121',
+  /** Deep-space floor — PALETTE.background. */
+  deep: '#05070f',
   /** Even darker tone pushed into the vignette corners. */
-  abyss: '#020912',
+  abyss: '#02030a',
 
   /**
-   * Soft halo around each thread — a vibrant marine blue bloom that falls off into
-   * the floor colour. This is what the eye reads as "wet" and sun-drenched.
+   * Soft halo around each thread — a nebula violet bloom falling off into the
+   * void. This is the layer that covers real screen area, so it is the one held
+   * hardest to the darkness contract.
    */
-  glow: '#227b9c',
+  glow: '#2a1b6b',
 
   /**
-   * The core of a caustic thread.
+   * The core of a filament. Bright, but a hairline — see the coverage argument
+   * in tests/caustics-shader.test.js.
    */
-  core: '#40e0d0',
+  core: '#b9a8ff',
 };
 
 export const CAUSTICS_TUNING = {
@@ -59,9 +67,11 @@ export const CAUSTICS_TUNING = {
   scaleB: 47.0,
 
   /**
-   * Global time multiplier. Low: the water undulates, it does not churn.
+   * Global time multiplier. Very low: the field DRIFTS. At the old 0.12 the
+   * lattice undulated, which is what made it read as water rather than as
+   * something vast and far away.
    */
-  timeScale: 0.12,
+  timeScale: 0.05,
 
   /**
    * LAYER 1 — the core. Half-width in pixels.

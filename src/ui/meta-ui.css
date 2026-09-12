@@ -1,6 +1,7 @@
 /*
- * Phase 6 meta-progression UI — Frutiger Aero glass.
- * Shares the --aero-* custom properties defined in hud.css.
+ * Meta-progression UI — Void Drifter cockpit chrome.
+ * Shares the --hull-* custom properties defined in hud.css, so the menu, shop
+ * and results screens cannot drift away from the in-run HUD's palette.
  */
 
 .meta {
@@ -8,7 +9,7 @@
   inset: 0;
   display: none;
   font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
-  color: var(--aero-text);
+  color: var(--hull-text);
   pointer-events: none;
 }
 
@@ -27,10 +28,10 @@
   padding: 32px 24px;
   overflow-y: auto;
   background:
-    radial-gradient(circle at 50% 0%, rgba(24, 92, 118, 0.55), transparent 60%),
-    linear-gradient(180deg, rgba(6, 28, 40, 0.94), rgba(2, 8, 14, 0.97));
-  backdrop-filter: var(--aero-blur);
-  -webkit-backdrop-filter: var(--aero-blur);
+    radial-gradient(circle at 50% 0%, rgba(20, 40, 110, 0.5), transparent 60%),
+    linear-gradient(180deg, rgba(6, 12, 28, 0.95), rgba(2, 3, 10, 0.97));
+  backdrop-filter: var(--hull-blur);
+  -webkit-backdrop-filter: var(--hull-blur);
   pointer-events: auto;
 }
 
@@ -47,11 +48,11 @@
   font-weight: 800;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  background: linear-gradient(180deg, #f2fdff, #6fd6f0);
+  background: linear-gradient(180deg, #eafdff, #00f0ff);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  filter: drop-shadow(0 0 22px rgba(127, 230, 255, 0.45));
+  filter: drop-shadow(0 0 22px rgba(0, 240, 255, 0.5));
 }
 
 .meta__tagline {
@@ -59,7 +60,7 @@
   font-size: 14px;
   letter-spacing: 0.24em;
   text-transform: uppercase;
-  color: var(--aero-text-dim);
+  color: var(--hull-text-dim);
 }
 
 .meta__heading {
@@ -73,12 +74,12 @@
   font-size: 14px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--aero-text-dim);
+  color: var(--hull-text-dim);
 }
 
 .meta__wallet b {
   font-size: 20px;
-  color: var(--aero-mint);
+  color: var(--bio-acid);
   font-variant-numeric: tabular-nums;
 }
 
@@ -109,13 +110,13 @@
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--aero-text);
-  background: var(--aero-specular), var(--aero-glass-strong);
-  backdrop-filter: var(--aero-blur);
-  -webkit-backdrop-filter: var(--aero-blur);
-  border: 1px solid var(--aero-edge);
+  color: var(--hull-text);
+  background: var(--hull-specular), var(--hull-plate-strong);
+  backdrop-filter: var(--hull-blur);
+  -webkit-backdrop-filter: var(--hull-blur);
+  border: 1px solid var(--hull-edge);
   border-radius: 999px;
-  box-shadow: var(--aero-shadow-soft);
+  box-shadow: var(--hull-shadow-soft);
   cursor: pointer;
   transition: transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease;
 }
@@ -124,8 +125,8 @@
   transform: translateY(-2px);
   filter: brightness(1.15);
   box-shadow:
-    inset 0 1px 0 var(--aero-edge-bright),
-    inset 0 0 24px rgba(127, 230, 255, 0.34),
+    inset 0 1px 0 var(--hull-edge-bright),
+    inset 0 0 24px rgba(0, 240, 255, 0.34),
     0 14px 34px rgba(0, 0, 0, 0.6);
 }
 
@@ -135,29 +136,29 @@
 }
 
 .meta__btn--primary {
-  color: #04222e;
+  color: #061024;
   background:
     linear-gradient(180deg,
       rgba(255, 255, 255, 0.9) 0%,
       rgba(255, 255, 255, 0.42) 49.9%,
       rgba(255, 255, 255, 0.05) 50%,
       rgba(255, 255, 255, 0.22) 100%),
-    linear-gradient(180deg, #cdf3ff, #3fb9e4);
-  border-color: var(--aero-edge-bright);
+    linear-gradient(180deg, #9ff8ff, #00f0ff);
+  border-color: var(--hull-edge-bright);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.95),
-    0 0 26px rgba(127, 230, 255, 0.5),
+    0 0 26px rgba(0, 240, 255, 0.5),
     0 10px 28px rgba(0, 0, 0, 0.5);
 }
 
 .meta__btn--primary:hover:not(:disabled) {
-  background: linear-gradient(180deg, #ecfdff, #9de6ff);
+  background: linear-gradient(180deg, #eafdff, #7df9ff);
 }
 
 .meta__btn--ready {
-  border-color: rgba(155, 245, 196, 0.6);
-  color: var(--aero-mint);
-  box-shadow: inset 0 1px 0 var(--aero-edge-bright), 0 0 20px rgba(155, 245, 196, 0.3);
+  border-color: rgba(0, 255, 136, 0.6);
+  color: var(--bio-acid);
+  box-shadow: inset 0 1px 0 var(--hull-edge-bright), 0 0 20px rgba(0, 255, 136, 0.3);
 }
 
 .meta__header {
@@ -190,12 +191,12 @@
   flex-direction: column;
   gap: 6px;
   padding: 14px;
-  background: var(--aero-specular), var(--aero-glass);
-  backdrop-filter: var(--aero-blur);
-  -webkit-backdrop-filter: var(--aero-blur);
-  border: 1px solid var(--aero-edge);
+  background: var(--hull-specular), var(--hull-plate);
+  backdrop-filter: var(--hull-blur);
+  -webkit-backdrop-filter: var(--hull-blur);
+  border: 1px solid var(--hull-edge);
   border-radius: 12px;
-  box-shadow: var(--aero-shadow-soft);
+  box-shadow: var(--hull-shadow-soft);
 }
 
 .meta__card--maxed {
@@ -203,11 +204,11 @@
 }
 
 .meta__card--equipped {
-  border-color: var(--aero-cyan);
+  border-color: var(--neon-cyan);
   box-shadow:
-    inset 0 1px 0 var(--aero-edge-bright),
-    inset 0 0 30px rgba(127, 230, 255, 0.4),
-    0 0 30px rgba(127, 230, 255, 0.3);
+    inset 0 1px 0 var(--hull-edge-bright),
+    inset 0 0 30px rgba(0, 240, 255, 0.4),
+    0 0 30px rgba(0, 240, 255, 0.3);
 }
 
 .meta__card-name {
@@ -278,9 +279,9 @@
   width: 46px;
   height: 46px;
   border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
-  background: radial-gradient(circle at 35% 30%, #9be8ff, #2a7f9c 60%, #14495c);
-  border: 1px solid var(--aero-edge-bright);
-  box-shadow: inset 0 2px 6px rgba(255, 255, 255, 0.55), 0 0 24px rgba(127, 230, 255, 0.35);
+  background: radial-gradient(circle at 35% 30%, #7df9ff, #1d4ea8 60%, #122a5c);
+  border: 1px solid var(--hull-edge-bright);
+  box-shadow: inset 0 2px 6px rgba(255, 255, 255, 0.55), 0 0 24px rgba(0, 240, 255, 0.35);
   transform: scale(1);
 }
 
@@ -318,16 +319,16 @@
   text-transform: uppercase;
 }
 
-.meta__tier--common { color: #a8c9d8; }
-.meta__tier--uncommon { color: var(--aero-mint); }
-.meta__tier--rare { color: var(--aero-cyan); }
-.meta__tier--legendary { color: #ffd98a; }
+.meta__tier--common { color: #8fa8c4; }
+.meta__tier--uncommon { color: var(--bio-acid); }
+.meta__tier--rare { color: var(--neon-cyan); }
+.meta__tier--legendary { color: #ffcc00; }
 
 .meta__petals {
   font-size: 24px;
   font-weight: 800;
-  color: var(--aero-mint);
-  text-shadow: 0 0 16px rgba(155, 245, 196, 0.5);
+  color: var(--bio-acid);
+  text-shadow: 0 0 16px rgba(0, 255, 136, 0.5);
   font-variant-numeric: tabular-nums;
 }
 
@@ -342,9 +343,9 @@
   height: 26px;
   font: inherit;
   font-weight: 700;
-  color: var(--aero-text-dim);
-  background: var(--aero-glass-strong);
-  border: 1px solid var(--aero-edge);
+  color: var(--hull-text-dim);
+  background: var(--hull-plate-strong);
+  border: 1px solid var(--hull-edge);
   border-radius: 50%;
   cursor: pointer;
 }
@@ -356,12 +357,12 @@
 .meta__odds {
   display: none;
   padding: 12px 16px;
-  background: var(--aero-specular), var(--aero-glass-strong);
-  backdrop-filter: var(--aero-blur);
-  -webkit-backdrop-filter: var(--aero-blur);
-  border: 1px solid var(--aero-edge);
+  background: var(--hull-specular), var(--hull-plate-strong);
+  backdrop-filter: var(--hull-blur);
+  -webkit-backdrop-filter: var(--hull-blur);
+  border: 1px solid var(--hull-edge);
   border-radius: 12px;
-  box-shadow: var(--aero-shadow-soft);
+  box-shadow: var(--hull-shadow-soft);
 }
 
 .meta__odds--visible {
@@ -394,12 +395,12 @@
   transform: translate(-50%, -8px);
   padding: 9px 16px;
   font-size: 13px;
-  background: var(--aero-specular), rgba(12, 48, 64, 0.88);
-  backdrop-filter: var(--aero-blur);
-  -webkit-backdrop-filter: var(--aero-blur);
-  border: 1px solid var(--aero-edge);
+  background: var(--hull-specular), rgba(8, 16, 36, 0.9);
+  backdrop-filter: var(--hull-blur);
+  -webkit-backdrop-filter: var(--hull-blur);
+  border: 1px solid var(--hull-edge);
   border-radius: 999px;
-  box-shadow: var(--aero-shadow-soft);
+  box-shadow: var(--hull-shadow-soft);
   opacity: 0;
   /* Never intercepts input: the run continues underneath it. */
   pointer-events: none;
@@ -417,7 +418,7 @@
   text-transform: uppercase;
 }
 
-.meta__toast-tier--common { color: #a8c9d8; }
-.meta__toast-tier--uncommon { color: var(--aero-mint); }
-.meta__toast-tier--rare { color: var(--aero-cyan); }
-.meta__toast-tier--legendary { color: #ffd98a; }
+.meta__toast-tier--common { color: #8fa8c4; }
+.meta__toast-tier--uncommon { color: var(--bio-acid); }
+.meta__toast-tier--rare { color: var(--neon-cyan); }
+.meta__toast-tier--legendary { color: #ffcc00; }

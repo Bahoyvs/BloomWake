@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { ENEMIES, ENEMY_TYPES, calculateTelegraphMs, getUnlockedEnemiesForWave } from '../src/data/enemies.js';
 import { Simulation } from '../src/core/simulation.js';
 
-describe('Frutevil Enemy Roster & Boss Telegraph (Phase 4)', () => {
-  it('calculates Rustwhale Boss telegraph duration deterministically', () => {
+describe('Chitin Swarm roster & Dreadnought Station telegraph', () => {
+  it('calculates Dreadnought Station telegraph duration deterministically', () => {
     // telegraph_ms = (AoE_radius / dewling_speed) * 1000 + 300ms_safety_margin
     // Example: radius 130px, dewling speed 3.2 * 32 = 102.4 px/s
     const ms = calculateTelegraphMs(130, 102.4, 300);
@@ -24,7 +24,7 @@ describe('Frutevil Enemy Roster & Boss Telegraph (Phase 4)', () => {
     expect(wave8).toEqual(['tarling', 'ashfish', 'cracked_wisp', 'rustbloom', 'smogmoth']);
   });
 
-  it('spawns scaled Rustwhale Bosses on waves 5 (Boss 1), 10 (Boss 2), and 15 (Final Boss)', () => {
+  it('spawns scaled Dreadnought Stations on waves 5 (Boss 1), 10 (Boss 2), and 15 (Final Boss)', () => {
     const sim = new Simulation({ seed: 42 });
     sim.startRun();
 
@@ -34,7 +34,7 @@ describe('Frutevil Enemy Roster & Boss Telegraph (Phase 4)', () => {
     sim.update(0.1);
     let boss = sim.enemies.find((e) => e.isBoss);
     expect(boss).toBeDefined();
-    expect(boss.hp).toBe(650); // 400 + (5/5)*250
+    expect(boss.hp).toBe(1625); // 1000 + (5/5)*625
 
     // Reset enemies and check Wave 10: Boss 2
     sim.enemies.length = 0;
@@ -43,7 +43,7 @@ describe('Frutevil Enemy Roster & Boss Telegraph (Phase 4)', () => {
     sim.update(0.1);
     boss = sim.enemies.find((e) => e.isBoss);
     expect(boss).toBeDefined();
-    expect(boss.hp).toBe(900); // 400 + (10/5)*250
+    expect(boss.hp).toBe(2250); // 1000 + (10/5)*625
 
     // Reset enemies and check Wave 15: Final Boss
     sim.enemies.length = 0;
@@ -52,10 +52,10 @@ describe('Frutevil Enemy Roster & Boss Telegraph (Phase 4)', () => {
     sim.update(0.1);
     boss = sim.enemies.find((e) => e.isBoss);
     expect(boss).toBeDefined();
-    expect(boss.hp).toBe(1150); // 400 + (15/5)*250
+    expect(boss.hp).toBe(2875); // 1000 + (15/5)*625
   });
 
-  it('triggers Rustwhale telegraph attack and eruption event', () => {
+  it('triggers the Dreadnought telegraph attack and eruption event', () => {
     const sim = new Simulation({ seed: 100 });
     sim.startRun();
     sim.state.wave = 5;

@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>BloomWake — Aeria: Last Bloom</title>
-  <meta name="description" content="A Frutiger Aero survivor-arena web game where Dewling defends against the Frutevil stain." />
+  <title>BloomWake — Void Drifter</title>
+  <meta name="description" content="A survivor-arena web game: the Void Drifter holds the line against the Chitin Swarm." />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -18,15 +18,15 @@
       touch-action: none;
     }
 
-    /* Phase 6: Frutiger Aero. Page background matches the canvas gradient's
-       darkest stop so any overscroll or letterbox blends in. */
+    /* Page background matches the canvas backdrop's darkest stop, so any
+       overscroll or letterbox blends into the void rather than framing it. */
     body, html {
       width: 100%;
       height: 100%;
       overflow: hidden;
-      background-color: #03080f;
+      background-color: #05070f;
       font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
-      color: #e8fbff;
+      color: #e6feff;
     }
 
     #app-container {
@@ -42,7 +42,7 @@
       width: 100%;
       height: 100%;
       display: block;
-      background: linear-gradient(180deg, #071a24, #03080f);
+      background: linear-gradient(180deg, #0a1024, #02030a);
     }
 
     #ui-layer {
@@ -67,7 +67,7 @@
       align-items: center;
       justify-content: center;
       gap: 14px;
-      background: linear-gradient(180deg, #071a24, #03080f);
+      background: linear-gradient(180deg, #0a1024, #02030a);
       z-index: 10;
     }
 
@@ -75,18 +75,18 @@
       font-size: clamp(28px, 7vw, 54px);
       font-weight: 800;
       letter-spacing: 0.22em;
-      background: linear-gradient(180deg, #f2fdff, #6fd6f0);
+      background: linear-gradient(180deg, #eafdff, #00f0ff);
       -webkit-background-clip: text;
       background-clip: text;
       color: transparent;
-      filter: drop-shadow(0 0 26px rgba(127, 230, 255, 0.5));
+      filter: drop-shadow(0 0 26px rgba(0, 240, 255, 0.55));
     }
 
     #boot-status {
       font-size: 12px;
       letter-spacing: 0.18em;
       text-transform: uppercase;
-      color: #6f97a8;
+      color: #5c7f96;
     }
   </style>
 </head>
@@ -97,7 +97,7 @@
     <!-- Removed by boot() once the texture manifest resolves. -->
     <div id="boot-screen">
       <div id="boot-mark">BLOOMWAKE</div>
-      <div id="boot-status">Loading assets…</div>
+      <div id="boot-status">Sistemler yükleniyor…</div>
     </div>
   </div>
   <script type="module" src="/src/main.js"></script>

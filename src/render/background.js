@@ -1,12 +1,23 @@
 /**
- * Dark Liminal Pool — Background Visual System
+ * The Void — background visual system.
  *
- * Frutiger Aero / Deep Underwater Pool aesthetic background pipeline for PixiJS v8.
- * Features zero-asset procedural Voronoi water caustics, clean pool tile grid,
- * 5-layer screen-space parallax scrolling, dual caustics counter-drift, soft bloom, and breathing sunbeams.
+ * Five screen-space parallax layers over deep-space black: a starfield tile, a
+ * drifting energy lattice (the caustics shader, retuned — see
+ * caustics-shader.js), a counter-drifting nebula wash, distant starlight
+ * shafts, and a radial bloom.
+ *
+ * WHAT CHANGED IN THE RE-SKIN, AND WHAT DID NOT.
+ * The layer STRUCTURE is untouched. Parallax rates, the shader/baked fallback
+ * split, the seamless-wrap maths — none of that had anything to do with water;
+ * it is just how you build a cheap deep field. What changed is the palette and
+ * the drift speed. That is the whole reason the conversion is a small diff:
+ * "underwater" was never in the geometry, only in the colours.
+ *
+ * The starfield tile prefers the real asset (public/assets/ui/bg_void.png) and
+ * falls back to a procedural one, so the layer works with an empty asset folder.
  *
  * Follows the "Visual Soup" luminance split contract (theme.js) to guarantee
- * hero readability against deep aquatic dark tones (#020b14 - #061d33).
+ * hero readability: every large-area colour here sits near black.
  */
 
 import { Container, Geometry, Graphics, Mesh, Shader, TilingSprite, Sprite, Texture } from 'pixi.js';
@@ -69,13 +80,18 @@ function safeTextureFrom(canvas) {
 }
 
 /**
- * Procedurally generates a 256x256 Dark Liminal Pool tile texture.
- * Features clean, subtle pool tile grid lines on a deep aquatic blue gradient base.
+ * Procedural 256x256 starfield tile — the FALLBACK for the shipped
+ * public/assets/ui/bg_void.png.
+ *
+ * Deliberately seamless: it tiles under a panning camera, and a tile that does
+ * not wrap shows a seam the moment the player moves. Star positions come from a
+ * fixed-seed LCG rather than Math.random so the backdrop does not shimmer
+ * differently on every reload.
  *
  * @param {import('pixi.js').Application} app
  * @returns {import('pixi.js').Texture}
  */
-export function makeLiminalPoolTileTexture(app) {
+export function makeVoidTileTexture(app) {
   if (typeof document === 'undefined') return Texture.EMPTY;
   const canvas = document.createElement('canvas');
   canvas.width = 256;
@@ -85,24 +101,31 @@ export function makeLiminalPoolTileTexture(app) {
 
   const size = 256;
 
-  // 1. Deep Ocean Pool Base Gradient (#020c18 -> #061e34)
+  // 1. Deep-space base, biased to the theme's background stops.
   const grad = ctx.createLinearGradient(0, 0, size, size);
-  grad.addColorStop(0, '#020c18');
-  grad.addColorStop(0.5, '#05192c');
-  grad.addColorStop(1, '#031120');
-
+  grad.addColorStop(0, THEME.background.bottom);
+  grad.addColorStop(0.5, THEME.background.top);
+  grad.addColorStop(1, THEME.background.nebula);
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, size, size);
 
-  // 2. Outer Tile Dark Border / Grout Stroke (thin 2px border)
-  ctx.strokeStyle = 'rgba(2, 10, 18, 0.7)';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(1, 1, size - 2, size - 2);
+  // 2. Stars.
+  let seed = 20260910;
+  const rand = () => {
+    seed = (seed * 1664525 + 1013904223) % 4294967296;
+    return seed / 4294967296;
+  };
 
-  // 3. Subtle Inner Tile Highlight Line
-  ctx.strokeStyle = 'rgba(20, 75, 115, 0.25)';
-  ctx.lineWidth = 1;
-  ctx.strokeRect(3, 3, size - 6, size - 6);
+  for (let i = 0; i < 90; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const r = rand() < 0.85 ? 0.6 : 1.2;
+    const a = 0.25 + rand() * 0.6;
+    ctx.fillStyle = `rgba(214, 240, 255, ${a})`;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   return safeTextureFrom(canvas);
 }
@@ -186,11 +209,14 @@ export function makeCausticsTexture(app) {
       const coreIntensity = Math.pow(val, 2.6);
       const intensity = Math.min(1.0, glowIntensity * 0.45 + coreIntensity * 0.75);
 
+      // Nebula violet rather than the old marine cyan: blue leads, red
+      // follows, green stays lowest, which is what keeps the wide baked layer
+      // from washing the screen toward the hero's hue.
       const pixelIdx = (y * size + x) * 4;
-      data[pixelIdx] = Math.round(140 * intensity); // R
-      data[pixelIdx + 1] = Math.round(220 * intensity); // G
+      data[pixelIdx] = Math.round(150 * intensity); // R
+      data[pixelIdx + 1] = Math.round(120 * intensity); // G
       data[pixelIdx + 2] = Math.round(255 * intensity); // B
-      data[pixelIdx + 3] = Math.round(220 * intensity); // A
+      data[pixelIdx + 3] = Math.round(200 * intensity); // A
     }
   }
 
@@ -199,7 +225,7 @@ export function makeCausticsTexture(app) {
 }
 
 /**
- * Procedurally generates a 512x512 sunlight shafts (god rays) texture.
+ * Procedurally generates a 512x512 distant-starlight shafts texture.
  *
  * @param {import('pixi.js').Application} app
  * @returns {import('pixi.js').Texture}
@@ -224,8 +250,8 @@ export function makeSunbeamsTexture(app) {
 
   for (const b of beams) {
     const grad = ctx.createLinearGradient(b.x, 0, b.x + 90, 512);
-    grad.addColorStop(0, `rgba(180, 240, 255, ${b.opacity})`);
-    grad.addColorStop(0.5, `rgba(60, 180, 230, ${b.opacity * 0.45})`);
+    grad.addColorStop(0, `rgba(150, 190, 255, ${b.opacity})`);
+    grad.addColorStop(0.5, `rgba(70, 90, 200, ${b.opacity * 0.45})`);
     grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
 
     ctx.fillStyle = grad;
@@ -242,7 +268,7 @@ export function makeSunbeamsTexture(app) {
 }
 
 /**
- * Procedurally generates a 512x512 top-anchored sunlight radial bloom texture.
+ * Procedurally generates a 512x512 top-anchored starlight radial bloom.
  *
  * @param {import('pixi.js').Application} app
  * @returns {import('pixi.js').Texture}
@@ -258,9 +284,9 @@ export function makeSunGlowTexture(app) {
   ctx.clearRect(0, 0, 512, 512);
 
   const glow = ctx.createRadialGradient(256, 0, 10, 256, 120, 500);
-  glow.addColorStop(0, 'rgba(180, 240, 255, 0.28)');
-  glow.addColorStop(0.35, 'rgba(60, 180, 235, 0.14)');
-  glow.addColorStop(0.7, 'rgba(20, 90, 150, 0.05)');
+  glow.addColorStop(0, 'rgba(150, 200, 255, 0.22)');
+  glow.addColorStop(0.35, 'rgba(70, 100, 210, 0.11)');
+  glow.addColorStop(0.7, 'rgba(30, 30, 100, 0.04)');
   glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
 
   ctx.fillStyle = glow;
@@ -272,8 +298,12 @@ export function makeSunGlowTexture(app) {
 export class Background {
   /**
    * @param {import('pixi.js').Application} app
+   * @param {Object} [options]
+   * @param {*} [options.voidTile] - Shipped starfield texture (ASSET_KEYS.BG_VOID).
+   *   The procedural tile is used when this is absent, so the layer still works
+   *   against an empty asset folder.
    */
-  constructor(app) {
+  constructor(app, { voidTile = null } = {}) {
     this.app = app;
     this.time = 0;
 
@@ -281,7 +311,7 @@ export class Background {
 
     // 1. Bake procedural textures
     this.textures = {
-      tile: makeLiminalPoolTileTexture(app),
+      tile: voidTile ?? makeVoidTileTexture(app),
       caustics: makeCausticsTexture(app),
       sunbeams: makeSunbeamsTexture(app),
       sunGlow: makeSunGlowTexture(app),
@@ -293,7 +323,7 @@ export class Background {
     this.baseGfx = new Graphics();
     this.container.addChild(this.baseGfx);
 
-    // 3. Layer 2: Liminal Pool Tile TilingSprite (Parallax 0.25)
+    // 3. Layer 2: Starfield tile (Parallax 0.25)
     this.tileLayer = new TilingSprite({
       texture: this.textures.tile,
       width,
@@ -302,7 +332,7 @@ export class Background {
     this.tileLayer.alpha = 0.95;
     this.container.addChild(this.tileLayer);
 
-    // 4. Layer 3: Coarse Surface Voronoi Caustics (Parallax 0.35, slow drift)
+    // 4. Layer 3: Coarse nebula lattice (Parallax 0.35, slow drift)
     this.causticsA = new TilingSprite({
       texture: this.textures.caustics,
       width,
@@ -311,7 +341,7 @@ export class Background {
     this.causticsA.alpha = 0.24;
     this.container.addChild(this.causticsA);
 
-    // 5. Layer 4: Fine Counter-Drift Voronoi Caustics (Parallax 0.55, light aqua tint)
+    // 5. Layer 4: Fine counter-drift nebula (Parallax 0.55, violet tint)
     this.causticsB = new TilingSprite({
       texture: this.textures.caustics,
       width,
@@ -319,10 +349,10 @@ export class Background {
     });
     this.causticsB.tileScale.set(0.7, 0.7);
     this.causticsB.alpha = 0.16;
-    this.causticsB.tint = 0x38bdf8;
+    this.causticsB.tint = 0x6a4fd0;
     this.container.addChild(this.causticsB);
 
-    // 6. Layer 5: God Rays Sunlight Shafts (Parallax 0.18, breathing opacity)
+    // 6. Layer 5: Distant starlight shafts (Parallax 0.18, breathing opacity)
     this.sunbeamsLayer = new TilingSprite({
       texture: this.textures.sunbeams,
       width,
@@ -331,7 +361,7 @@ export class Background {
     this.sunbeamsLayer.alpha = 0.16;
     this.container.addChild(this.sunbeamsLayer);
 
-    // 7. Layer 6: Sunlight Radial Bloom Sprite
+    // 7. Layer 6: Starlight radial bloom
     this.sunGlowLayer = new Sprite(this.textures.sunGlow);
     this.sunGlowLayer.width = width;
     this.sunGlowLayer.height = height;
@@ -372,9 +402,9 @@ export class Background {
     const g = this.baseGfx;
     g.clear();
 
-    // Dark Liminal Pool vignette background (#020a14)
+    // Deep-space vignette base — PALETTE.background's darker stop.
     g.rect(0, 0, width, height);
-    g.fill({ color: 0x020a14 });
+    g.fill({ color: 0x02030a });
   }
 
   /**

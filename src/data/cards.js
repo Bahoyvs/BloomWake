@@ -1,6 +1,26 @@
 /**
- * Skill Cards Data definitions for BloomWake.
- * Source: Bloomwake_GDD_v1.md Section 7
+ * Skill Cards data definitions.
+ *
+ * ---------------------------------------------------------------------------
+ * IDs ARE NOT THEMED, AND THAT IS DELIBERATE
+ * ---------------------------------------------------------------------------
+ * The Void Drifter re-skin renames what the player reads. It does not rename
+ * `id`. Those strings are dispatch keys in src/core/cards.js, the starter-weapon
+ * constant in src/core/simulation.js, entries in the draft's gating rules, and —
+ * critically — keys inside every player's saved run. Renaming them would be a
+ * silent save-data migration in exchange for tidier-looking literals in a file
+ * nobody but the simulation reads.
+ *
+ * So `dewdrop_barrage` is still how the code refers to the Phase Repeater. The
+ * mapping is written out below on each card, so the connection is one grep away.
+ *
+ * NAMES vs DESCRIPTIONS
+ * `name` carries the weapon's designation as specified in the theme brief, in
+ * English — these are hardware codenames and read as such. `description` is the
+ * player-facing flavour and is in Turkish, matching the rest of the game's UI
+ * copy. Rarity and behaviour values stay English identifiers: they are keys
+ * (CSS class suffixes, dispatch labels), not prose. The UI layer owns their
+ * translation — see RARITY_LABEL in src/ui/hud.js.
  */
 
 export const CARD_RARITIES = {
@@ -10,14 +30,16 @@ export const CARD_RARITIES = {
   LEGENDARY: 'Legendary',
 };
 
+/** Player-facing category labels. Display only — nothing dispatches on these. */
 export const CARD_TYPES = {
-  PROJECTILE: 'Projectile',
-  BEAM: 'Beam',
-  ORBIT: 'Orbit',
-  AOE: 'AoE',
-  SHIELD: 'Shield',
-  PASSIVE: 'Passive',
-  CONTROL: 'Control',
+  PROJECTILE: 'Mermi',
+  BEAM: 'Huzme',
+  CHAIN_LIGHTNING: 'Elektrik Arkı',
+  ORBIT: 'Yörünge',
+  AOE: 'Alan',
+  SHIELD: 'Kalkan',
+  PASSIVE: 'Pasif',
+  CONTROL: 'Kontrol',
 };
 
 /**
@@ -29,62 +51,85 @@ export const CARD_TYPES = {
 export const CARD_BEHAVIORS = {
   /** Volley of homing projectiles at the nearest enemy. */
   HOMING_VOLLEY: 'HOMING_VOLLEY',
-  /** Persistent damage strip fired in a fixed direction. */
+  /** Persistent damage strip along the Drifter's own facing. */
   BEAM: 'BEAM',
-  /** Blades circling the Dewling, damaging on contact. */
+  /** Satellites circling the Drifter, damaging on contact. */
   ORBIT: 'ORBIT',
   /** Salvo of projectiles in random directions. */
   RADIAL_BURST: 'RADIAL_BURST',
-  /** Periodic ring blast centred on the Dewling. */
-  AOE_PULSE: 'AOE_PULSE',
-  /** Damage-absorbing shield that recharges on a timer. */
+  /**
+   * Guided micro-missiles that pick the highest-HP target on the field.
+   *
+   * Replaces the old AOE_PULSE ring. The build already had two ring blasts
+   * (Corona Pulse and the Graviton EMP) doing the same job from the same
+   * centre; a homing salvo that deliberately seeks the FATTEST enemy gives the
+   * player something the rest of the kit cannot do — a way to answer a
+   * Bio-Goliath without walking into it.
+   */
+  HOMING_MISSILE: 'HOMING_MISSILE',
+  /** Hex barrier that negates one hit outright, then recharges on a timer. */
   SHIELD: 'SHIELD',
-  /** Always-on stat modifiers; no per-frame effect. */
-  PASSIVE: 'PASSIVE',
-  /** Ring blast that also pushes enemies outward. */
+  /** Escort drone flying the Drifter's wing, with a turret of its own. */
+  WINGMAN: 'WINGMAN',
+  /** Ring blast that pushes enemies outward AND stuns them. */
   AOE_KNOCKBACK: 'AOE_KNOCKBACK',
 };
 
 export const CARDS = [
   {
+    // Dewdrop Barrage -> Phase Repeater
     id: 'dewdrop_barrage',
-    name: 'Dewdrop Barrage',
+    name: 'Phase Repeater',
     type: CARD_TYPES.PROJECTILE,
     behavior: CARD_BEHAVIORS.HOMING_VOLLEY,
     rarity: CARD_RARITIES.COMMON,
-    description: 'Fires fast water droplets at the nearest enemy target.',
+    description: 'En yakın hedefe seri mavi lazer iğneleri atar; seviye ile mermi sayısı ve delme artar.',
     maxLevel: 5,
+    /**
+     * `pierce` is how many EXTRA enemies a needle passes through after its
+     * first hit. It is the level-up the player feels most in a dense wave, and
+     * it is the stat a Bio-Goliath exists to take away (see `breaksPierce` in
+     * src/data/enemies.js) - which is what stops pierce from simply scaling
+     * with swarm size forever.
+     *
+     * The cooldown curve was slackened when pierce landed. Multiplying hits per
+     * shot and shortening the gap between shots at the same time put this card
+     * through the 40%-of-all-others gate in tests/balance-sim.js; the fire rate
+     * is what gave way, because pierce is the more interesting of the two.
+     */
     levels: [
-      { level: 1, damage: 12, cooldown: 1.0, count: 1, speed: 8 },
-      { level: 2, damage: 16, cooldown: 0.9, count: 1, speed: 9 },
-      { level: 3, damage: 22, cooldown: 0.8, count: 2, speed: 10 },
-      { level: 4, damage: 28, cooldown: 0.7, count: 2, speed: 11 },
-      { level: 5, damage: 36, cooldown: 0.5, count: 3, speed: 12 },
+      { level: 1, damage: 12, cooldown: 1.0, count: 1, speed: 8, pierce: 0 },
+      { level: 2, damage: 16, cooldown: 0.9, count: 1, speed: 9, pierce: 0 },
+      { level: 3, damage: 22, cooldown: 0.9, count: 2, speed: 10, pierce: 1 },
+      { level: 4, damage: 28, cooldown: 0.8, count: 2, speed: 11, pierce: 1 },
+      { level: 5, damage: 36, cooldown: 0.7, count: 3, speed: 12, pierce: 2 },
     ],
   },
   {
+    // Sunbeam Lance -> Singularity Lance -> Tesla Arc (Chain Lightning)
     id: 'sunbeam_lance',
-    name: 'Sunbeam Lance',
-    type: CARD_TYPES.BEAM,
+    name: 'Tesla Arc',
+    type: CARD_TYPES.CHAIN_LIGHTNING,
     behavior: CARD_BEHAVIORS.BEAM,
     rarity: CARD_RARITIES.COMMON,
-    description: 'Emits a piercing beam of concentrated light across the field.',
+    description: 'En yakın düşmana otomatik elektrik arkı fırlatır; hedefler arasında zincirleme seker.',
     maxLevel: 5,
     levels: [
-      { level: 1, damage: 8, cooldown: 3.0, width: 20, duration: 0.8 },
-      { level: 2, damage: 12, cooldown: 2.7, width: 24, duration: 1.0 },
-      { level: 3, damage: 18, cooldown: 2.4, width: 28, duration: 1.2 },
-      { level: 4, damage: 25, cooldown: 2.0, width: 32, duration: 1.4 },
-      { level: 5, damage: 35, cooldown: 1.5, width: 40, duration: 1.8 },
+      { level: 1, damage: 22, cooldown: 2.2, range: 280, bounces: 1, bounceRadius: 160, shockSlow: 0, shockDuration: 0 },
+      { level: 2, damage: 32, cooldown: 2.0, range: 300, bounces: 2, bounceRadius: 180, shockSlow: 0, shockDuration: 0 },
+      { level: 3, damage: 45, cooldown: 1.8, range: 320, bounces: 3, bounceRadius: 200, shockSlow: 0.10, shockDuration: 1.2 },
+      { level: 4, damage: 62, cooldown: 1.6, range: 340, bounces: 4, bounceRadius: 220, shockSlow: 0.15, shockDuration: 1.5 },
+      { level: 5, damage: 85, cooldown: 1.4, range: 380, bounces: 5, bounceRadius: 260, shockSlow: 0.20, shockDuration: 2.0 },
     ],
   },
   {
+    // Glasswing -> Aegis Satellites
     id: 'glasswing',
-    name: 'Glasswing',
+    name: 'Aegis Satellites',
     type: CARD_TYPES.ORBIT,
     behavior: CARD_BEHAVIORS.ORBIT,
     rarity: CARD_RARITIES.COMMON,
-    description: 'Spins crystalline glass wings around Dewling, slicing nearby enemies.',
+    description: 'Çevrende dönen 2-6 mekanik savunma uydusu; temas eden kovan birimlerini biçer.',
     maxLevel: 5,
     // Step B: weakest card in the set (1.5% of build output at L5). Damage and
     // orbit radius both raised — a wider orbit sweeps a larger annulus, which is
@@ -98,12 +143,13 @@ export const CARDS = [
     ],
   },
   {
+    // Petal Storm -> Nova Flak
     id: 'petal_storm',
-    name: 'Petal Storm',
+    name: 'Nova Flak',
     type: CARD_TYPES.PROJECTILE,
     behavior: CARD_BEHAVIORS.RADIAL_BURST,
     rarity: CARD_RARITIES.UNCOMMON,
-    description: 'Unleashes a flurry of sharp petals in random directions.',
+    description: '360 derece radyal saçılan kinetik şarapnel patlaması; yakın mesafe temizleyicisi.',
     maxLevel: 5,
     levels: [
       { level: 1, damage: 15, count: 6, cooldown: 4.0 },
@@ -114,82 +160,124 @@ export const CARDS = [
     ],
   },
   {
+    /**
+     * Aurora Pulse -> Corona Pulse -> Nanite Swarm.
+     *
+     * The id is unchanged because it is a save key (see the header). What the
+     * slot DOES changed: it used to be a ring blast centred on the Drifter,
+     * which is the same shape of effect as the Graviton EMP from the same
+     * origin — two cards competing to clear the same circle. Nanite Swarm
+     * takes the one job nothing else in the kit does: it launches, arcs, and
+     * goes after the single biggest thing on the field.
+     *
+     * TARGETING IS THE CARD. `targeting: 'highest_hp'` is why this is the
+     * answer to a Bio-Goliath escort wall — every other weapon hits whatever
+     * happens to be nearest, which in that fight is deliberately the chaff.
+     */
     id: 'aurora_pulse',
-    name: 'Aurora Pulse',
-    type: CARD_TYPES.AOE,
-    behavior: CARD_BEHAVIORS.AOE_PULSE,
+    name: 'Nanite Swarm',
+    type: CARD_TYPES.PROJECTILE,
+    behavior: CARD_BEHAVIORS.HOMING_MISSILE,
     rarity: CARD_RARITIES.UNCOMMON,
-    description: 'Periodically triggers a glowing shockwave dealing area damage.',
+    description: 'Havaya fırlayıp iz bırakan güdümlü mikro füzeler; en yüksek canlı hedefe kilitlenir.',
     maxLevel: 5,
-    // Step B: dead card at L3 (2.53% of build output). Its old 110px radius
-    // caught roughly one enemy, so the radius curve was widened to 100 -> 210.
-    // Damage is unchanged: the problem was reach, not power.
+    targeting: 'highest_hp',
     levels: [
-      { level: 1, damage: 25, radius: 100, cooldown: 3.5 },
-      { level: 2, damage: 35, radius: 125, cooldown: 3.1 },
-      { level: 3, damage: 50, radius: 150, cooldown: 2.7 },
-      { level: 4, damage: 70, radius: 180, cooldown: 2.3 },
-      { level: 5, damage: 100, radius: 210, cooldown: 1.8 },
+      { level: 1, damage: 22, count: 2, cooldown: 2.4 },
+      { level: 2, damage: 30, count: 3, cooldown: 2.2 },
+      { level: 3, damage: 42, count: 4, cooldown: 2.0 },
+      { level: 4, damage: 58, count: 5, cooldown: 1.8 },
+      { level: 5, damage: 80, count: 6, cooldown: 1.5 },
     ],
   },
   {
+    // Bloomshield -> Hyperion Shield
     id: 'bloomshield',
-    name: 'Bloomshield',
+    name: 'Hyperion Shield',
     type: CARD_TYPES.SHIELD,
     behavior: CARD_BEHAVIORS.SHIELD,
     rarity: CARD_RARITIES.RARE,
-    description: 'Conjures a protective flower shield absorbing incoming damage.',
+    description: 'Gemiyi saran keskin altıgen bariyer; hazır olduğunda gelen bir darbeyi tamamen iptal eder.',
     maxLevel: 5,
-    // Step B: the old curve absorbed 2.5 -> 26 HP/s, which exceeded incoming
-    // contact damage from level 1 — binary immunity on first pick. Retuned to
-    // 1.25 -> 9.0 HP/s against the SWARM target (13 HP/s of contact pressure),
-    // so L5 blunts roughly 70% of incoming damage instead of all of it.
+    /**
+     * A CHARGE, NOT AN HP POOL.
+     *
+     * The old shield was a bucket of HP that drained: it absorbed 2.5 -> 26
+     * HP/s, which is more than the swarm deals, so owning it at any level was
+     * flat immunity to contact damage with a cosmetic timer attached. This
+     * version negates ONE hit outright, whatever its size, and then goes down
+     * for `rechargeTime`. The player still dies to sustained pressure — they
+     * just get one mistake back per cycle, which is the thing a defensive card
+     * should actually sell.
+     *
+     * Levels buy FREQUENCY, never size: a hit is a hit, and 15s at L1 is the
+     * figure in the brief. L5 lands at 4.5s, roughly one save per engagement
+     * rather than one per wave.
+     */
     levels: [
-      { level: 1, shieldHp: 20, rechargeTime: 16 },
-      { level: 2, shieldHp: 30, rechargeTime: 14 },
-      { level: 3, shieldHp: 45, rechargeTime: 12 },
-      { level: 4, shieldHp: 65, rechargeTime: 11 },
-      { level: 5, shieldHp: 90, rechargeTime: 10 },
+      { level: 1, negates: 1, rechargeTime: 15 },
+      { level: 2, negates: 1, rechargeTime: 12.5 },
+      { level: 3, negates: 1, rechargeTime: 10 },
+      { level: 4, negates: 1, rechargeTime: 7 },
+      { level: 5, negates: 1, rechargeTime: 4.5 },
     ],
   },
   {
+    // Buddy Boost -> Tactical Wingman
     id: 'buddy_boost',
-    name: 'Buddy Boost',
+    name: 'Tactical Wingman',
     type: CARD_TYPES.PASSIVE,
-    behavior: CARD_BEHAVIORS.PASSIVE,
+    behavior: CARD_BEHAVIORS.WINGMAN,
     rarity: CARD_RARITIES.COMMON,
-    description: 'Passive: Increases movement speed and overall damage output.',
+    description: 'Arkanda V formasyonunda uçan taretli destek dronu; ayrıca hız ve hasar verir.',
     maxLevel: 5,
-    // Step B: trimmed from +45% dmg / +40% speed to +30% / +25%. As a pure
-    // multiplier this card scales with every other card in the build, so it is
-    // the one most able to break a synergy meta.
+    /**
+     * Was a pure stat passive. It is now an actual escort: one drone at L1, two
+     * from L3, each flying a lagging V slot behind the Drifter and firing its
+     * own bolts at whatever comes into range.
+     *
+     * The stat half PAID for the weapon. Step B had already trimmed it from
+     * +45%/+40% to +30%/+25%; the damage multiplier came down again to +22% at
+     * L5 when the drones landed, because this is now the only card that both
+     * ADDS to the build's damage core and MULTIPLIES it. At +30% with turrets
+     * it broke the 40%-of-all-others gate in the CURRENT scenario outright.
+     * The movement bonus is untouched — it buys dodging, not output.
+     */
     levels: [
-      { level: 1, moveSpeedBonus: 0.08, damageBonus: 0.06 },
-      { level: 2, moveSpeedBonus: 0.12, damageBonus: 0.11 },
-      { level: 3, moveSpeedBonus: 0.16, damageBonus: 0.17 },
-      { level: 4, moveSpeedBonus: 0.20, damageBonus: 0.23 },
-      { level: 5, moveSpeedBonus: 0.25, damageBonus: 0.30 },
+      { level: 1, moveSpeedBonus: 0.08, damageBonus: 0.045, drones: 1, droneDamage: 8, droneCooldown: 1.3 },
+      { level: 2, moveSpeedBonus: 0.12, damageBonus: 0.08, drones: 1, droneDamage: 12, droneCooldown: 1.1 },
+      { level: 3, moveSpeedBonus: 0.16, damageBonus: 0.125, drones: 2, droneDamage: 16, droneCooldown: 1.0 },
+      { level: 4, moveSpeedBonus: 0.20, damageBonus: 0.17, drones: 2, droneDamage: 21, droneCooldown: 0.85 },
+      { level: 5, moveSpeedBonus: 0.25, damageBonus: 0.22, drones: 2, droneDamage: 26, droneCooldown: 0.7 },
     ],
   },
   {
+    // Tidewave -> Graviton EMP
     id: 'tidewave',
-    name: 'Tidewave',
+    name: 'Graviton EMP',
     type: CARD_TYPES.CONTROL,
     behavior: CARD_BEHAVIORS.AOE_KNOCKBACK,
     rarity: CARD_RARITIES.RARE,
-    description: 'Surges a wave of water outward, damaging and knocking enemies back.',
+    description: 'Genişleyen neon halka dalgası; düşmanları geri iter ve 1.2 saniye dondurur.',
     maxLevel: 5,
-    // Step B: L5 knockback 200 -> 150 and cooldown 2.8 -> 3.2. The old numbers
-    // pushed enemies away for 96% of the cooldown, which is contact immunity
-    // wearing a crowd-control costume.
-    // L4 knockback also eased 170 -> 160 so push uptime stays monotonic across
-    // levels — at 170 the L4 curve overtook the retuned L5.
+    /**
+     * Knockback AND a stun (CARD_MODEL.EMP_STUN_SEC) as of the control pass.
+     *
+     * The stun length is FLAT across levels on purpose — a freeze that gets
+     * both longer and more frequent compounds into permanent lockdown — so
+     * levels buy reach, damage and frequency only.
+     *
+     * The cooldown curve was lengthened to pay for it. Contact-free time is now
+     * `stun + walk-back`, and at the old 3.2s L5 cooldown that came to 82%
+     * uptime, which is contact immunity wearing a crowd-control costume for the
+     * second time. The curve below holds the whole set under 70%.
+     */
     levels: [
       { level: 1, damage: 20, knockback: 100, radius: 120, cooldown: 5.0 },
-      { level: 2, damage: 30, knockback: 120, radius: 140, cooldown: 4.5 },
-      { level: 3, damage: 45, knockback: 140, radius: 160, cooldown: 4.0 },
-      { level: 4, damage: 65, knockback: 160, radius: 180, cooldown: 3.5 },
-      { level: 5, damage: 95, knockback: 150, radius: 210, cooldown: 3.2 },
+      { level: 2, damage: 30, knockback: 120, radius: 140, cooldown: 4.8 },
+      { level: 3, damage: 45, knockback: 140, radius: 160, cooldown: 4.6 },
+      { level: 4, damage: 65, knockback: 160, radius: 180, cooldown: 4.4 },
+      { level: 5, damage: 95, knockback: 180, radius: 210, cooldown: 4.2 },
     ],
   },
 ];

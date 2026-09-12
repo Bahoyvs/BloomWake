@@ -1,7 +1,7 @@
 /**
  * Tier A sprite-sheet animator (Phase 7) — browser layer.
  *
- * Drives frame animation for the Dewling and the Rustwhale, and ONLY those two.
+ * Drives frame animation for the Drifter and the Dreadnought, and ONLY those two.
  * They are the entities that exist exactly once on screen, so this class is
  * allowed to be expensive per instance: it keeps a state machine, a frame
  * clock, a queued clip and a per-frame texture cache. Multiplying any of that
@@ -178,7 +178,7 @@ export class SpriteAnimator {
    * `durationMs` MUST be the value the simulation already computed via
    * calculateTelegraphMs (it travels on the boss:telegraph_start payload). The
    * formula is not restated here and must not be: a second copy would drift
-   * from the gameplay one the first time the AoE radius or the Dewling's speed
+   * from the gameplay one the first time the AoE radius or the Drifter's speed
    * is tuned, and the visual warning would stop matching the real hit window.
    *
    * @param {number} durationMs - From boss:telegraph_start

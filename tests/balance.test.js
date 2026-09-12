@@ -159,10 +159,24 @@ describe('Density model', () => {
 });
 
 describe('Step B retunes hold', () => {
-  it('keeps Bloomshield below the swarm contact-damage rate', () => {
+  it('keeps the Hyperion Shield below the swarm contact-damage rate', () => {
+    // The shield is a hit-negate now, not an HP pool: what it is worth per
+    // cycle is the size of the hit it eats. Same assertion as before — a
+    // barrier that removes more HP/s than the swarm deals is flat immunity.
     const l5 = getCardById('bloomshield').levels[4];
-    const rate = l5.shieldHp / l5.rechargeTime;
+    const rate = (SCENARIOS.SWARM.meanContactHit * l5.negates) / l5.rechargeTime;
     expect(rate).toBeLessThan(SCENARIOS.SWARM.incomingDpsUnderPressure);
+  });
+
+  it('never lets the Hyperion Shield reach immunity at any level', () => {
+    // Structural, not a tuning check: one hit per cycle is bounded by
+    // definition, which is the property that replaced the old draining pool.
+    for (const scenario of Object.values(SCENARIOS)) {
+      for (const level of getCardById('bloomshield').levels) {
+        const rate = (scenario.meanContactHit * level.negates) / level.rechargeTime;
+        expect(rate).toBeLessThan(scenario.incomingDpsUnderPressure);
+      }
+    }
   });
 
   it('keeps Tidewave knockback uptime monotonic across levels', () => {

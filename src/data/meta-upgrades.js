@@ -1,5 +1,8 @@
 /**
- * Petal meta-upgrade table (GDD Section 9).
+ * Permanent hull-refit table, bought with salvage (GDD Section 9).
+ *
+ * IDs stay as-is — they are save-state keys. Only the player-facing name and
+ * description carry the re-skin, same split as the card and enemy tables.
  *
  * COSTS ARE FINAL and are not subject to economy calibration — the calibration
  * script tunes reward amounts instead, so that these prices land where the
@@ -22,8 +25,8 @@ export const META_UPGRADE_IDS = {
 export const META_UPGRADES = {
   [META_UPGRADE_IDS.START_HP]: {
     id: META_UPGRADE_IDS.START_HP,
-    name: 'Starting Bloom',
-    description: '+10 starting HP per level.',
+    name: 'Reinforced Hull',
+    description: 'Seviye başına +10 başlangıç canı.',
     baseCost: 50,
     costGrowth: 1.4,
     maxLevel: 5,
@@ -32,8 +35,8 @@ export const META_UPGRADES = {
   },
   [META_UPGRADE_IDS.PICKUP_RADIUS]: {
     id: META_UPGRADE_IDS.PICKUP_RADIUS,
-    name: 'Wider Reach',
-    description: '+12px XP pickup radius per level.',
+    name: 'Tractor Field',
+    description: 'Seviye başına +12px toplama yarıçapı.',
     baseCost: 40,
     costGrowth: 1.4,
     maxLevel: 5,
@@ -48,8 +51,8 @@ export const META_UPGRADES = {
   },
   [META_UPGRADE_IDS.START_SPEED]: {
     id: META_UPGRADE_IDS.START_SPEED,
-    name: 'Quickened Dew',
-    description: '+4% movement speed per level.',
+    name: 'Thruster Tune',
+    description: 'Seviye başına +%4 hareket hızı.',
     baseCost: 80,
     costGrowth: 1.5,
     maxLevel: 3,
@@ -58,8 +61,8 @@ export const META_UPGRADES = {
   },
   [META_UPGRADE_IDS.FOURTH_CARD_SLOT]: {
     id: META_UPGRADE_IDS.FOURTH_CARD_SLOT,
-    name: 'Fourth Bloom',
-    description: 'Level-up drafts offer a 4th card to choose from.',
+    name: 'Fourth Slot',
+    description: 'Seviye atlama seçiminde 4. kart açılır.',
     baseCost: 2000,
     costGrowth: 1,
     maxLevel: 1,

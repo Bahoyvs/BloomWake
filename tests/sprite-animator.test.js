@@ -287,12 +287,12 @@ describe('Step A5 — missing-sheet fallback', () => {
   it('names the file and the state in the warning', () => {
     const warn = vi.fn();
     const animator = new SpriteAnimator(
-      { death: clip({ sheet: 'dewling_death.png', available: false, frames: 0 }) },
+      { death: clip({ sheet: 'drifter_death.png', available: false, frames: 0 }) },
       { initialState: ANIM_STATES.IDLE, warn }
     );
     animator.forceState(ANIM_STATES.DEATH);
 
-    expect(warn.mock.calls[0][0]).toContain('dewling_death.png');
+    expect(warn.mock.calls[0][0]).toContain('drifter_death.png');
     expect(warn.mock.calls[0][0]).toContain('death');
   });
 

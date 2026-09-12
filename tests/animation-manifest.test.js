@@ -196,7 +196,7 @@ describe('Step A3 — frame counts come from the asset, never the table', () => 
 
   it('resolves a manifest against measured sheets', () => {
     const measure = (sheet) =>
-      sheet === 'dewling_idle.png' ? { width: 384, height: 64, meta: null } : null;
+      sheet === 'drifter_idle.png' ? { width: 384, height: 64, meta: null } : null;
 
     const resolved = resolveAnimationManifest(ANIMATION_MANIFEST, measure);
 
@@ -239,14 +239,14 @@ describe('Step A3 — frame counts come from the asset, never the table', () => 
   });
 
   it('reports exactly which sheets are missing', () => {
-    const present = new Set(['dewling_idle.png', 'dewling_move.png']);
+    const present = new Set(['drifter_idle.png', 'drifter_move.png']);
     const measure = (sheet) => (present.has(sheet) ? { width: 256, height: 64 } : null);
 
     const missing = listMissingSheets(resolveAnimationManifest(ANIMATION_MANIFEST, measure));
 
-    expect(missing).not.toContain('dewling_idle.png');
-    expect(missing).toContain('dewling_death.png');
-    expect(missing).toContain('rustwhale_telegraph.png');
+    expect(missing).not.toContain('drifter_idle.png');
+    expect(missing).toContain('drifter_death.png');
+    expect(missing).toContain('leviathan_telegraph.png');
   });
 
   it('lists every referenced sheet exactly once', () => {
@@ -254,9 +254,9 @@ describe('Step A3 — frame counts come from the asset, never the table', () => 
     const sheets = entries.map((e) => e.sheet);
 
     expect(new Set(sheets).size).toBe(sheets.length);
-    expect(sheets).toContain('rustwhale_phaseup.png');
-    expect(sheets).toContain('ashfish_swim.png');
-    for (const entry of entries) expect(entry.url).toMatch(/^assets\/sprites\//);
+    expect(sheets).toContain('leviathan_phaseup.png');
+    expect(sheets).toContain('strider_swim.png');
+    for (const entry of entries) expect(entry.url).toMatch(/^assets\/ships\//);
   });
 
   it('keeps Tier B swarm types out of the Tier A table', () => {

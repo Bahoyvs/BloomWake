@@ -1,6 +1,12 @@
 /**
- * Meta-progression UI (Phase 5 Step F): main menu, Petal Shop, Bloom Complete
- * results screen, small-capsule toast, Daily Bloom indicator.
+ * Meta-progression UI: main menu, Salvage Depot, mission-debrief results
+ * screen, wave-clear toast, daily-shipment indicator.
+ *
+ * COPY IS TRANSLATED HERE, NOT IN THE DATA.
+ * The reward tiers, the currency and the upgrade ids keep their original
+ * English keys in src/data/ and src/core/ — they are save-game and dispatch
+ * keys. This module is where they become words a player reads, which is the
+ * same split RARITY_LABEL uses in hud.js.
  *
  * Strictly a view layer, same separation as Phases 1-4: it renders whatever the
  * core action functions return and never mutates meta-state itself. Every
@@ -14,12 +20,15 @@ import { describeCosmetics } from '../core/cosmetics.js';
 import { isDailyBloomAvailable, msUntilNextLocalDay } from '../core/daily-bloom.js';
 import { REWARD_TIERS } from '../data/rewards.js';
 
-/** Tier label styling hooks. */
+/**
+ * Player-facing tier names. The keys stay the English identifiers the reward
+ * tables and CSS class suffixes use; only the words change.
+ */
 const TIER_LABEL = {
-  common: 'Common',
-  uncommon: 'Uncommon',
-  rare: 'Rare',
-  legendary: 'Legendary',
+  common: 'Yaygın',
+  uncommon: 'Sıra Dışı',
+  rare: 'Nadir',
+  legendary: 'Efsanevi',
 };
 
 export class MetaUi {
@@ -49,38 +58,38 @@ export class MetaUi {
       <!-- Main menu -->
       <section class="meta__screen meta__screen--menu" data-meta="menu">
         <h1 class="meta__title">BloomWake</h1>
-        <p class="meta__tagline">Aeria: Last Bloom</p>
+        <p class="meta__tagline">Void Drifter // Chitin Swarm</p>
 
-        <div class="meta__wallet"><b data-meta="menu-petals">0</b> Petal</div>
+        <div class="meta__wallet"><b data-meta="menu-petals">0</b> Hurda</div>
 
         <div class="meta__menu-actions">
-          <button class="meta__btn meta__btn--primary" data-meta="play">Begin Run</button>
-          <button class="meta__btn" data-meta="open-shop">Petal Shop</button>
+          <button class="meta__btn meta__btn--primary" data-meta="play">Görevi Başlat</button>
+          <button class="meta__btn" data-meta="open-shop">Hurda Deposu</button>
           <button class="meta__btn meta__btn--daily" data-meta="daily"></button>
         </div>
 
         <p class="meta__stats" data-meta="menu-stats"></p>
       </section>
 
-      <!-- Petal shop -->
+      <!-- Salvage depot -->
       <section class="meta__screen" data-meta="shop">
         <header class="meta__header">
-          <h2 class="meta__heading">Petal Shop</h2>
-          <div class="meta__wallet"><b data-meta="shop-petals">0</b> Petal</div>
+          <h2 class="meta__heading">Hurda Deposu</h2>
+          <div class="meta__wallet"><b data-meta="shop-petals">0</b> Hurda</div>
         </header>
 
-        <h3 class="meta__section-label">Meta Upgrades</h3>
+        <h3 class="meta__section-label">Kalıcı Yükseltmeler</h3>
         <div class="meta__grid" data-meta="upgrades"></div>
 
-        <h3 class="meta__section-label">Dewling Variants</h3>
+        <h3 class="meta__section-label">Drifter Livreleri</h3>
         <div class="meta__grid" data-meta="cosmetics"></div>
 
-        <button class="meta__btn meta__back" data-meta="close-shop">Back</button>
+        <button class="meta__btn meta__back" data-meta="close-shop">Geri</button>
       </section>
 
-      <!-- Bloom Complete -->
+      <!-- Mission debrief -->
       <section class="meta__screen meta__screen--results" data-meta="results">
-        <h2 class="meta__heading" data-meta="results-title">Bloom Complete</h2>
+        <h2 class="meta__heading" data-meta="results-title">Görev Tamamlandı</h2>
 
         <div class="meta__summary" data-meta="results-summary"></div>
 
@@ -93,11 +102,11 @@ export class MetaUi {
           </div>
         </div>
 
-        <button class="meta__odds-btn" data-meta="odds-toggle" title="Show drop rates">?</button>
+        <button class="meta__odds-btn" data-meta="odds-toggle" title="Düşme oranlarını göster">?</button>
         <div class="meta__odds" data-meta="odds"></div>
 
         <div class="meta__results-actions">
-          <button class="meta__btn meta__btn--primary" data-meta="again">Run Again</button>
+          <button class="meta__btn meta__btn--primary" data-meta="again">Tekrar Uç</button>
           <button class="meta__btn" data-meta="to-menu">Menu</button>
         </div>
       </section>
@@ -163,15 +172,15 @@ export class MetaUi {
     this.el['menu-petals'].textContent = state.petals;
     const runs = state.stats.totalRuns;
     this.el['menu-stats'].textContent = runs
-      ? `${runs} ${runs === 1 ? 'run' : 'runs'} · best wave ${state.stats.bestWaveReached}`
-      : 'No runs yet.';
+      ? `${runs} görev · en iyi dalga ${state.stats.bestWaveReached}`
+      : 'Henüz görev yok.';
 
     const available = isDailyBloomAvailable(state.dailyBloom.lastClaimedAt, nowMs);
     this.el.daily.disabled = !available;
     this.el.daily.classList.toggle('meta__btn--ready', available);
     this.el.daily.textContent = available
-      ? 'Daily Bloom · Ready'
-      : `Daily Bloom · ${formatCountdown(msUntilNextLocalDay(nowMs))}`;
+      ? 'Günlük Sevkiyat · Hazır'
+      : `Günlük Sevkiyat · ${formatCountdown(msUntilNextLocalDay(nowMs))}`;
   }
 
   /* ------------------------------------------------------------------ */
@@ -189,11 +198,11 @@ export class MetaUi {
           <h4 class="meta__card-name">${row.name}</h4>
           <p class="meta__card-desc">${row.description}</p>
           <div class="meta__card-level">${
-            row.maxLevel > 1 ? `Level ${row.level} / ${row.maxLevel}` : row.level ? 'Unlocked' : 'Locked'
+            row.maxLevel > 1 ? `Seviye ${row.level} / ${row.maxLevel}` : row.level ? 'Açık' : 'Kilitli'
           }</div>
           <button class="meta__btn meta__btn--buy" data-upgrade="${row.id}"
             ${row.maxed || !row.affordable ? 'disabled' : ''}>
-            ${row.maxed ? 'Maxed' : `${row.cost} Petal`}
+            ${row.maxed ? 'Tam' : `${row.cost} Hurda`}
           </button>
         </article>`
       )
@@ -206,16 +215,16 @@ export class MetaUi {
           <h4 class="meta__card-name">${row.name}</h4>
           <p class="meta__card-desc">${row.description}</p>
           <div class="meta__card-level">${
-            row.locked ? 'Legendary capsule only' : row.owned ? 'Owned' : `${row.cost} Petal`
+            row.locked ? 'Yalnızca efsanevi kapsülden' : row.owned ? 'Sahip' : `${row.cost} Hurda`
           }</div>
           ${
             row.owned
               ? `<button class="meta__btn meta__btn--buy" data-equip="${row.id}" ${
                   row.equipped ? 'disabled' : ''
-                }>${row.equipped ? 'Equipped' : 'Equip'}</button>`
+                }>${row.equipped ? 'Takılı' : 'Tak'}</button>`
               : `<button class="meta__btn meta__btn--buy" data-cosmetic="${row.id}" ${
                   row.affordable ? '' : 'disabled'
-                }>${row.locked ? 'Locked' : 'Buy'}</button>`
+                }>${row.locked ? 'Kilitli' : 'Satın Al'}</button>`
           }
         </article>`
       )
@@ -237,18 +246,18 @@ export class MetaUi {
   /* ------------------------------------------------------------------ */
 
   /**
-   * Show the Bloom Complete screen with the run's large capsule.
+   * Show the mission debrief with the run's large salvage capsule.
    *
    * @param {Object} result - Run outcome {wave, score, kills, won}
    * @param {Object} capsule - From completeRun(): {reward, newCosmetics, pityApplied, odds}
    */
   showResults(result, capsule) {
-    this.el['results-title'].textContent = result.won ? 'Bloom Complete' : 'The Stain Wins';
+    this.el['results-title'].textContent = result.won ? 'Görev Tamamlandı' : 'Kovan Kazandı';
 
     this.el['results-summary'].innerHTML = [
-      ['Wave', result.wave],
-      ['Score', result.score],
-      ['Kills', result.kills],
+      ['Dalga', result.wave],
+      ['Skor', result.score],
+      ['Kill', result.kills],
     ]
       .map(
         ([label, value]) =>
@@ -260,17 +269,17 @@ export class MetaUi {
 
     this.el['capsule-tier'].textContent = TIER_LABEL[reward.tier] ?? reward.tier;
     this.el['capsule-tier'].className = `meta__tier meta__tier--${reward.tier}`;
-    this.el['capsule-petals'].textContent = `+${reward.petals} Petal`;
+    this.el['capsule-petals'].textContent = `+${reward.petals} Hurda`;
     this.el['capsule-drop'].textContent = newCosmetics.length
-      ? `New variant unlocked: ${newCosmetics.join(', ')}`
+      ? `Yeni livre açıldı: ${newCosmetics.join(', ')}`
       : pityApplied
-        ? 'Pity guarantee applied'
+        ? 'Telafi garantisi uygulandı'
         : '';
 
     this.el.odds.innerHTML = renderOdds(odds);
     this.el.odds.classList.remove('meta__odds--visible');
 
-    // Restart the bloom animation from the closed bud each time.
+    // Restart the capsule-opening animation from closed each time.
     this.el.capsule.classList.remove('meta__capsule--open');
     void this.el.capsule.offsetWidth;
     this.el.capsule.classList.add('meta__capsule--open');
@@ -283,7 +292,7 @@ export class MetaUi {
   /* ------------------------------------------------------------------ */
 
   /**
-   * Brief end-of-wave capsule notice. Non-blocking by design: it never pauses
+   * Brief end-of-wave salvage notice. Non-blocking by design: it never pauses
    * the simulation and never takes pointer events, so the next wave can start
    * underneath it.
    *
@@ -292,7 +301,7 @@ export class MetaUi {
   showToast(reward) {
     this.el.toast.innerHTML =
       `<span class="meta__toast-tier meta__toast-tier--${reward.tier}">` +
-      `${TIER_LABEL[reward.tier] ?? reward.tier}</span> Bloom Capsule · +${reward.petals} Petal`;
+      `${TIER_LABEL[reward.tier] ?? reward.tier}</span> Kurtarma Kapsülü · +${reward.petals} Hurda`;
     this.el.toast.classList.add('meta__toast--visible');
 
     clearTimeout(this.toastTimer);
@@ -316,7 +325,7 @@ function renderOdds(odds) {
   ).join('');
 
   return `
-    <p class="meta__odds-title">Drop rates · waves ${range}</p>
+    <p class="meta__odds-title">Düşme oranları · dalga ${range}</p>
     <table class="meta__odds-table">${rows}</table>
   `;
 }

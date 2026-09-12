@@ -40,6 +40,15 @@ export class GameState {
     this.currentState = GAME_STATES.IDLE;
     this.wave = 1;
     this.waveTimeRemaining = getWaveDuration(1);
+    /**
+     * True once the wave's spawn clock has run out.
+     *
+     * The wave is NOT over at this point — it is in its "clear the swarm"
+     * tail. Nothing new arrives, and the wave completes only when the
+     * simulation reports the field empty (see Simulation.updateSpawning). This
+     * flag is what the HUD reads to show the SWARM CLEARED TO ADVANCE prompt.
+     */
+    this.spawnWindowClosed = false;
     this.score = 0;
     this.kills = 0;
     this.petalsEarned = 0;
@@ -98,16 +107,35 @@ export class GameState {
 
   /**
    * Advance game loop by delta time (in seconds)
+   *
+   * The clock closes the SPAWN WINDOW; it does not end the wave. Ending the
+   * wave is the simulation's call, because only it knows whether the field is
+   * empty — see the note on spawnWindowClosed.
+   *
    * @param {number} dt - Delta time in seconds
    */
   update(dt) {
     if (this.currentState !== GAME_STATES.RUNNING) return;
+    if (this.spawnWindowClosed) return;
 
     this.waveTimeRemaining -= dt;
     if (this.waveTimeRemaining <= 0) {
       this.waveTimeRemaining = 0;
-      this.completeWave();
+      this.closeSpawnWindow();
     }
+  }
+
+  /**
+   * Stop new arrivals and put the wave into its clear-out tail.
+   *
+   * Idempotent: the simulation may reach the condition on the same frame the
+   * clock does, and a second prompt banner would be noise.
+   */
+  closeSpawnWindow() {
+    if (this.spawnWindowClosed) return;
+    this.spawnWindowClosed = true;
+    this.waveTimeRemaining = 0;
+    this.bus.emit('wave:spawn_closed', { wave: this.wave });
   }
 
   /**
@@ -133,6 +161,7 @@ export class GameState {
   nextWave() {
     this.wave += 1;
     this.waveTimeRemaining = getWaveDuration(this.wave);
+    this.spawnWindowClosed = false;
     this.currentState = GAME_STATES.RUNNING;
     this.bus.emit('wave:start', this.getWaveData());
   }
@@ -277,6 +306,7 @@ export class GameState {
       speedMultiplier: getEnemySpeedMultiplier(this.wave),
       isBossWave: isBossWave(this.wave),
       duration: this.waveTimeRemaining,
+      spawnWindowClosed: this.spawnWindowClosed,
     };
   }
 
@@ -288,6 +318,7 @@ export class GameState {
       state: this.currentState,
       wave: this.wave,
       timeRemaining: this.waveTimeRemaining,
+      spawnWindowClosed: this.spawnWindowClosed,
       score: this.score,
       kills: this.kills,
       player: { ...this.player },
