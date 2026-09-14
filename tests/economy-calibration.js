@@ -235,7 +235,7 @@ export function simulateEconomy(profiles, pool, seed = 20250413) {
     // One small capsule per wave actually cleared.
     for (let w = 0; w < profile.wavesCleared; w++) {
       const small = resolveSmallCapsule(rng, pool);
-      totalPetals += small.petals;
+      totalPetals += small.scrap;
       tierCounts[small.tier]++;
     }
 
@@ -246,7 +246,7 @@ export function simulateEconomy(profiles, pool, seed = 20250413) {
       rng,
       pool
     );
-    totalPetals += reward.petals;
+    totalPetals += reward.scrap;
     tierCounts[reward.tier]++;
     cosmeticDrops += reward.cosmetics.length;
     if (pityApplied) pityTriggers++;

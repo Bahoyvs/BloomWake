@@ -403,6 +403,8 @@ export class ActiveSkillSystem {
 
     /** Currently equipped skill id. Set from meta-state at run start. */
     this.skillId = DEFAULT_ACTIVE_SKILL_ID;
+    /** Chip-scaled def for the equipped skill; null means the level-1 table. */
+    this.defOverride = null;
     /** Seconds until the next cast is allowed. */
     this.cooldownTimer = 0;
     /** Seconds of active window left. 0 when idle or between casts. */
@@ -433,9 +435,23 @@ export class ActiveSkillSystem {
     return this.sim.state.player;
   }
 
-  /** The equipped skill's data row. */
+  /**
+   * The equipped skill's data row — scaled to the chip level bought for it,
+   * when the run was started with one.
+   *
+   * EVERY HANDLER READS THROUGH HERE, which is the whole reason the level
+   * system is a single override on this getter rather than a lookup inside
+   * each of the seven handlers. `resolveSkillDefAtLevel` in meta-economy.js
+   * returns an ordinary ActiveSkillDef with its numbers already multiplied, so
+   * a level-5 Singularity Anchor reaches `HANDLERS.singularity_anchor` as a
+   * row with `radius: 330` and nothing in this file has to know a chip exists.
+   *
+   * Falls back to the level-1 table whenever no override was supplied — the
+   * Phase 1-4 call sites, every test that equips by id alone, and any run
+   * started without a meta-state.
+   */
   get def() {
-    return getActiveSkillById(this.skillId);
+    return this.defOverride ?? getActiveSkillById(this.skillId);
   }
 
   /** True while the active window is open. */
@@ -504,9 +520,14 @@ export class ActiveSkillSystem {
    * @param {string} id
    * @param {Object} [options]
    * @param {number} [options.maxCharges]
+   * @param {Object} [options.def] - A scaled ActiveSkillDef to use in place of
+   *   the level-1 table row. Ignored unless its `id` matches the skill actually
+   *   equipped, so a stale def left over from a previous loadout can never
+   *   drive a different skill's handler.
    */
-  equip(id, { maxCharges = 1 } = {}) {
+  equip(id, { maxCharges = 1, def = null } = {}) {
     this.skillId = getActiveSkillById(id) ? id : DEFAULT_ACTIVE_SKILL_ID;
+    this.defOverride = def?.id === this.skillId ? def : null;
     this.maxCharges = Math.max(1, Math.floor(maxCharges));
     this.charges = this.maxCharges;
     this.cooldownTimer = 0;

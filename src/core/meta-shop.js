@@ -1,9 +1,12 @@
 /**
- * Petal meta-upgrade shop (GDD Section 9, Phase 5 Step D).
+ * Scrap meta-upgrade shop (GDD Section 9, Phase 5 Step D).
  *
  * Pure functions, no DOM. Actions validate and return {ok, reason, state}; the
  * UI never mutates state itself, it renders whatever comes back — the same
  * architectural rule the rest of the codebase follows.
+ *
+ * Prices are quoted in Scrap, the game's single currency, and this module never
+ * holds a balance — see purchaseUpgrade.
  */
 
 import { META_UPGRADES, META_UPGRADE_IDS, getUpgradeById } from '../data/meta-upgrades.js';
@@ -17,7 +20,7 @@ import { META_UPGRADES, META_UPGRADE_IDS, getUpgradeById } from '../data/meta-up
  *
  * @param {string} upgradeId
  * @param {number} currentLevel - Levels already owned
- * @returns {number|null} Petal cost, rounded to a whole Petal
+ * @returns {number|null} Scrap cost, rounded to a whole unit
  */
 export function getUpgradeCost(upgradeId, currentLevel = 0) {
   const upgrade = getUpgradeById(upgradeId);
@@ -44,11 +47,21 @@ export function getUpgradeLevel(state, upgradeId) {
 /**
  * Buy one level of an upgrade.
  *
- * @param {Object} state - Persistent meta-state
+ * THE WALLET IS NOT IN THIS STATE. The balance comes in as `scrap` and the
+ * price goes back out as `cost`, for the caller to debit from the one Scrap
+ * balance in the crate economy save. This module decides whether a purchase is
+ * legal and what it costs; it does not decide where the money lives.
+ *
+ * That split is what makes a single wallet structural rather than a convention:
+ * there is no currency field here for a future change to start spending from.
+ *
+ * @param {Object} state - Persistent meta-state (levels; no balance)
  * @param {string} upgradeId
+ * @param {number} scrap - The player's current Scrap balance
  * @returns {{ok: boolean, reason?: string, cost?: number, state: Object}}
+ *   `state` carries the new level; `cost` is what the caller must deduct.
  */
-export function purchaseUpgrade(state, upgradeId) {
+export function purchaseUpgrade(state, upgradeId, scrap = 0) {
   const upgrade = getUpgradeById(upgradeId);
   if (!upgrade) return { ok: false, reason: 'UNKNOWN_UPGRADE', state };
 
@@ -56,7 +69,7 @@ export function purchaseUpgrade(state, upgradeId) {
   if (level >= upgrade.maxLevel) return { ok: false, reason: 'MAX_LEVEL', state };
 
   const cost = getUpgradeCost(upgradeId, level);
-  if (state.petals < cost) return { ok: false, reason: 'INSUFFICIENT_PETALS', cost, state };
+  if (scrap < cost) return { ok: false, reason: 'INSUFFICIENT_SCRAP', cost, state };
 
   const nextValue = upgrade.isBoolean ? true : level + 1;
 
@@ -65,7 +78,6 @@ export function purchaseUpgrade(state, upgradeId) {
     cost,
     state: {
       ...state,
-      petals: state.petals - cost,
       metaUpgrades: { ...state.metaUpgrades, [upgradeId]: nextValue },
     },
   };
@@ -74,9 +86,10 @@ export function purchaseUpgrade(state, upgradeId) {
 /**
  * Shop rows for the UI: level, next cost, and whether it can be bought now.
  * @param {Object} state
+ * @param {number} scrap - The player's current Scrap balance
  * @returns {Array<Object>}
  */
-export function describeShop(state) {
+export function describeShop(state, scrap = 0) {
   return Object.values(META_UPGRADES).map((upgrade) => {
     const level = getUpgradeLevel(state, upgrade.id);
     const cost = getUpgradeCost(upgrade.id, level);
@@ -90,7 +103,7 @@ export function describeShop(state) {
       maxLevel: upgrade.maxLevel,
       cost,
       maxed,
-      affordable: !maxed && state.petals >= cost,
+      affordable: !maxed && scrap >= cost,
     };
   });
 }

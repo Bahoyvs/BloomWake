@@ -99,14 +99,17 @@ describe('msUntilNextLocalDay', () => {
 });
 
 describe('claimDailyBloom', () => {
-  it('grants Petals and stamps the claim time', () => {
+  it('rolls Scrap and stamps the claim time', () => {
     const state = createDefaultState();
     const now = local(2026, 3, 14, 9);
     const result = claimDailyBloom(state, now, mulberry32(1));
 
     expect(result.ok).toBe(true);
-    expect(result.reward.petals).toBeGreaterThan(0);
-    expect(result.state.petals).toBe(result.reward.petals);
+    // The Scrap rides out on the reward for the caller to bank — this state
+    // holds no wallet to have it added to.
+    expect(result.reward.scrap).toBeGreaterThan(0);
+    expect(result.state).not.toHaveProperty('petals');
+    expect(result.state).not.toHaveProperty('scrap');
     expect(result.state.dailyBloom.lastClaimedAt).toBe(now);
   });
 
@@ -117,7 +120,7 @@ describe('claimDailyBloom', () => {
 
     expect(second.ok).toBe(false);
     expect(second.reason).toBe('ALREADY_CLAIMED_TODAY');
-    expect(second.state.petals).toBe(first.state.petals);
+    expect(second.reward).toBeUndefined();
   });
 
   it('allows a claim again the following day', () => {
@@ -125,14 +128,16 @@ describe('claimDailyBloom', () => {
     const second = claimDailyBloom(first.state, local(2026, 3, 15, 9), mulberry32(2));
 
     expect(second.ok).toBe(true);
-    expect(second.state.petals).toBeGreaterThan(first.state.petals);
+    expect(second.reward.scrap).toBeGreaterThan(0);
+    expect(second.state.dailyBloom.lastClaimedAt).toBeGreaterThan(
+      first.state.dailyBloom.lastClaimedAt
+    );
   });
 
   it('does not mutate the state it was given', () => {
     const state = createDefaultState();
     claimDailyBloom(state, local(2026, 3, 14, 9), mulberry32(1));
 
-    expect(state.petals).toBe(0);
     expect(state.dailyBloom.lastClaimedAt).toBe(0);
   });
 

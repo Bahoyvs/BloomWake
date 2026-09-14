@@ -74,30 +74,30 @@ export function rollAmount(range, rng) {
  * Turn a tier into concrete payouts.
  *
  * Every entry in the tier's pool is granted, not one sampled entry — which is
- * why a Legendary capsule yields the prestige skin AND its Petal roll, making
+ * why a Legendary capsule yields the prestige skin AND its Scrap roll, making
  * the skin's drop rate equal to the Legendary tier rate rather than half of it.
  *
  * @param {string} tier
  * @param {() => number} rng
  * @param {Object} [pool] - Payout table; overridable so the economy calibration
- *   script can trial scaled Petal ranges against this exact logic instead of
+ *   script can trial scaled Scrap ranges against this exact logic instead of
  *   reimplementing it.
- * @returns {{tier: string, petals: number, cosmetics: Array<string>}}
+ * @returns {{tier: string, scrap: number, cosmetics: Array<string>}}
  */
 export function resolveTierReward(tier, rng, pool = REWARD_POOL) {
   const entries = pool[tier] ?? [];
-  let petals = 0;
+  let scrap = 0;
   const cosmetics = [];
 
   for (const entry of entries) {
-    if (entry.type === 'petal') {
-      petals += rollAmount(entry.amount, rng);
+    if (entry.type === 'scrap') {
+      scrap += rollAmount(entry.amount, rng);
     } else if (entry.type === 'cosmetic') {
       cosmetics.push(entry.id);
     }
   }
 
-  return { tier, petals, cosmetics };
+  return { tier, scrap, cosmetics };
 }
 
 /**
@@ -105,7 +105,7 @@ export function resolveTierReward(tier, rng, pool = REWARD_POOL) {
  *
  * @param {() => number} rng
  * @param {Object} [pool] - Payout table override (see resolveTierReward)
- * @returns {{tier: string, petals: number, cosmetics: Array<string>}}
+ * @returns {{tier: string, scrap: number, cosmetics: Array<string>}}
  */
 export function resolveSmallCapsule(rng, pool = REWARD_POOL) {
   const tier = rollRewardTier(SMALL_CAPSULE_WEIGHTS, rng);

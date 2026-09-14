@@ -286,8 +286,12 @@ export class Simulation {
    *   purchased upgrades are folded into the Dewling's starting stats and the
    *   draft width. Omitted in tests and Phase 1-4 call sites, which run with
    *   unmodified base stats.
+   * @param {Object} [options]
+   * @param {Object} [options.activeSkillDef] - The equipped skill's definition
+   *   with its chip levels already applied, from
+   *   `MetaEconomy.getSkillDefForState()`. Omitted means the level-1 table.
    */
-  startRun(metaState = null) {
+  startRun(metaState = null, { activeSkillDef = null } = {}) {
     this.resetEntities();
     this.state.startRun();
 
@@ -300,7 +304,13 @@ export class Simulation {
       // Equipped in the hangar, carried in here. equip() validates the id, so
       // a save naming a skill this build does not have falls back rather than
       // starting the run with a dead key.
-      this.activeSkills.equip(metaState.activeSkillId);
+      //
+      // `activeSkillDef` is the same skill with its chip levels already applied,
+      // resolved by the caller. It arrives as an argument rather than being
+      // looked up here because the crate economy is a SEPARATE save from
+      // metaState — making the simulation import meta-economy.js to read it
+      // would put a second persistence layer behind the run's start.
+      this.activeSkills.equip(metaState.activeSkillId, { def: activeSkillDef });
     } else {
       this.offerCount = DRAFT_CFG.OFFER_COUNT;
     }

@@ -677,7 +677,7 @@
 .meta__tier--rare { background: var(--rarity-rare); }
 .meta__tier--legendary { background: var(--rarity-legendary); }
 
-.meta__petals {
+.meta__capsule-scrap {
   font-family: var(--font-display);
   font-size: 24px;
   font-weight: 700;
@@ -798,3 +798,182 @@
 .meta__toast-tier--uncommon { color: var(--bio-acid); }
 .meta__toast-tier--rare { color: var(--neon-cyan); }
 .meta__toast-tier--legendary { color: #ffcc00; }
+
+/* ------------------------------------------------------------------ */
+/* Tactical Systems — chip levels                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The section heading gains a wallet badge, so it becomes a row rather than a
+ * bare label. Only Tactical Systems uses it today; declared generically because
+ * the reason it exists — a section spending a different currency from the
+ * screen header's — is not specific to chips.
+ */
+.meta__section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: 100%;
+}
+
+.meta__section-head .meta__section-label {
+  margin: 0;
+}
+
+/*
+ * Chips held, as a recessed counter tube beside the level meter. Deliberately
+ * NOT another segmented meter: the level meter above it is a fixed five cells
+ * and this is an open-ended count against a moving target, so drawing them the
+ * same way would imply the chip bar also fills to five.
+ */
+.chip-tube {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  padding: 3px 8px;
+  border-radius: 3px;
+  background: var(--hud-recess);
+  box-shadow:
+    inset 0 2px 4px rgba(0, 0, 0, 0.7),
+    0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.chip-tube__label {
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--hud-label);
+}
+
+.chip-tube__count {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--tab-amber);
+  text-shadow: 0 0 6px rgba(251, 197, 49, 0.6);
+}
+
+/* A maxed skill's chips are stock, not progress — drop the amber urgency. */
+.chip-tube--max .chip-tube__count {
+  color: var(--hud-label);
+  text-shadow: none;
+}
+
+/*
+ * Equip and Level Up stack rather than sitting side by side. At the grid's
+ * 200px minimum column they would each get ~92px, which the longest label
+ * ("Need 12 more Scrap") cannot survive at any size worth reading.
+ */
+.bay__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: auto;
+}
+
+.meta__btn--level {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+/* ------------------------------------------------------------------ */
+/* Debrief — earned salvage crate                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The crate console, sunk into the debrief plate. It is a DARK recess on a
+ * light chassis — the inverse of every other card on this screen — because it
+ * is the one element here that must pull the eye away from the scoreboard
+ * above it, and on light steel a darker hole reads louder than another panel.
+ */
+.crate-award {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 16px 16px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #2a303b, #1d222b);
+  box-shadow:
+    inset 0 3px 8px rgba(0, 0, 0, 0.7),
+    inset 0 0 0 2px rgba(0, 0, 0, 0.35),
+    0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+.crate-award__stencil {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--tab-amber);
+  text-shadow: 0 0 10px rgba(251, 197, 49, 0.5);
+}
+
+/* A small riveted pod, lit from the front. The modal draws the real one. */
+.crate-award__pod {
+  position: relative;
+  width: 62px;
+  height: 46px;
+  border-radius: 5px;
+  background: linear-gradient(176deg, #c3c6d2, #8a90a1 55%, #6f7586);
+  border: 2px solid #5d6474;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.6),
+    0 4px 12px rgba(0, 0, 0, 0.55);
+  animation: crate-award-hover 2.6s ease-in-out infinite;
+}
+
+.crate-award__band {
+  position: absolute;
+  inset: 0 38%;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--console-stroke) 0 6px,
+    var(--tab-amber) 6px 12px
+  );
+  opacity: 0.9;
+}
+
+/*
+ * The rarer the crate, the hotter its rim. Keyed off the crate id the debrief
+ * stamps on the container, so the escalation is visible before the box is
+ * opened — a wave-10 run should LOOK different from a wave-2 one at a glance.
+ */
+.crate-award[data-crate-type='military_pod'] .crate-award__pod {
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.6),
+    0 0 16px rgba(251, 197, 49, 0.55),
+    0 4px 12px rgba(0, 0, 0, 0.55);
+}
+
+.crate-award[data-crate-type='prototype_crate'] .crate-award__pod {
+  border-color: #d81b60;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.6),
+    0 0 22px rgba(216, 27, 96, 0.7),
+    0 4px 12px rgba(0, 0, 0, 0.55);
+}
+
+@keyframes crate-award-hover {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+.crate-award__btn {
+  min-width: 190px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .crate-award__pod {
+    animation: none;
+  }
+}

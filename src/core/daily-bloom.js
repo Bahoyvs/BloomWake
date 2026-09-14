@@ -89,9 +89,10 @@ export function claimDailyBloom(state, nowMs, rng) {
   const tier = rollRewardTier(SMALL_CAPSULE_WEIGHTS, rng);
   const reward = resolveTierReward(tier, rng);
 
+  // The Scrap rides out on `reward` for the caller to bank — see
+  // meta-progression.js on why this module does not hold a wallet.
   const nextState = {
     ...state,
-    petals: state.petals + reward.petals,
     cosmetics: {
       ...state.cosmetics,
       owned: [...new Set([...state.cosmetics.owned, ...reward.cosmetics])],

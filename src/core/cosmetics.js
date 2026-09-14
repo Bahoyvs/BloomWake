@@ -17,22 +17,27 @@ export function ownsCosmetic(state, cosmeticId) {
 }
 
 /**
- * Buy a cosmetic with Petals.
+ * Buy a cosmetic with Scrap.
  *
- * The prestige skin is drop-only and is refused here at any Petal balance —
- * being unbuyable is the whole point of it.
+ * The prestige skin is drop-only and is refused here at any balance — being
+ * unbuyable is the whole point of it.
+ *
+ * Takes the balance and reports the price rather than holding a wallet, for the
+ * reason `purchaseUpgrade` explains: the game has exactly one Scrap balance and
+ * it lives in the crate economy save.
  *
  * @param {Object} state
  * @param {string} cosmeticId
+ * @param {number} scrap - The player's current Scrap balance
  * @returns {{ok: boolean, reason?: string, cost?: number, state: Object}}
  */
-export function purchaseCosmetic(state, cosmeticId) {
+export function purchaseCosmetic(state, cosmeticId, scrap = 0) {
   const cosmetic = getCosmeticById(cosmeticId);
   if (!cosmetic) return { ok: false, reason: 'UNKNOWN_COSMETIC', state };
   if (!cosmetic.purchasable) return { ok: false, reason: 'NOT_PURCHASABLE', state };
   if (ownsCosmetic(state, cosmeticId)) return { ok: false, reason: 'ALREADY_OWNED', state };
-  if (state.petals < cosmetic.cost) {
-    return { ok: false, reason: 'INSUFFICIENT_PETALS', cost: cosmetic.cost, state };
+  if (scrap < cosmetic.cost) {
+    return { ok: false, reason: 'INSUFFICIENT_SCRAP', cost: cosmetic.cost, state };
   }
 
   return {
@@ -40,7 +45,6 @@ export function purchaseCosmetic(state, cosmeticId) {
     cost: cosmetic.cost,
     state: {
       ...state,
-      petals: state.petals - cosmetic.cost,
       cosmetics: {
         ...state.cosmetics,
         owned: [...state.cosmetics.owned, cosmeticId],
@@ -97,9 +101,10 @@ export function grantCosmetics(state, cosmeticIds = []) {
 /**
  * Shop rows for the cosmetics list.
  * @param {Object} state
+ * @param {number} scrap - The player's current Scrap balance
  * @returns {Array<Object>}
  */
-export function describeCosmetics(state) {
+export function describeCosmetics(state, scrap = 0) {
   return COSMETIC_ORDER.map((id) => {
     const cosmetic = getCosmeticById(id);
     const isOwned = ownsCosmetic(state, id);
@@ -112,7 +117,7 @@ export function describeCosmetics(state) {
       purchasable: cosmetic.purchasable,
       owned: isOwned,
       equipped: state.cosmetics.equipped === id,
-      affordable: cosmetic.purchasable && !isOwned && state.petals >= cosmetic.cost,
+      affordable: cosmetic.purchasable && !isOwned && scrap >= cosmetic.cost,
       /** Drop-only and not yet found: shown locked rather than for sale. */
       locked: !cosmetic.purchasable && !isOwned,
     };

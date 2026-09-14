@@ -6,7 +6,7 @@ import {
   loadState,
   serializeState,
   recordRun,
-  addPetals,
+  clearPendingScrap,
 } from '../src/core/state.js';
 import { COSMETIC_IDS } from '../src/data/cosmetics.js';
 
@@ -26,7 +26,8 @@ describe('Save state defaults', () => {
   it('starts a new player with the documented shape', () => {
     const state = createDefaultState();
 
-    expect(state.petals).toBe(0);
+    expect(state).not.toHaveProperty('petals');
+    expect(state.pendingScrapTransfer).toBe(0);
     expect(state.metaUpgrades).toEqual({
       startHp: 0,
       pickupRadius: 0,
@@ -42,10 +43,10 @@ describe('Save state defaults', () => {
   it('hands out an independent copy each call', () => {
     const a = createDefaultState();
     const b = createDefaultState();
-    a.petals = 999;
+    a.pendingScrapTransfer = 999;
     a.cosmetics.owned.push('dew-tint');
 
-    expect(b.petals).toBe(0);
+    expect(b.pendingScrapTransfer).toBe(0);
     expect(b.cosmetics.owned).toEqual(['default']);
   });
 });
@@ -87,7 +88,7 @@ describe('Backward compatibility with a Phase 4 save', () => {
   it('produces correct Phase 5 defaults for every missing field', () => {
     const loaded = loadState(phase4Save());
 
-    expect(loaded.petals).toBe(0);
+    expect(loaded).not.toHaveProperty('petals');
     expect(loaded.metaUpgrades).toEqual({
       startHp: 0,
       pickupRadius: 0,
@@ -109,9 +110,38 @@ describe('Backward compatibility with a Phase 4 save', () => {
     expect(original).toEqual(phase4Save());
   });
 
-  it('does not bump the save version for an additive change', () => {
+  it('stamps every loaded save with the current version', () => {
     expect(loadState(phase4Save()).version).toBe(SAVE_VERSION);
-    expect(SAVE_VERSION).toBe(1);
+    // 2 is the currency merge: `petals` removed in favour of the single Scrap
+    // wallet. A purely additive change must NOT bump this again.
+    expect(SAVE_VERSION).toBe(2);
+  });
+
+  it('moves a legacy Petal balance out to be banked as Scrap', () => {
+    const loaded = loadState({ version: 1, petals: 1750 });
+
+    expect(loaded.pendingScrapTransfer).toBe(1750);
+    expect(loaded).not.toHaveProperty('petals');
+  });
+
+  it('re-runs the migration rather than risking a skipped one', () => {
+    // Deliberately not gated on the stored version: a save mislabelled v2 that
+    // still carries `petals` must still hand the balance over. Crediting twice
+    // is recoverable; deleting a player's whole balance is not.
+    const mislabelled = loadState({ version: 2, petals: 600 });
+    expect(mislabelled.pendingScrapTransfer).toBe(600);
+  });
+
+  it('is a no-op on a save that has already migrated', () => {
+    const migrated = clearPendingScrap(loadState({ version: 1, petals: 900 }));
+    const reloaded = loadState(JSON.parse(JSON.stringify(migrated)));
+
+    expect(reloaded.pendingScrapTransfer).toBe(0);
+  });
+
+  it('refuses to let a hand-edited save resurrect the dead wallet', () => {
+    const loaded = loadState({ version: 2, petals: 0, pendingScrapTransfer: 0 });
+    expect(loaded).not.toHaveProperty('petals');
   });
 
   it('keeps a partially-populated Phase 5 branch and defaults the rest', () => {
@@ -119,7 +149,9 @@ describe('Backward compatibility with a Phase 4 save', () => {
     const partial = { petals: 340, metaUpgrades: { startHp: 2 } };
     const loaded = loadState(partial);
 
-    expect(loaded.petals).toBe(340);
+    // The balance survives as a hand-off, not as a second wallet.
+    expect(loaded.pendingScrapTransfer).toBe(340);
+    expect(loaded).not.toHaveProperty('petals');
     expect(loaded.metaUpgrades.startHp).toBe(2);
     expect(loaded.metaUpgrades.pickupRadius).toBe(0);
     expect(loaded.metaUpgrades.fourthCardSlot).toBe(false);
@@ -132,8 +164,8 @@ describe('Backward compatibility with a Phase 4 save', () => {
     // Phase 4 fixture above, and gaining a default for it is the migration
     // working, not a round-trip failure.
     const full = {
-      version: 1,
-      petals: 1234,
+      version: 2,
+      pendingScrapTransfer: 0,
       metaUpgrades: { startHp: 3, pickupRadius: 2, startSpeed: 1, fourthCardSlot: true },
       cosmetics: { owned: ['default', 'dew-tint', 'prestij-skin'], equipped: 'dew-tint' },
       activeSkillId: 'phase_shift',
@@ -157,10 +189,10 @@ describe('Loading hostile or absent saves', () => {
     }
   });
 
-  it('clamps negative and fractional Petals', () => {
-    expect(loadState({ petals: -500 }).petals).toBe(0);
-    expect(loadState({ petals: 12.9 }).petals).toBe(12);
-    expect(loadState({ petals: 'abc' }).petals).toBe(0);
+  it('clamps a negative, fractional or nonsense legacy balance', () => {
+    expect(loadState({ petals: -500 }).pendingScrapTransfer).toBe(0);
+    expect(loadState({ petals: 12.9 }).pendingScrapTransfer).toBe(12);
+    expect(loadState({ petals: 'abc' }).pendingScrapTransfer).toBe(0);
   });
 
   it('coerces the one-time unlock to a real boolean', () => {
@@ -202,11 +234,14 @@ describe('State mutations stay pure', () => {
     expect(state.stats.totalRuns).toBe(2);
   });
 
-  it('adds Petals without mutating and ignores bad input', () => {
-    const state = createDefaultState();
-    expect(addPetals(state, 50).petals).toBe(50);
-    expect(addPetals(state, -50).petals).toBe(0);
-    expect(addPetals(state, 10.7).petals).toBe(10);
-    expect(state.petals).toBe(0);
+  it('clears the legacy hand-off without mutating', () => {
+    const state = loadState({ petals: 500 });
+    expect(state.pendingScrapTransfer).toBe(500);
+
+    const cleared = clearPendingScrap(state);
+    expect(cleared.pendingScrapTransfer).toBe(0);
+    // The caller's copy is untouched, so a failed write can be retried against
+    // a state that still knows what it owes.
+    expect(state.pendingScrapTransfer).toBe(500);
   });
 });

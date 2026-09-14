@@ -20,7 +20,12 @@ import { reportAssetContrast } from './render/asset-audit.js';
 import { Hud } from './ui/hud.js';
 import { equipActiveSkill } from './core/active-skills.js';
 import { MetaUi } from './ui/meta-ui.js';
+import { CrateModal } from './ui/crate-modal.js';
 import { loadSave, saveState } from './ui/storage.js';
+import { clearPendingScrap } from './core/state.js';
+import { MetaEconomy } from './core/meta-economy.js';
+import { getCrateTypeForWave } from './data/crates-config.js';
+import { requestRewardedAd } from './services/crazygames.js';
 
 /** Fixed simulation step keeps physics and damage timing frame-rate independent. */
 const FIXED_DT = 1 / 60;
@@ -60,6 +65,47 @@ const hud = new Hud(uiLayer, simulation, {
 /** Persistent across runs; every core action returns a new one. */
 let metaState = loadSave();
 
+/**
+ * The crate economy — the game's ONE Scrap balance, plus chips and skill levels.
+ *
+ * Still a separate save from metaState, under its own storage key, because the
+ * two change for independent reasons: a breaking change to crate drops should
+ * not push a migration onto a player's upgrades, cosmetics and stats. But the
+ * WALLET is unambiguously here. metaState records what the player owns; this
+ * records what they can spend, and the shop, the liveries and the chip ladder
+ * all price against this single number.
+ *
+ * The manager writes through on every mutation, so nothing here has to remember
+ * to persist.
+ */
+const metaEconomy = new MetaEconomy();
+
+/*
+ * v1 -> v2 save migration: fold a legacy Petal balance into the one wallet.
+ *
+ * Order is the whole correctness argument. The Scrap is credited and PERSISTED
+ * first; only then is the legacy balance marked as handed over. A tab that dies
+ * between the two re-runs the migration on next boot and credits it again —
+ * which is the failure we want, because the alternative ordering loses the
+ * player's entire balance to the same crash and cannot be recovered.
+ */
+if (metaState.pendingScrapTransfer > 0) {
+  metaEconomy.addScrap(metaState.pendingScrapTransfer);
+  console.info(
+    `[BloomWake] Migrated ${metaState.pendingScrapTransfer} Petals into the Scrap wallet.`
+  );
+  commitMeta(clearPendingScrap(metaState));
+}
+
+/**
+ * The crate the finished run earned, held between the debrief and the modal.
+ *
+ * Its payout is ALREADY BANKED — openCrate writes to the save the moment the
+ * run ends. This reference only exists so the modal knows what to animate and
+ * so a rewarded ad knows what to double; losing it costs the player nothing.
+ */
+let pendingCrate = null;
+
 /** Capsule RNG. Seeded per session so rewards are not replayable by reload. */
 const rewardRng = mulberry32((Date.now() ^ 0x9e3779b9) >>> 0);
 
@@ -75,14 +121,27 @@ function commitMeta(next) {
 const metaUi = new MetaUi(uiLayer, {
   getState: () => metaState,
   onPlay: () => startRun(),
+  /*
+   * Both purchases are two writes to two saves: the thing bought lands in
+   * metaState, the price comes out of the economy wallet. The debit goes second
+   * so a failure between them leaves the player holding Scrap they have already
+   * spent rather than a purchase they never paid for — the error that favours
+   * the player is the one to pick.
+   */
   onBuyUpgrade: (id) => {
-    const result = purchaseUpgrade(metaState, id);
-    if (result.ok) commitMeta(result.state);
+    const result = purchaseUpgrade(metaState, id, metaEconomy.getState().scrap);
+    if (result.ok) {
+      commitMeta(result.state);
+      metaEconomy.spendScrap(result.cost);
+    }
     metaUi.renderShop();
   },
   onBuyCosmetic: (id) => {
-    const result = purchaseCosmetic(metaState, id);
-    if (result.ok) commitMeta(result.state);
+    const result = purchaseCosmetic(metaState, id, metaEconomy.getState().scrap);
+    if (result.ok) {
+      commitMeta(result.state);
+      metaEconomy.spendScrap(result.cost);
+    }
     metaUi.renderShop();
   },
   onEquipCosmetic: (id) => {
@@ -99,9 +158,47 @@ const metaUi = new MetaUi(uiLayer, {
     const result = claimDailyBloom(metaState, Date.now(), rewardRng);
     if (result.ok) {
       commitMeta(result.state);
-      metaUi.showToast({ ...result.reward, tier: result.reward.tier });
+      metaEconomy.addScrap(result.reward.scrap);
+      metaUi.showToast(result.reward);
     }
     metaUi.renderMenu();
+  },
+
+  /* Crate economy. The manager persists itself, so these only re-render. */
+  getEconomy: () => metaEconomy.getState(),
+  onUpgradeSkill: (chipKey) => {
+    metaEconomy.upgradeSkill(chipKey);
+    // Re-render on failure too: the button that was pressed is the one whose
+    // "Need 2 more chips" label has to stay accurate.
+    metaUi.renderShop();
+  },
+  onOpenCrate: () => {
+    if (pendingCrate) crateModal.open(pendingCrate);
+  },
+});
+
+/**
+ * The crate reveal, layered over the debrief.
+ *
+ * The only thing it can change is the 2x — the base payout was banked when the
+ * run ended, so dismissing the modal, closing the tab or failing the ad all
+ * leave the player with exactly what the crate rolled.
+ */
+const crateModal = new CrateModal(uiLayer, {
+  getState: () => metaEconomy.getState(),
+
+  onDoubleRewards: async (multiplier) => {
+    const ad = await requestRewardedAd();
+    if (!ad.ok) return { ok: false, reason: ad.reason };
+
+    const granted = metaEconomy.applyCrateRewards(pendingCrate, multiplier);
+    return { ok: true, ...granted };
+  },
+
+  onCollect: () => {
+    // The crate stays on the debrief as the record of what the run earned; the
+    // button just stops offering a second opening.
+    metaUi.renderCrateAward(pendingCrate, true);
   },
 });
 
@@ -109,6 +206,9 @@ const metaUi = new MetaUi(uiLayer, {
 globalBus.on('wave:complete', () => {
   const { state: next, reward } = openSmallCapsule(metaState, rewardRng);
   commitMeta(next);
+  // The capsule resolves the reward; banking it is this layer's job, because
+  // the wallet lives in the other save.
+  metaEconomy.addScrap(reward.scrap);
   metaUi.showToast(reward);
 });
 
@@ -120,7 +220,16 @@ globalBus.on('wave:complete', () => {
 function finishRun(data, won) {
   const outcome = completeRun(metaState, { wave: data.wave }, rewardRng);
   commitMeta(outcome.state);
-  metaUi.showResults({ ...data, won }, outcome);
+  metaEconomy.addScrap(outcome.reward.scrap);
+
+  // The salvage crate, keyed to how deep the run got. Opened — and therefore
+  // BANKED — here rather than when the player presses the button on the
+  // debrief, so a run's earnings survive the tab being closed on the results
+  // screen. The modal is a reveal of something already owned.
+  const crate = metaEconomy.openCrate(getCrateTypeForWave(data.wave));
+  pendingCrate = crate.ok ? crate.result : null;
+
+  metaUi.showResults({ ...data, won }, outcome, pendingCrate);
 }
 
 globalBus.on('game:over', (data) => finishRun(data, false));
@@ -150,8 +259,13 @@ const input = new KeyboardInput({
 
 function startRun() {
   metaUi.hide();
-  // Purchased upgrades are folded into the Dewling's starting stats here.
-  simulation.startRun(metaState);
+  // Purchased upgrades are folded into the Dewling's starting stats here, and
+  // the equipped skill arrives with its chip levels already applied — a level-3
+  // Afterburner reaches the handler as a def whose duration and speed are
+  // already multiplied, so nothing in the simulation reads the economy save.
+  simulation.startRun(metaState, {
+    activeSkillDef: metaEconomy.getSkillDef(metaState.activeSkillId),
+  });
 }
 
 // Losing focus mid-swarm shouldn't cost the player HP.
@@ -168,6 +282,8 @@ if (import.meta.env.DEV) {
     hud,
     input,
     metaUi,
+    crateModal,
+    metaEconomy,
     getMeta: () => metaState,
     setMeta: (next) => commitMeta(next),
   };

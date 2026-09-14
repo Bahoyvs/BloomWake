@@ -23,6 +23,8 @@ import {
   stepEnemy,
 } from '../src/core/enemy-system.js';
 import { Simulation } from '../src/core/simulation.js';
+import { DEFAULT_PLAYER_STATS } from '../src/core/game-state.js';
+import { UNIT_PX } from '../src/core/constants.js';
 import { mulberry32 } from '../src/core/math.js';
 
 /** Minimal live entity, standing in for a pooled enemy. */
@@ -78,12 +80,59 @@ describe('roster-config — the data contract', () => {
 
   it('carries the authored archetype numbers verbatim', () => {
     const kiter = getArchetype('spore_kiter');
-    expect(kiter.hp).toBe(55);
-    expect(kiter.speed).toBe(115);
+    expect(kiter.hp).toBe(42);
+    expect(kiter.speed).toBe(105);
     expect(kiter.attack.bulletType).toBe('bio_plasma');
-    expect(kiter.attack.fireInterval).toBe(1.8);
-    expect(kiter.attack.damage).toBe(18);
+    expect(kiter.attack.fireInterval).toBe(2.4);
+    expect(kiter.attack.damage).toBe(14);
     expect(BULLET_TYPES[kiter.attack.bulletType]).toBeDefined();
+  });
+
+  /*
+   * The early-wave contract. These four species are everything a new player
+   * meets before wave 4, and the numbers below are the ones that decide whether
+   * the opening is survivable with a level-1 Phase Repeater. They are asserted
+   * explicitly, not because the values are sacred, but because raising any of
+   * them is a decision about the first ninety seconds of the game and should
+   * have to be made on purpose.
+   */
+  it('keeps the early roster inside its survivability budget', () => {
+    const larva = getArchetype('larva_swarm');
+    expect(larva.hp).toBe(16);
+    expect(larva.speed).toBe(135);
+    expect(larva.contactDamage).toBe(8);
+
+    const rammer = getArchetype('dart_rammer');
+    expect(rammer.hp).toBe(34);
+    expect(rammer.contactDamage).toBe(16);
+    expect(rammer.behaviorParams.telegraphSec).toBe(1.05);
+    expect(rammer.behaviorParams.dashSpeed).toBe(380);
+    expect(rammer.behaviorParams.recoverSec).toBe(0.85);
+
+    const weaver = getArchetype('mantis_weaver');
+    expect(weaver.hp).toBe(26);
+    expect(weaver.speed).toBe(120);
+    expect(weaver.contactDamage).toBe(10);
+  });
+
+  it('never lets a wave-1 species outrun a starting Drifter', () => {
+    // A chaser faster than the player cannot be kited, only out-damaged, which
+    // removes the one tool a new player has before their first card.
+    for (const archetype of getArchetypesForWave(1)) {
+      expect(archetype.speed, `${archetype.id} outruns the player`).toBeLessThan(
+        DEFAULT_PLAYER_STATS.moveSpeed * UNIT_PX
+      );
+    }
+  });
+
+  it('gives every telegraphed attack time to be read', () => {
+    // Below ~0.9s the warning lands inside a human's reaction time and the
+    // attack reads as undodgeable rather than as hard.
+    for (const archetype of Object.values(ENEMY_ARCHETYPES)) {
+      const telegraph = archetype.behaviorParams?.telegraphSec;
+      if (telegraph === undefined) continue;
+      expect(telegraph, `${archetype.id} telegraph is unreactable`).toBeGreaterThanOrEqual(0.9);
+    }
   });
 
   it('returns null for unknown ids instead of a silent fallback', () => {

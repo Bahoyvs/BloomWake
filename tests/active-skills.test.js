@@ -27,6 +27,7 @@ import {
   getActiveSkillById,
 } from '../src/data/active-skills.js';
 import { createDefaultState, sanitizeState, loadState } from '../src/core/state.js';
+import { resolveSkillDefAtLevel } from '../src/core/meta-economy.js';
 import { WORLD, PLAYER_CFG } from '../src/core/constants.js';
 import { ENEMY_TYPES } from '../src/data/enemies.js';
 
@@ -775,5 +776,121 @@ describe('System isolation', () => {
 
       expect(sim.activeSkills.isActive, id).toBe(false);
     }
+  });
+});
+
+/* ---------------------------------------------------------------------- */
+/* Chip levels reaching the run (Step 3.2)                                 */
+/* ---------------------------------------------------------------------- */
+
+describe('Chip-levelled skill definitions', () => {
+  /** Meta-state with one skill equipped, for startRun. */
+  function metaWith(skillId) {
+    return sanitizeState({ ...createDefaultState(), activeSkillId: skillId });
+  }
+
+  it('runs on the level-1 table when no def is supplied', () => {
+    const sim = makeSim(ACTIVE_SKILL_IDS.AFTERBURNER);
+    expect(sim.activeSkills.def).toBe(ACTIVE_SKILLS[ACTIVE_SKILL_IDS.AFTERBURNER]);
+  });
+
+  it('carries a scaled def from startRun into the system', () => {
+    const bus = new EventBus();
+    const sim = new Simulation({ bus, state: new GameState(bus), seed: 7 });
+    const scaled = resolveSkillDefAtLevel(ACTIVE_SKILL_IDS.AFTERBURNER, 5);
+
+    sim.startRun(metaWith(ACTIVE_SKILL_IDS.AFTERBURNER), { activeSkillDef: scaled });
+
+    expect(sim.activeSkills.def.cooldown).toBe(6.56);
+    expect(sim.activeSkills.def.duration).toBe(3.41);
+    expect(sim.activeSkills.def.params.speedMultiplier).toBe(2.99);
+  });
+
+  it('ignores a def belonging to a different skill', () => {
+    // A stale def left over from a previous loadout must never drive another
+    // skill's handler — the params would be read under the wrong names.
+    const sim = makeSim();
+    sim.activeSkills.equip(ACTIVE_SKILL_IDS.EMP_SHOCKWAVE, {
+      def: resolveSkillDefAtLevel(ACTIVE_SKILL_IDS.SINGULARITY_ANCHOR, 5),
+    });
+
+    expect(sim.activeSkills.def).toBe(ACTIVE_SKILLS[ACTIVE_SKILL_IDS.EMP_SHOCKWAVE]);
+  });
+
+  it('drops the override when a different skill is equipped afterwards', () => {
+    const sim = makeSim();
+    sim.activeSkills.equip(ACTIVE_SKILL_IDS.AFTERBURNER, {
+      def: resolveSkillDefAtLevel(ACTIVE_SKILL_IDS.AFTERBURNER, 5),
+    });
+    expect(sim.activeSkills.def.cooldown).toBe(6.56);
+
+    sim.activeSkills.equip(ACTIVE_SKILL_IDS.PHASE_SHIFT);
+    expect(sim.activeSkills.def).toBe(ACTIVE_SKILLS[ACTIVE_SKILL_IDS.PHASE_SHIFT]);
+  });
+
+  it('gives a levelled Afterburner a genuinely faster ship', () => {
+    const speedAt = (level) => {
+      const sim = makeSim();
+      sim.activeSkills.equip(ACTIVE_SKILL_IDS.AFTERBURNER, {
+        def: resolveSkillDefAtLevel(ACTIVE_SKILL_IDS.AFTERBURNER, level),
+      });
+      sim.activeSkills.trigger();
+      return sim.activeSkills.moveSpeedMultiplier;
+    };
+
+    expect(speedAt(5)).toBeGreaterThan(speedAt(1));
+    expect(speedAt(1)).toBe(ACTIVE_SKILLS[ACTIVE_SKILL_IDS.AFTERBURNER].params.speedMultiplier);
+  });
+
+  it('keeps a levelled Afterburner burning for longer', () => {
+    const sim = makeSim();
+    sim.activeSkills.equip(ACTIVE_SKILL_IDS.AFTERBURNER, {
+      def: resolveSkillDefAtLevel(ACTIVE_SKILL_IDS.AFTERBURNER, 5),
+    });
+    sim.activeSkills.trigger();
+
+    // Past the level-1 window of 2.2s, a level-5 burst (3.41s) is still open.
+    tickSkills(sim, 2.6);
+    expect(sim.activeSkills.isActive).toBe(true);
+    tickSkills(sim, 1.0);
+    expect(sim.activeSkills.isActive).toBe(false);
+  });
+
+  it('gives a levelled Singularity Anchor a wider capture field', () => {
+    const sim = makeSim();
+    sim.activeSkills.equip(ACTIVE_SKILL_IDS.SINGULARITY_ANCHOR, {
+      def: resolveSkillDefAtLevel(ACTIVE_SKILL_IDS.SINGULARITY_ANCHOR, 5),
+    });
+    sim.activeSkills.trigger();
+
+    expect(sim.activeSkills.anchor.radius).toBe(330);
+    expect(sim.activeSkills.anchor.radius).toBeGreaterThan(
+      ACTIVE_SKILLS[ACTIVE_SKILL_IDS.SINGULARITY_ANCHOR].params.radius
+    );
+  });
+
+  it('returns a levelled skill to the player sooner', () => {
+    const sim = makeSim();
+    sim.activeSkills.equip(ACTIVE_SKILL_IDS.SINGULARITY_ANCHOR, {
+      def: resolveSkillDefAtLevel(ACTIVE_SKILL_IDS.SINGULARITY_ANCHOR, 5),
+    });
+    sim.activeSkills.trigger();
+    expect(sim.activeSkills.isReady).toBe(false);
+
+    // Base cooldown is 14s; level 5 is 11.48s.
+    tickSkills(sim, 11.6);
+    expect(sim.activeSkills.isReady).toBe(true);
+  });
+
+  it('drives the HUD charge meter off the levelled cooldown', () => {
+    const sim = makeSim();
+    sim.activeSkills.equip(ACTIVE_SKILL_IDS.AFTERBURNER, {
+      def: resolveSkillDefAtLevel(ACTIVE_SKILL_IDS.AFTERBURNER, 5),
+    });
+    sim.activeSkills.trigger();
+    tickSkills(sim, 6.6);
+
+    // A meter still reading against the 8s base would sit short of full here.
+    expect(sim.activeSkills.charge).toBe(1);
   });
 });

@@ -1,0 +1,831 @@
+/*
+ * Salvage crate modal — the one screen that overlays another screen.
+ *
+ * It sits on top of the debrief, so unlike the other meta screens it needs a
+ * scrim. That scrim is dark and blurred rather than merely translucent: the
+ * debrief underneath is light riveted steel, and a plain 50% black over it
+ * produces a muddy grey that the modal's own plate then has to compete with.
+ *
+ * Everything else reuses meta-ui.css's chassis — `.console`, `.console__tab`,
+ * `.console__body`, `.meta__btn` — so the modal is recognisably the same
+ * hardware as the screen it covers. Only what is genuinely new to this screen
+ * is declared here: the pod, the dealt cards and the hazard-striped ad button.
+ *
+ * THE POD IS DRAWN, NOT PAINTED FROM A PNG.
+ * Everything else in the meta layer 9-slices a Kenney plate. The pod does not,
+ * because it has to COME APART — the lid is thrown clear of the hull on its own
+ * transform, and a single sliced image cannot do that. Two elements with
+ * matching bevels is the cheapest thing that can.
+ *
+ * THE OPENING IS AN EXPLOSION, IN THREE PHASES.
+ * Charge (rattle + venting pressure), blast (lid ejected, shockwave ring,
+ * radial sparks, console thud), then the cards thrown out of the blast on a
+ * stagger. The phases are driven from crate-modal.js by class, not by chained
+ * CSS delays, so the skip path can cancel the sequence mid-flight — see
+ * `.crate--instant` below.
+ */
+
+.crate {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+  color: var(--console-ink);
+}
+
+.crate--active {
+  display: flex;
+  animation: crate-fade 180ms ease-out;
+}
+
+@keyframes crate-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.crate__scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 7, 14, 0.78);
+  backdrop-filter: blur(3px);
+}
+
+.console--crate {
+  position: relative;
+  z-index: 1;
+  width: min(560px, 94vw);
+}
+
+.crate__body {
+  gap: 18px;
+  /* A tall crate on a short phone must scroll rather than clip its Collect
+     button off the bottom of the screen. */
+  max-height: min(86vh, 760px);
+  overflow-y: auto;
+}
+
+/* ------------------------------------------------------------------ */
+/* The blast chamber                                                   */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A dark recess for the pod to detonate inside, sunk into the light console
+ * plate the same way the debrief's crate box is.
+ *
+ * This is not decoration. Every part of the explosion is made of LIGHT - an
+ * amber shockwave ring, hot sparks, a blown-out glow - and light has no
+ * contrast to work against on #b4b4c3 steel. On the bare plate the ring read as
+ * a faint smudge and the sparks as pale dots. Against a near-black chamber the
+ * identical effects read as an explosion, with no change to any of them.
+ *
+ * `overflow: hidden` also gives the debris an edge to vanish behind, so sparks
+ * leave the chamber instead of drifting across the reward cards.
+ */
+.crate__chamber {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  /* Bottom padding clears the prompt, which hangs 30px below the pod and would
+     otherwise be clipped by the overflow rule the debris needs. */
+  padding: 22px 0 46px;
+  overflow: hidden;
+  border-radius: 8px;
+  background:
+    radial-gradient(ellipse at 50% 42%, #1c2230 0%, #0c1018 70%),
+    #0b0e14;
+  box-shadow:
+    inset 0 4px 12px rgba(0, 0, 0, 0.8),
+    inset 0 0 0 2px rgba(0, 0, 0, 0.45),
+    0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+/* ------------------------------------------------------------------ */
+/* The pod                                                             */
+/* ------------------------------------------------------------------ */
+
+.crate__pod {
+  position: relative;
+  width: min(230px, 60vw);
+  height: min(180px, 46vw);
+  cursor: pointer;
+  perspective: 700px;
+  border: 0;
+  background: none;
+}
+
+.crate__pod:focus-visible {
+  outline: 3px solid var(--tab-amber);
+  outline-offset: 8px;
+  border-radius: 6px;
+}
+
+/*
+ * The light behind the seams. Invisible while sealed and blown out at the
+ * moment the lid lifts, so the crate reads as pressurised rather than empty.
+ */
+.crate__glow {
+  position: absolute;
+  inset: 12% 8%;
+  border-radius: 10px;
+  background: radial-gradient(ellipse at 50% 60%, var(--tab-amber), transparent 70%);
+  opacity: 0;
+  transition: opacity 260ms ease-out;
+}
+
+/* Phase 1: the core lights up while the seals still hold. */
+.crate__pod--charging .crate__glow {
+  animation: crate-charge-glow 300ms ease-in forwards;
+}
+
+@keyframes crate-charge-glow {
+  0% { opacity: 0; transform: scale(0.75); }
+  100% { opacity: 0.9; transform: scale(1.05); }
+}
+
+/* Phase 2: blown out by the blast, then decaying. */
+.crate__pod--blown .crate__glow {
+  animation: crate-flare 900ms ease-out forwards;
+}
+
+@keyframes crate-flare {
+  0% { opacity: 1; transform: scale(1.35); }
+  35% { opacity: 0.75; transform: scale(1.1); }
+  100% { opacity: 0.3; transform: scale(1); }
+}
+
+.crate__lid,
+.crate__hull {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  background: linear-gradient(176deg, #c3c6d2 0%, #9ba0b0 52%, #7d8394 100%);
+  border: 2px solid #5d6474;
+  border-radius: 7px;
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.65),
+    inset 0 -3px 6px rgba(0, 0, 0, 0.35);
+}
+
+.crate__lid {
+  top: 0;
+  height: 44%;
+  transform-origin: 50% 100%;
+  z-index: 2;
+}
+
+.crate__hull {
+  top: 42%;
+  height: 58%;
+}
+
+/* ------------------------------------------------------------------ */
+/* Phase 1 - charge-up                                                 */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A fast, tight rattle. The amplitude stays under 3px and the rotation under
+ * 2deg on purpose: this is a container straining against its latches, and
+ * anything larger reads as the whole pod being shaken by something offscreen.
+ * The 60ms cycle is what makes it a vibration rather than a wobble.
+ */
+.crate__pod--charging {
+  animation: pod-rattle 60ms linear infinite;
+}
+
+@keyframes pod-rattle {
+  0% { transform: translate3d(-2px, 1px, 0) rotate(-1.4deg); }
+  25% { transform: translate3d(2px, -1px, 0) rotate(1.4deg); }
+  50% { transform: translate3d(-1px, -2px, 0) rotate(-0.8deg); }
+  75% { transform: translate3d(2px, 1px, 0) rotate(1deg); }
+  100% { transform: translate3d(-2px, 1px, 0) rotate(-1.4deg); }
+}
+
+/*
+ * Pressure escaping through the seams: a hot sliver of light at each side of
+ * the lid line, growing as the charge builds. Placed on the seam rather than
+ * over the face because a crate that glows all over reads as magical, and this
+ * one is meant to read as mechanical and about to fail.
+ */
+.crate__vent {
+  position: absolute;
+  top: 40%;
+  width: 10px;
+  height: 5px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, #fff3c4, var(--tab-amber) 45%, transparent 75%);
+  opacity: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.crate__vent--l { left: 2px; }
+.crate__vent--r { right: 2px; }
+
+.crate__pod--charging .crate__vent {
+  animation: crate-vent 300ms ease-in forwards;
+}
+
+@keyframes crate-vent {
+  0% { opacity: 0; transform: scale(0.6); }
+  60% { opacity: 1; transform: scale(1.6) translateY(-3px); }
+  100% { opacity: 0.85; transform: scale(2.1) translateY(-7px); }
+}
+
+/* ------------------------------------------------------------------ */
+/* Phase 2 - decompression blast                                       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The pod takes the hit: it jumps, swells and whites out for one beat before
+ * settling. `brightness` is doing most of the work - a shape that only moves
+ * reads as bumped, a shape that also over-exposes reads as having released
+ * something.
+ */
+.crate__pod--blown {
+  animation: pod-burst 420ms cubic-bezier(0.2, 1.4, 0.4, 1) forwards;
+}
+
+@keyframes pod-burst {
+  0% { transform: scale(1) translateY(0); filter: brightness(1); }
+  12% { transform: scale(1.12) translateY(-10px); filter: brightness(1.6); }
+  45% { transform: scale(0.98) translateY(2px); filter: brightness(1.1); }
+  100% { transform: scale(1) translateY(0); filter: brightness(1); }
+}
+
+/*
+ * The lid does not hinge - it is thrown. Back, up and spinning off its axis,
+ * because a lid that swings on a hinge is a mailbox and a lid that leaves is a
+ * pressure vessel letting go. It never returns: the crate stays open.
+ */
+.crate__pod--blown .crate__lid {
+  animation: lid-eject 560ms cubic-bezier(0.15, 0.85, 0.3, 1) forwards;
+}
+
+@keyframes lid-eject {
+  0% { transform: translate3d(0, 0, 0) rotateX(0) rotate(0); opacity: 1; }
+  30% { transform: translate3d(4px, -46px, 0) rotateX(-72deg) rotate(4deg); opacity: 1; }
+  100% { transform: translate3d(10px, -104px, 0) rotateX(-128deg) rotate(9deg); opacity: 0; }
+}
+
+/*
+ * The shockwave. A ring, not a disc - an expanding filled circle reads as a
+ * flash, and the thing that says "pressure wave" is a boundary travelling
+ * outward with nothing behind it. Fast (250ms) because a slow shockwave is a
+ * ripple, and this is an explosion.
+ */
+.crate__shockwave {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 40px;
+  height: 40px;
+  margin: -20px 0 0 -20px;
+  border: 3px solid var(--tab-amber);
+  border-radius: 50%;
+  opacity: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.crate__shockwave--fire {
+  animation: crate-shockwave 250ms cubic-bezier(0.1, 0.8, 0.3, 1) forwards;
+}
+
+@keyframes crate-shockwave {
+  0% {
+    opacity: 1;
+    transform: scale(0.3);
+    border-width: 6px;
+    border-color: #fffbe8;
+    box-shadow:
+      0 0 30px rgba(255, 251, 232, 0.95),
+      inset 0 0 18px rgba(251, 197, 49, 0.8);
+  }
+  35% {
+    opacity: 0.9;
+    border-color: var(--tab-amber);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(7);
+    border-width: 1px;
+    border-color: var(--tab-amber);
+    box-shadow: 0 0 4px rgba(251, 197, 49, 0);
+  }
+}
+
+/*
+ * Radial debris. One keyframe drives all ten sparks; each carries its own
+ * --spark-angle and --spark-dist from crate-modal.js, so the scatter is data
+ * and the CSS stays one rule. The rotate-then-translate order matters: it
+ * turns a single outward vector into a starburst without any per-spark
+ * trigonometry.
+ */
+.crate__sparks {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.crate__sparks i {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fffdf2 25%, var(--tab-amber) 58%, #e07a12);
+  box-shadow:
+    0 0 12px rgba(255, 220, 120, 0.95),
+    0 0 26px rgba(251, 197, 49, 0.55);
+  opacity: 0;
+}
+
+.crate__sparks--fire i {
+  animation: crate-spark 520ms cubic-bezier(0.15, 0.75, 0.35, 1) forwards;
+  animation-delay: var(--spark-delay, 0ms);
+}
+
+@keyframes crate-spark {
+  0% {
+    opacity: 1;
+    transform: rotate(var(--spark-angle)) translateX(6px) scale(1.15);
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(var(--spark-angle)) translateX(var(--spark-dist)) scale(0.3);
+  }
+}
+
+/*
+ * The whole console takes the hit. Kept to 5px and 160ms: the modal is the
+ * frame the player is reading, and a screen shake long enough to notice as a
+ * shake is one that makes the reward cards harder to read.
+ */
+.crate__console--thud {
+  animation: modal-thud 160ms cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+
+@keyframes modal-thud {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  20% { transform: translate3d(-5px, 3px, 0); }
+  40% { transform: translate3d(5px, -2px, 0); }
+  60% { transform: translate3d(-3px, 1px, 0); }
+  80% { transform: translate3d(2px, -1px, 0); }
+}
+
+/* Four corner latches, drawn as recessed bolts. */
+.crate__latch {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #eef0f6, #6d7488 62%, #474d5c);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.3), 0 1px 1px rgba(255, 255, 255, 0.5);
+}
+
+.crate__latch--tl { top: 9px; left: 9px; }
+.crate__latch--tr { top: 9px; right: 9px; }
+.crate__latch--bl { bottom: 9px; left: 9px; }
+.crate__latch--br { bottom: 9px; right: 9px; }
+
+/* The parting line, and the painted band that crosses it. */
+.crate__seam {
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  bottom: 0;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, #4b515f 12%, #4b515f 88%, transparent);
+}
+
+.crate__stripe {
+  position: absolute;
+  left: 50%;
+  top: 18%;
+  width: 34px;
+  height: 60%;
+  margin-left: -17px;
+  background: var(--tab-amber);
+  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.22);
+}
+
+/* Diagonal hazard chevrons across the hull face. */
+.crate__hazard {
+  position: absolute;
+  inset: 26% 12% 22%;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--console-stroke) 0 9px,
+    var(--tab-amber) 9px 18px
+  );
+  opacity: 0.82;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.28);
+}
+
+.crate__prompt {
+  position: absolute;
+  left: 50%;
+  bottom: -30px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  /* On the dark chamber, not the light plate - the dim console ink would be
+     unreadable here. */
+  color: var(--hud-label);
+  animation: crate-prompt 1.6s ease-in-out infinite;
+}
+
+@keyframes crate-prompt {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+/* ------------------------------------------------------------------ */
+/* Reward cards                                                        */
+/* ------------------------------------------------------------------ */
+
+.crate__cards {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 4px;
+  margin-top: 26px;
+}
+
+.crate__card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 118px;
+  padding: 12px 8px 10px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #f0f1f6, #dadce7);
+  border: 2px solid var(--panel-border);
+  box-shadow: 0 3px 0 var(--button-shadow), 0 6px 12px rgba(0, 0, 0, 0.4);
+
+  /*
+   * Still inside the crate: tiny, pulled up toward the blast origin, invisible.
+   * The card starts ABOVE its resting place because it is thrown forward out of
+   * the pod and falls onto the table, rather than rising into frame.
+   */
+  opacity: 0;
+  transform: translateY(-40px) scale(0.4) rotate(-6deg);
+}
+
+/*
+ * The ejection. 0.4 -> 1.05 -> 1.0: hurled out of the blast, overshooting as it
+ * arrives and snapping back, which is what makes it read as struck onto the
+ * table rather than faded in. The overshoot is the whole trick — without it the
+ * same path is just a card getting bigger.
+ */
+.crate__card--in {
+  animation: crate-eject 340ms cubic-bezier(0.18, 1.5, 0.4, 1) forwards;
+}
+
+@keyframes crate-eject {
+  0% { opacity: 0; transform: translateY(-40px) scale(0.4) rotate(-6deg); }
+  55% { opacity: 1; transform: translateY(6px) scale(1.05) rotate(2deg); }
+  100% { opacity: 1; transform: translateY(0) scale(1) rotate(0); }
+}
+
+.crate__card-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 5px;
+  background: var(--hud-recess);
+  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.45);
+}
+
+/* The scrap cell: three amber bars in a recessed housing. */
+.crate__card-icon--cell {
+  gap: 3px;
+}
+
+.crate__card-icon--cell i {
+  width: 5px;
+  height: 20px;
+  border-radius: 1px;
+  background: var(--tab-amber);
+  box-shadow: 0 0 6px rgba(251, 197, 49, 0.8);
+}
+
+.crate__card-icon--badge {
+  font-size: 20px;
+  line-height: 1;
+  color: var(--tab-amber);
+  text-shadow: 0 0 8px currentColor;
+}
+
+.crate__card-amount {
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--console-ink);
+}
+
+/* The doubling punch, replayed each time a multiplier lands. */
+.crate__card-amount--pop {
+  animation: crate-pop 420ms cubic-bezier(0.3, 1.6, 0.4, 1);
+  color: var(--tab-amber-deep);
+}
+
+@keyframes crate-pop {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.42); }
+  100% { transform: scale(1); }
+}
+
+.crate__card-label {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  color: var(--console-ink-dim);
+}
+
+/*
+ * Rarity reads on the card's top edge, not on its whole face: a fully tinted
+ * card fights the amber scrap card beside it for attention, and the rarity is
+ * a property of the chip rather than of the reward's importance.
+ */
+.crate__rarity {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 2px 0 3px;
+  border-radius: 3px 3px 0 0;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  text-align: center;
+  color: #ffffff;
+}
+
+.crate__card--chip {
+  padding-top: 24px;
+}
+
+/*
+ * Cyan / amber / magenta, per the brief. These deliberately do NOT reuse
+ * --rarity-* from hud.css: that scale has four tiers (the capsule tiers) and
+ * this one has three, and mapping "rare" onto two different yellows in two
+ * different screens is worse than two honest scales.
+ */
+.crate__card--common .crate__rarity { background: #1c9fd7; }
+.crate__card--rare .crate__rarity { background: var(--tab-amber-deep); }
+.crate__card--legendary .crate__rarity { background: #d81b60; }
+
+.crate__card--legendary {
+  border-color: #d81b60;
+  box-shadow:
+    0 3px 0 #8e1244,
+    0 6px 16px rgba(216, 27, 96, 0.45);
+}
+
+.crate__progress {
+  margin-top: 2px;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--console-ink-dim);
+}
+
+.crate__forced {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--tab-amber-deep);
+}
+
+/* ------------------------------------------------------------------ */
+/* Skip                                                                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A second tap collapses the sequence. Every keyframe is killed and every
+ * element pinned to the frame the full animation would have ENDED on — which
+ * is why this is a class on the layer rather than a pile of removeClass calls:
+ * one rule cannot leave a rattle running under the reward cards the way a
+ * half-finished cleanup can.
+ *
+ * The sparks and the shockwave are removed outright rather than finished.
+ * Debris frozen mid-flight is worse than no debris.
+ */
+.crate--instant .crate__pod,
+.crate--instant .crate__glow,
+.crate--instant .crate__vent,
+.crate--instant .crate__card,
+.crate--instant .crate__prompt,
+.crate--instant .console--crate {
+  animation: none !important;
+}
+
+.crate--instant .crate__sparks,
+.crate--instant .crate__shockwave {
+  display: none;
+}
+
+.crate--instant .crate__lid {
+  animation: none !important;
+  opacity: 0;
+  transform: translate3d(10px, -104px, 0) rotateX(-128deg) rotate(9deg);
+}
+
+.crate--instant .crate__glow {
+  opacity: 0.3;
+}
+
+.crate--instant .crate__card--in {
+  opacity: 1;
+  transform: none;
+}
+
+/* ------------------------------------------------------------------ */
+/* Actions                                                             */
+/* ------------------------------------------------------------------ */
+
+.crate__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  /* Hidden until the reveal finishes, so Collect cannot be hit before the
+     player has seen what they collected. */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms ease-out;
+}
+
+.crate__actions--visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/*
+ * The ad button. Amber, hazard-striped and pulsing — the one control on this
+ * screen that is asking for something rather than offering it, so it is
+ * allowed to be louder than Collect.
+ */
+.crate__btn--double {
+  position: relative;
+  overflow: hidden;
+  color: #4a3400;
+  animation: crate-hazard 2.1s ease-in-out infinite;
+}
+
+/*
+ * The key face is meta-ui.css's 9-sliced Kenney plate on a z-index:-1 ::before,
+ * which paints OVER the element's own background — so an amber key has to be a
+ * tint of that plate, not a gradient behind it. Filtering the plate is also
+ * what keeps the bevel, the corner screws and the plinth: a flat gradient in
+ * its place would be the one button on the screen that is not hardware.
+ *
+ * The same trick hud.css uses for --hud-steel, in the other direction.
+ */
+.crate__btn--double::before {
+  filter: sepia(1) saturate(3.4) hue-rotate(-12deg) brightness(1.06);
+}
+
+.crate__btn--double::after {
+  border-color: var(--tab-amber-deep);
+}
+
+.crate__btn--double:hover:not(:disabled)::after {
+  border-color: var(--console-stroke);
+}
+
+@keyframes crate-hazard {
+  0%, 100% { box-shadow: 0 3px 0 var(--button-shadow), 0 0 0 rgba(251, 197, 49, 0); }
+  50% { box-shadow: 0 3px 0 var(--button-shadow), 0 0 20px rgba(251, 197, 49, 0.75); }
+}
+
+/* A specular sweep crossing the face, on the same clock as the glow. */
+.crate__btn-spark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 46px;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.75), transparent);
+  animation: crate-sweep 2.1s ease-in-out infinite;
+}
+
+@keyframes crate-sweep {
+  0% { left: -60px; }
+  55%, 100% { left: 115%; }
+}
+
+.crate__btn--pending,
+.crate__btn--spent {
+  animation: none;
+}
+
+.crate__btn--pending .crate__btn-spark,
+.crate__btn--spent .crate__btn-spark {
+  display: none;
+}
+
+/*
+ * Paid out. Green, and deliberately NOT greyed: .meta__btn:disabled desaturates
+ * and fades, which on this button would read as "the ad failed" rather than
+ * "you already claimed this". Overriding both is the whole point of the rule.
+ */
+.crate__btn--spent {
+  color: #06402a;
+  opacity: 1;
+  filter: drop-shadow(0 3px 0 rgba(16, 24, 42, 0.42));
+}
+
+.crate__btn--spent::before {
+  filter: sepia(1) saturate(2.6) hue-rotate(78deg) brightness(1.02);
+}
+
+.crate__btn--spent::after {
+  border-color: #0e8b57;
+}
+
+.crate__pity {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-align: center;
+  color: var(--console-ink-dim);
+}
+
+/* ------------------------------------------------------------------ */
+/* Reduced motion                                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Everything here is decoration over information that is already in the DOM, so
+ * the reduced-motion path simply shows the end state. The reveal still runs on
+ * its stagger — that is pacing, not motion — but nothing shakes, flings,
+ * sweeps or pulses.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .crate--active,
+  .crate__pod--charging,
+  .crate__pod--blown,
+  .crate__pod--charging .crate__glow,
+  .crate__pod--blown .crate__glow,
+  .crate__pod--charging .crate__vent,
+  .crate__pod--blown .crate__lid,
+  .crate__card--in,
+  .crate__card-amount--pop,
+  .crate__btn--double,
+  .crate__btn-spark,
+  .crate__prompt {
+    animation: none !important;
+  }
+
+  /* The blast is the one thing here that cannot be toned down, only removed. */
+  .crate__shockwave,
+  .crate__sparks,
+  .crate__btn-spark {
+    display: none;
+  }
+
+  /* The crate still ends up open, and the cards still end up on the table. */
+  .crate__pod--blown .crate__lid {
+    opacity: 0;
+  }
+
+  .crate__card--in {
+    opacity: 1;
+    transform: none;
+  }
+
+  .crate__console--thud {
+    animation: none !important;
+  }
+}

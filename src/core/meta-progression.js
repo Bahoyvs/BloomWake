@@ -5,6 +5,12 @@
  * state.js; this module composes the two so the browser layer never has to
  * know that a Legendary capsule touches three different branches of the save.
  *
+ * THE SCRAP IS NOT BANKED HERE. Each function returns the new meta-state
+ * (cosmetics, stats, pity) alongside a `reward` carrying the Scrap it rolled,
+ * and the caller credits that to the one wallet in the crate economy save. The
+ * split exists because there is exactly one balance in the game and this module
+ * cannot see it — which is also what stops a second one growing back.
+ *
  * Pure: every function returns a new state.
  */
 
@@ -27,7 +33,7 @@ export function openSmallCapsule(state, rng) {
   const granted = grantCosmetics(state, reward.cosmetics);
 
   return {
-    state: { ...granted.state, petals: granted.state.petals + reward.petals },
+    state: granted.state,
     reward,
     newCosmetics: granted.added,
   };
@@ -38,7 +44,7 @@ export function openSmallCapsule(state, rng) {
  * lifetime stats.
  *
  * Order matters: pity comes from the state as it was when the run started, and
- * the updated counter is written back alongside the Petals.
+ * the updated counter is written back with it.
  *
  * @param {Object} state
  * @param {{wave: number, score?: number, kills?: number}} runResult
@@ -55,7 +61,6 @@ export function completeRun(state, runResult, rng) {
   return {
     state: {
       ...granted.state,
-      petals: granted.state.petals + reward.petals,
       pity: updatedPity,
     },
     reward,

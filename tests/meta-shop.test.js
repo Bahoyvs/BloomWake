@@ -19,8 +19,20 @@ import { META_UPGRADES } from '../src/data/meta-upgrades.js';
 import { DEFAULT_PLAYER_STATS } from '../src/core/game-state.js';
 import { UNIT_PX, DRAFT_CFG } from '../src/core/constants.js';
 
-/** State with Petals to spend. */
-const rich = (petals = 100000) => ({ ...createDefaultState(), petals });
+/**
+ * The meta-state no longer carries a balance — the game's one Scrap wallet
+ * lives in the crate economy save — so a purchase test supplies the balance as
+ * an argument and checks the `cost` that comes back instead of a deducted
+ * field. `buy` threads a running balance through a sequence of purchases the
+ * way main.js does.
+ */
+const fresh = () => createDefaultState();
+
+/** Buy one level, returning the new state and what is left of `scrap`. */
+function buy(state, id, scrap) {
+  const result = purchaseUpgrade(state, id, scrap);
+  return { ...result, remaining: result.ok ? scrap - result.cost : scrap };
+}
 
 describe('Upgrade costs', () => {
   it('charges the base cost for the first level', () => {
@@ -59,52 +71,59 @@ describe('Upgrade costs', () => {
 });
 
 describe('Purchasing upgrades', () => {
-  it('deducts Petals and raises the level', () => {
-    const result = purchaseUpgrade(rich(100), 'startHp');
+  it('reports the price and raises the level', () => {
+    const result = buy(fresh(), 'startHp', 100);
 
     expect(result.ok).toBe(true);
     expect(result.cost).toBe(50);
-    expect(result.state.petals).toBe(50);
+    expect(result.remaining).toBe(50);
     expect(result.state.metaUpgrades.startHp).toBe(1);
   });
 
-  it('refuses when Petals are short', () => {
-    const result = purchaseUpgrade(rich(49), 'startHp');
+  it('holds no wallet of its own', () => {
+    // The whole point of the single-currency merge: there is no balance field
+    // here for anything to start spending from again.
+    const result = purchaseUpgrade(fresh(), 'startHp', 100);
+    expect(result.state).not.toHaveProperty('petals');
+    expect(result.state).not.toHaveProperty('scrap');
+  });
+
+  it('refuses when Scrap is short', () => {
+    const result = purchaseUpgrade(fresh(), 'startHp', 49);
 
     expect(result.ok).toBe(false);
-    expect(result.reason).toBe('INSUFFICIENT_PETALS');
-    expect(result.state.petals).toBe(49);
+    expect(result.reason).toBe('INSUFFICIENT_SCRAP');
     expect(result.state.metaUpgrades.startHp).toBe(0);
   });
 
   it('refuses at max level', () => {
-    let state = rich();
-    for (let i = 0; i < 5; i++) state = purchaseUpgrade(state, 'startHp').state;
+    let state = fresh();
+    for (let i = 0; i < 5; i++) state = purchaseUpgrade(state, 'startHp', 100000).state;
     expect(state.metaUpgrades.startHp).toBe(5);
 
-    const result = purchaseUpgrade(state, 'startHp');
+    const result = purchaseUpgrade(state, 'startHp', 100000);
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('MAX_LEVEL');
   });
 
   it('refuses an unknown upgrade', () => {
-    expect(purchaseUpgrade(rich(), 'nope').reason).toBe('UNKNOWN_UPGRADE');
+    expect(purchaseUpgrade(fresh(), 'nope', 100000).reason).toBe('UNKNOWN_UPGRADE');
   });
 
   it('sets the one-time unlock to true rather than a level count', () => {
-    const result = purchaseUpgrade(rich(2000), 'fourthCardSlot');
+    const result = purchaseUpgrade(fresh(), 'fourthCardSlot', 2000);
 
     expect(result.ok).toBe(true);
+    expect(result.cost).toBe(2000);
     expect(result.state.metaUpgrades.fourthCardSlot).toBe(true);
-    expect(result.state.petals).toBe(0);
-    expect(purchaseUpgrade(result.state, 'fourthCardSlot').reason).toBe('MAX_LEVEL');
+    expect(purchaseUpgrade(result.state, 'fourthCardSlot', 2000).reason).toBe('MAX_LEVEL');
   });
 
   it('charges the documented total to fully max a track', () => {
-    let state = rich();
+    let state = fresh();
     let spent = 0;
     for (let i = 0; i < 5; i++) {
-      const result = purchaseUpgrade(state, 'startHp');
+      const result = purchaseUpgrade(state, 'startHp', 100000);
       spent += result.cost;
       state = result.state;
     }
@@ -113,15 +132,14 @@ describe('Purchasing upgrades', () => {
   });
 
   it('never mutates the state it was given', () => {
-    const state = rich(100);
-    purchaseUpgrade(state, 'startHp');
+    const state = fresh();
+    purchaseUpgrade(state, 'startHp', 100);
 
-    expect(state.petals).toBe(100);
     expect(state.metaUpgrades.startHp).toBe(0);
   });
 
   it('describes the shop with affordability', () => {
-    const rows = describeShop(rich(60));
+    const rows = describeShop(fresh(), 60);
     const hp = rows.find((r) => r.id === 'startHp');
     const slot = rows.find((r) => r.id === 'fourthCardSlot');
 
@@ -142,8 +160,8 @@ describe('applyMetaUpgradesToRunStart', () => {
   });
 
   it('adds 10 HP per startHp level and starts the run at full', () => {
-    let state = rich();
-    for (let i = 0; i < 3; i++) state = purchaseUpgrade(state, 'startHp').state;
+    let state = fresh();
+    for (let i = 0; i < 3; i++) state = purchaseUpgrade(state, 'startHp', 100000).state;
 
     const result = applyMetaUpgradesToRunStart(state, DEFAULT_PLAYER_STATS);
     expect(result.maxHp).toBe(130);
@@ -151,10 +169,10 @@ describe('applyMetaUpgradesToRunStart', () => {
   });
 
   it('changes the value returned once startSpeed reaches level 3', () => {
-    let state = rich();
+    let state = fresh();
     const before = applyMetaUpgradesToRunStart(state, DEFAULT_PLAYER_STATS).moveSpeed;
 
-    for (let i = 0; i < 3; i++) state = purchaseUpgrade(state, 'startSpeed').state;
+    for (let i = 0; i < 3; i++) state = purchaseUpgrade(state, 'startSpeed', 100000).state;
     expect(state.metaUpgrades.startSpeed).toBe(3);
 
     const after = applyMetaUpgradesToRunStart(state, DEFAULT_PLAYER_STATS).moveSpeed;
@@ -164,8 +182,8 @@ describe('applyMetaUpgradesToRunStart', () => {
   });
 
   it('adds 12px of pickup radius per level, converted into movement units', () => {
-    let state = rich();
-    for (let i = 0; i < 2; i++) state = purchaseUpgrade(state, 'pickupRadius').state;
+    let state = fresh();
+    for (let i = 0; i < 2; i++) state = purchaseUpgrade(state, 'pickupRadius', 100000).state;
 
     const result = applyMetaUpgradesToRunStart(state, DEFAULT_PLAYER_STATS);
     const addedPx = (result.pickupRadius - DEFAULT_PLAYER_STATS.pickupRadius) * UNIT_PX;
@@ -173,10 +191,10 @@ describe('applyMetaUpgradesToRunStart', () => {
   });
 
   it('stacks all three tracks at once', () => {
-    let state = rich();
-    for (let i = 0; i < 5; i++) state = purchaseUpgrade(state, 'startHp').state;
-    for (let i = 0; i < 5; i++) state = purchaseUpgrade(state, 'pickupRadius').state;
-    for (let i = 0; i < 3; i++) state = purchaseUpgrade(state, 'startSpeed').state;
+    let state = fresh();
+    for (let i = 0; i < 5; i++) state = purchaseUpgrade(state, 'startHp', 100000).state;
+    for (let i = 0; i < 5; i++) state = purchaseUpgrade(state, 'pickupRadius', 100000).state;
+    for (let i = 0; i < 3; i++) state = purchaseUpgrade(state, 'startSpeed', 100000).state;
 
     const result = applyMetaUpgradesToRunStart(state, DEFAULT_PLAYER_STATS);
     expect(result.maxHp).toBe(150);
@@ -185,8 +203,8 @@ describe('applyMetaUpgradesToRunStart', () => {
   });
 
   it('does not mutate the stats it was handed', () => {
-    let state = rich();
-    state = purchaseUpgrade(state, 'startHp').state;
+    let state = fresh();
+    state = purchaseUpgrade(state, 'startHp', 100000).state;
     const base = { ...DEFAULT_PLAYER_STATS };
     applyMetaUpgradesToRunStart(state, base);
 
@@ -199,41 +217,44 @@ describe('Fourth card slot', () => {
     const state = createDefaultState();
     expect(getDraftOfferCount(state, DRAFT_CFG.OFFER_COUNT)).toBe(3);
 
-    const unlocked = purchaseUpgrade(rich(2000), 'fourthCardSlot').state;
+    const unlocked = purchaseUpgrade(fresh(), 'fourthCardSlot', 100000).state;
     expect(getDraftOfferCount(unlocked, DRAFT_CFG.OFFER_COUNT)).toBe(4);
   });
 });
 
 describe('Cosmetics', () => {
   it('buys a purchasable cosmetic', () => {
-    const result = purchaseCosmetic(rich(200), 'dew-tint');
+    const result = purchaseCosmetic(fresh(), 'dew-tint', 100000);
 
     expect(result.ok).toBe(true);
-    expect(result.state.petals).toBe(50);
+    // The price is reported for the caller to debit from the one wallet; the
+    // meta-state itself holds no balance to deduct from.
+    expect(result.cost).toBe(150);
+    expect(result.state).not.toHaveProperty('petals');
     expect(result.state.cosmetics.owned).toContain('dew-tint');
   });
 
   it('does not auto-equip a purchase', () => {
-    const result = purchaseCosmetic(rich(200), 'dew-tint');
+    const result = purchaseCosmetic(fresh(), 'dew-tint', 100000);
     expect(result.state.cosmetics.equipped).toBe('default');
   });
 
   it('refuses the prestige skin at any price', () => {
-    const result = purchaseCosmetic(rich(999999), 'prestij-skin');
+    const result = purchaseCosmetic(fresh(), 'prestij-skin', 100000);
 
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('NOT_PURCHASABLE');
     expect(result.state.cosmetics.owned).not.toContain('prestij-skin');
   });
 
-  it('refuses when short on Petals or already owned', () => {
-    expect(purchaseCosmetic(rich(10), 'dew-tint').reason).toBe('INSUFFICIENT_PETALS');
-    expect(purchaseCosmetic(rich(), 'default').reason).toBe('ALREADY_OWNED');
-    expect(purchaseCosmetic(rich(), 'nope').reason).toBe('UNKNOWN_COSMETIC');
+  it('refuses when short on Scrap or already owned', () => {
+    expect(purchaseCosmetic(fresh(), 'dew-tint', 0).reason).toBe('INSUFFICIENT_SCRAP');
+    expect(purchaseCosmetic(fresh(), 'default', 100000).reason).toBe('ALREADY_OWNED');
+    expect(purchaseCosmetic(fresh(), 'nope', 100000).reason).toBe('UNKNOWN_COSMETIC');
   });
 
   it('equips only what is owned', () => {
-    const owned = purchaseCosmetic(rich(200), 'dew-tint').state;
+    const owned = purchaseCosmetic(fresh(), 'dew-tint', 100000).state;
     const equipped = equipCosmetic(owned, 'dew-tint');
 
     expect(equipped.ok).toBe(true);
@@ -260,7 +281,7 @@ describe('Cosmetics', () => {
   });
 
   it('marks an undropped prestige skin locked rather than for sale', () => {
-    const rows = describeCosmetics(rich());
+    const rows = describeCosmetics(fresh(), 100000);
     const prestige = rows.find((r) => r.id === 'prestij-skin');
 
     expect(prestige.locked).toBe(true);

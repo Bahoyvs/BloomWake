@@ -1,20 +1,33 @@
 /**
  * Persistent meta-state for BloomWake (Phase 5).
  *
- * This is the across-runs save: Petals, meta-upgrades, cosmetics, pity and the
- * Daily Bloom clock. Per-run state (HP, wave, active cards) stays in
- * game-state.js and is deliberately NOT persisted.
+ * This is the across-runs save: meta-upgrades, cosmetics, the equipped skill,
+ * pity and the Daily Bloom clock. Per-run state (HP, wave, active cards) stays
+ * in game-state.js and is deliberately NOT persisted.
+ *
+ * ---------------------------------------------------------------------------
+ * THIS SAVE HOLDS NO WALLET
+ * ---------------------------------------------------------------------------
+ * It records WHAT THE PLAYER OWNS. What they can SPEND is a single Scrap
+ * balance in the crate economy save (src/core/meta-economy.js), and it is the
+ * only balance in the game.
+ *
+ * It used to hold `petals`, which meant the shop spent one currency and chip
+ * upgrades spent another — two numbers, both labelled Scrap on screen, that
+ * could not be spent on each other. Removing the field rather than renaming it
+ * is what makes that mistake unrepeatable: there is no second wallet left to
+ * accidentally read.
  *
  * Pure JS: no DOM, no localStorage. Persistence I/O belongs to the browser
  * layer; this module only turns an untrusted plain object into a valid state
  * and back, so every migration rule is Node-testable.
  *
  * BACKWARD COMPATIBILITY
- * Loading deep-merges the stored object over DEFAULT_META_STATE. Any field a
- * older save is missing takes the default, and fields the save does carry are
- * preserved untouched. Because Phase 5 only ADDS fields, SAVE_VERSION stays at
- * 1 — a Phase-4-shaped save (or no save at all) loads cleanly with Phase 5
- * defaults filled in and needs no migration step.
+ * Loading deep-merges the stored object over DEFAULT_META_STATE, so a field an
+ * older save is missing takes the default and fields it does carry survive
+ * untouched. Purely additive changes therefore need no migration and must not
+ * bump SAVE_VERSION. The v1 -> v2 Petal handover is the one real migration in
+ * here; see loadState.
  */
 
 import { COSMETIC_IDS } from '../data/cosmetics.js';
@@ -24,8 +37,11 @@ import { DEFAULT_ACTIVE_SKILL_ID, getActiveSkillById } from '../data/active-skil
  * Bump only on a BREAKING change — a field whose type or meaning changes, or
  * one that is removed. Additive fields must never bump it, or every existing
  * player would be pushed through a migration that has nothing to do.
+ *
+ * 2: `petals` removed. The game now has ONE wallet, and it lives in the crate
+ * economy save (src/core/meta-economy.js) as `scrap`. See loadState.
  */
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 
 /** Runs without a Rare-or-better large capsule before pity forces one. */
 export const PITY_THRESHOLD = 8;
@@ -37,7 +53,16 @@ export const PITY_THRESHOLD = 8;
 export function createDefaultState() {
   return {
     version: SAVE_VERSION,
-    petals: 0,
+    /**
+     * Scrap harvested from a pre-v2 save, waiting to be moved into the crate
+     * economy's wallet. Zero on every save that has already been migrated.
+     *
+     * THIS IS NOT A BALANCE. It is a one-shot hand-off, and the only reason it
+     * exists is that this module cannot see the economy save — the transfer is
+     * performed by the boot sequence and immediately cleared with
+     * `clearPendingScrap`. Nothing may spend from it.
+     */
+    pendingScrapTransfer: 0,
     metaUpgrades: {
       startHp: 0,
       pickupRadius: 0,
@@ -127,7 +152,33 @@ export function loadState(stored) {
   if (!isPlainObject(stored)) return defaults;
 
   const merged = deepMerge(defaults, stored);
+
+  /*
+   * v1 -> v2: the Petal wallet becomes Scrap, in the crate economy's save.
+   *
+   * Harvested unconditionally rather than behind `if (stored.version < 2)`. A
+   * save that has already migrated simply has no `petals` key and harvests 0,
+   * so the rule is idempotent — and that matters more than tidiness here,
+   * because a version-gated migration that is skipped by a save written with a
+   * wrong version number silently deletes a player's whole balance. There is
+   * no recovering from that, and no way for them to tell us it happened.
+   */
+  merged.pendingScrapTransfer += Math.max(0, Math.floor(Number(merged.petals) || 0));
+  delete merged.petals;
+
   return sanitizeState(merged);
+}
+
+/**
+ * Mark the legacy balance as handed over. Called by the boot sequence once the
+ * amount is safely inside the economy save, and never before — losing the tab
+ * mid-transfer must re-run the migration, not skip it.
+ *
+ * @param {Object} state
+ * @returns {Object}
+ */
+export function clearPendingScrap(state) {
+  return { ...state, pendingScrapTransfer: 0 };
 }
 
 /**
@@ -140,7 +191,10 @@ export function sanitizeState(state) {
   const clean = state;
 
   clean.version = SAVE_VERSION;
-  clean.petals = Math.max(0, Math.floor(Number(clean.petals) || 0));
+  clean.pendingScrapTransfer = Math.max(0, Math.floor(Number(clean.pendingScrapTransfer) || 0));
+  // A hand-edited save can reintroduce the dead field; it must never come back
+  // as something the shop might read.
+  delete clean.petals;
 
   for (const key of ['startHp', 'pickupRadius', 'startSpeed']) {
     clean.metaUpgrades[key] = Math.max(0, Math.floor(Number(clean.metaUpgrades[key]) || 0));
@@ -198,15 +252,4 @@ export function recordRun(state, runResult) {
       totalRuns: state.stats.totalRuns + 1,
     },
   };
-}
-
-/**
- * Credit Petals, guarding against negative or fractional grants.
- * @param {Object} state
- * @param {number} amount
- * @returns {Object}
- */
-export function addPetals(state, amount) {
-  const gain = Math.max(0, Math.floor(Number(amount) || 0));
-  return { ...state, petals: state.petals + gain };
 }

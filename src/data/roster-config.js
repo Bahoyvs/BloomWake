@@ -126,19 +126,36 @@ export const ENEMY_ARCHETYPES = {
     name: 'Xeno Larva',
     spriteKey: 'enemy_larva',
     radius: 14,
-    hp: 24,
-    speed: 165,
+    /**
+     * EARLY-WAVE TUNING (was hp 24, speed 165, contact 12).
+     *
+     * The larva is the first thing a new player ever meets, and at 165 px/s it
+     * was faster than a starting Drifter — which meant the opening wave could
+     * not be kited at all, only out-damaged, with a level-1 Phase Repeater that
+     * needed two shots per larva. Dropping to 135 puts it just under the
+     * player's base speed: backing off now buys real distance, so the first
+     * thing the game teaches is the thing the whole run is built on.
+     *
+     * 16 hp is the number that matters most: it takes a single Phase Repeater
+     * round instead of two, so wave 1 reads as "I am clearing these" rather
+     * than "these are accumulating".
+     */
+    hp: 16,
+    speed: 135,
     /**
      * Mass scales knockback inversely: a shot that throws a larva clear barely
      * rocks a goliath. It is not used for anything else — there is no physics
      * solver here, and a "mass" that only ever divides an impulse is honest
      * about being a knockback resistance knob.
+     *
+     * Nudged up with the speed cut so the larva is not also trivially shoved:
+     * it should lose the race, not the fight.
      */
-    mass: 0.7,
+    mass: 0.8,
     behavior: BEHAVIORS.SWARM,
     behaviorParams: {},
     attack: null,
-    contactDamage: 12,
+    contactDamage: 8,
     scoreValue: 10,
     scrapValue: 2,
     xpValue: 4,
@@ -151,8 +168,17 @@ export const ENEMY_ARCHETYPES = {
     name: 'Spore Scout',
     spriteKey: 'enemy_scout',
     radius: 18,
-    hp: 55,
-    speed: 115,
+    /**
+     * EARLY-WAVE TUNING (was hp 55, speed 115).
+     *
+     * A scout that outlived four Phase Repeater rounds kept firing through the
+     * whole exchange, so the player was always eating the NEXT volley while
+     * still killing the last one. 42 hp ends that loop inside one standoff
+     * cycle, and the slightly slower cruise means a player who breaks the band
+     * actually escapes it rather than being followed at walking pace.
+     */
+    hp: 42,
+    speed: 105,
     mass: 1.4,
     behavior: BEHAVIORS.KITING,
     behaviorParams: {
@@ -176,9 +202,19 @@ export const ENEMY_ARCHETYPES = {
     attack: {
       type: WEAPON_TYPES.SINGLE_AIMED,
       bulletType: 'bio_plasma',
-      fireInterval: 1.8,
-      speed: 230,
-      damage: 18,
+      /**
+       * EARLY-WAVE TUNING (was 1.8s / 230 px/s / 18 dmg).
+       *
+       * Bullet speed is the real fix. At 230 px/s a round crossing a 190-270px
+       * standoff band arrived in under a second from a shooter the player was
+       * usually not looking at — not dodgeable, just chip damage on a timer.
+       * At 180 the same gap takes long enough to see the shot leave and move,
+       * which turns the scout from a damage tax into an actual threat to read.
+       * The longer interval widens the same window between volleys.
+       */
+      fireInterval: 2.4,
+      speed: 180,
+      damage: 14,
       /** Only fires while inside the standoff band; see enemy-system.js. */
       requiresBand: true,
     },
@@ -234,7 +270,16 @@ export const ENEMY_ARCHETYPES = {
     name: 'Dart Ravager',
     spriteKey: 'enemy_interceptor',
     radius: 16,
-    hp: 45,
+    /**
+     * EARLY-WAVE TUNING (was hp 45, contact 24).
+     *
+     * 24 contact damage was a quarter of a starting hull in one hit, off a
+     * species that arrives at wave 3 while the player still has base stats. At
+     * 16 a missed read is a serious mistake rather than a run-ender, which is
+     * what a telegraphed attack is supposed to be: survivable the first time,
+     * then learned.
+     */
+    hp: 34,
     speed: 85,
     mass: 1.3,
     behavior: BEHAVIORS.RAMMER,
@@ -252,14 +297,26 @@ export const ENEMY_ARCHETYPES = {
        * without the dash becoming unreactable.
        */
       lockRange: 450,
-      telegraphSec: 0.75,
-      dashSpeed: 460,
+      /**
+       * EARLY-WAVE TUNING (was 0.75s telegraph / 460 dash / 0.65s recover).
+       *
+       * 0.75s is about a human's simple reaction time once you subtract
+       * noticing the line, choosing a direction, and the ship's own
+       * acceleration — so the warning was arriving too late to act on, and the
+       * ravager read as undodgeable rather than hard. 1.05s leaves roughly a
+       * third of a second of real decision time. The slower dash keeps total
+       * closing distance near where it was, so the species still crosses the
+       * arena instead of becoming a slow drifting threat, and the longer
+       * recovery widens the punish window a successful dodge earns.
+       */
+      telegraphSec: 1.05,
+      dashSpeed: 380,
       dashSec: 0.95,
       /** Dead time after a dash, so a miss is punishable. */
-      recoverSec: 0.65,
+      recoverSec: 0.85,
     },
     attack: null,
-    contactDamage: 24,
+    contactDamage: 16,
     scoreValue: 35,
     scrapValue: 5,
     xpValue: 10,
@@ -272,8 +329,17 @@ export const ENEMY_ARCHETYPES = {
     name: 'Mantis Strider',
     spriteKey: 'enemy_strider',
     radius: 15,
-    hp: 38,
-    speed: 145,
+    /**
+     * EARLY-WAVE TUNING (was hp 38, speed 145, contact 15).
+     *
+     * The strider's weave is what makes it interesting, and at 145 px/s the
+     * weave was arriving faster than the player could re-aim through it — the
+     * arc stopped being a pattern to read and became a reason the shots
+     * missed. Slower and thinner, the same path is legible: you can see where
+     * it will be and lead it.
+     */
+    hp: 26,
+    speed: 120,
     mass: 1.0,
     behavior: BEHAVIORS.SINE,
     behaviorParams: {
@@ -294,7 +360,7 @@ export const ENEMY_ARCHETYPES = {
       settleRange: 100,
     },
     attack: null,
-    contactDamage: 15,
+    contactDamage: 10,
     scoreValue: 20,
     scrapValue: 3,
     xpValue: 7,

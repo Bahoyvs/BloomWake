@@ -51,7 +51,7 @@ export class GameState {
     this.spawnWindowClosed = false;
     this.score = 0;
     this.kills = 0;
-    this.petalsEarned = 0;
+    this.scrapEarned = 0;
 
     // Player Dewling statistics
     this.player = {
@@ -291,7 +291,7 @@ export class GameState {
       wave: this.wave,
       score: this.score,
       kills: this.kills,
-      petalsEarned: this.petalsEarned,
+      scrapEarned: this.scrapEarned,
     });
   }
 

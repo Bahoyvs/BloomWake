@@ -32,6 +32,9 @@ import { describeCosmetics } from '../core/cosmetics.js';
 import { describeActiveSkills } from '../core/active-skills.js';
 import { isDailyBloomAvailable, msUntilNextLocalDay } from '../core/daily-bloom.js';
 import { REWARD_TIERS } from '../data/rewards.js';
+import { describeSkillProgress, resolveSkillDefAtLevel } from '../core/meta-economy.js';
+import { MAX_SKILL_LEVEL } from '../data/crates-config.js';
+import { CRATE_STENCIL } from './crate-modal.js';
 
 /**
  * Player-facing tier names. The keys stay the English identifiers the reward
@@ -96,11 +99,46 @@ function meter(level, maxLevel, label) {
   return `<div class="meter" role="img" aria-label="${label}">${segments}</div>`;
 }
 
+/**
+ * The Level Up key on a skill bay.
+ *
+ * States, in the order they are checked:
+ *  - maxed: inert, and says so rather than disappearing — a player looking for
+ *    the button they pressed last time should find it, finished.
+ *  - affordable: live, and prices itself in Scrap, which is the half of the
+ *    cost the player can act on immediately.
+ *  - short: inert, and names WHICH resource is missing and by how much. A grey
+ *    button with no reason attached is the single most common way an upgrade
+ *    screen wastes a player's time.
+ *
+ * @param {Object} row - A row from describeSkillProgress()
+ * @returns {string}
+ */
+function upgradeButton(row) {
+  if (row.isMax) {
+    return `<button class="meta__btn meta__btn--buy meta__btn--level" disabled>Max Level</button>`;
+  }
+
+  if (row.canAfford) {
+    return `<button class="meta__btn meta__btn--buy meta__btn--level meta__btn--ready"
+      data-upgrade-chip="${row.key}">Level Up · ${row.cost.scrap} Scrap</button>`;
+  }
+
+  const missing =
+    row.missingChips > 0
+      ? `Need ${row.missingChips} more chip${row.missingChips === 1 ? '' : 's'}`
+      : `Need ${row.missingScrap} more Scrap`;
+
+  return `<button class="meta__btn meta__btn--buy meta__btn--level" disabled>${missing}</button>`;
+}
+
 export class MetaUi {
   /**
    * @param {HTMLElement} root - Container element
    * @param {Object} handlers
-   * @param {() => Object} handlers.getState - Current meta-state
+   * @param {() => Object} handlers.getState - Current meta-state (what is owned)
+   * @param {() => Object} handlers.getEconomy - Crate economy state, which holds
+   *   the game's single Scrap balance and the chip inventory
    * @param {() => void} handlers.onPlay
    * @param {(id: string) => void} handlers.onBuyUpgrade
    * @param {(id: string) => void} handlers.onBuyCosmetic
@@ -129,7 +167,7 @@ export class MetaUi {
             <h1 class="meta__title">BloomWake</h1>
             <p class="meta__tagline">Void Drifter // Chitin Swarm</p>
 
-            ${scrapBadge('menu-petals')}
+            ${scrapBadge('menu-scrap')}
 
             <div class="meta__menu-actions">
               <button class="meta__btn meta__btn--primary" data-meta="play">Launch Mission</button>
@@ -149,12 +187,18 @@ export class MetaUi {
           <div class="console__body">
             <header class="meta__header">
               <h2 class="meta__heading">Salvage Depot</h2>
-              ${scrapBadge('shop-petals')}
+              ${scrapBadge('shop-scrap')}
             </header>
 
             <h3 class="meta__section-label">Permanent Upgrades</h3>
             <div class="meta__grid" data-meta="upgrades"></div>
 
+            <!--
+              No wallet badge of its own any more: hull upgrades, liveries and
+              chip levels all spend the single Scrap balance shown in the header
+              above, so a second figure here would only invite the reader to
+              wonder which one a button is charging.
+            -->
             <h3 class="meta__section-label">Tactical Systems</h3>
             <div class="meta__grid" data-meta="skills"></div>
 
@@ -179,13 +223,28 @@ export class MetaUi {
               <div class="meta__bud" data-meta="bud"></div>
               <div class="meta__capsule-reveal" data-meta="capsule-reveal">
                 <span class="meta__tier" data-meta="capsule-tier"></span>
-                <span class="meta__petals" data-meta="capsule-petals"></span>
+                <span class="meta__capsule-scrap" data-meta="capsule-scrap"></span>
                 <span class="meta__drop" data-meta="capsule-drop"></span>
               </div>
             </div>
 
             <button class="meta__odds-btn" data-meta="odds-toggle" title="Show drop odds">?</button>
             <div class="meta__odds" data-meta="odds"></div>
+
+            <!--
+              Salvage crate earned by the run. A riveted sub-console rather than
+              another line in the summary: the crate is the thing the player is
+              here for, and it has to out-weigh the score above it.
+            -->
+            <div class="crate-award" data-meta="crate-award" hidden>
+              <span class="crate-award__stencil" data-meta="crate-stencil"></span>
+              <div class="crate-award__pod" aria-hidden="true">
+                <span class="crate-award__band"></span>
+              </div>
+              <button class="meta__btn meta__btn--primary crate-award__btn" data-meta="open-crate">
+                Open Crate
+              </button>
+            </div>
 
             <div class="meta__results-actions">
               <button class="meta__btn meta__btn--primary" data-meta="again">Fly Again</button>
@@ -214,6 +273,7 @@ export class MetaUi {
     this.el['close-shop'].addEventListener('click', () => this.showMenu());
     this.el['to-menu'].addEventListener('click', () => this.showMenu());
     this.el.daily.addEventListener('click', () => this.handlers.onClaimDaily?.());
+    this.el['open-crate'].addEventListener('click', () => this.handlers.onOpenCrate?.());
     this.el['odds-toggle'].addEventListener('click', () => {
       this.el.odds.classList.toggle('meta__odds--visible');
     });
@@ -222,6 +282,17 @@ export class MetaUi {
   /* ------------------------------------------------------------------ */
   /* Screens                                                             */
   /* ------------------------------------------------------------------ */
+
+  /**
+   * The player's Scrap. THE one balance — hull upgrades, liveries and chip
+   * levels all price against this single number, and every badge on every
+   * screen reads it from here so two of them can never disagree.
+   *
+   * @returns {number}
+   */
+  scrap() {
+    return this.handlers.getEconomy?.()?.scrap ?? 0;
+  }
 
   /** @param {string|null} name - 'menu' | 'shop' | 'results' | null to hide all */
   showScreen(name) {
@@ -253,7 +324,7 @@ export class MetaUi {
   renderMenu(nowMs = Date.now()) {
     const state = this.handlers.getState();
 
-    this.el['menu-petals'].textContent = state.petals;
+    this.el['menu-scrap'].textContent = this.scrap();
     const runs = state.stats.totalRuns;
     this.el['menu-stats'].textContent = runs
       ? `${runs} runs · best wave ${state.stats.bestWaveReached}`
@@ -273,9 +344,10 @@ export class MetaUi {
 
   renderShop() {
     const state = this.handlers.getState();
-    this.el['shop-petals'].textContent = state.petals;
+    const scrap = this.scrap();
+    this.el['shop-scrap'].textContent = scrap;
 
-    this.el.upgrades.innerHTML = describeShop(state)
+    this.el.upgrades.innerHTML = describeShop(state, scrap)
       .map(
         (row, index) => `
         <article class="bay${row.maxed ? ' bay--maxed' : ''}">
@@ -300,28 +372,62 @@ export class MetaUi {
       .join('');
 
     /*
-     * Active skills. Every one is always selectable — they are a tactical
-     * choice rather than a purchase, so these cards carry no price and the
-     * button is only ever Equip or Equipped.
+     * Active skills. Two independent decisions share one card, because they are
+     * about the same object and splitting them across two screens would make a
+     * player check one to understand the other:
+     *
+     *  - WHICH to fly with. Free, always available — a tactical choice, not a
+     *    purchase, so there is no price on the Equip button.
+     *  - HOW STRONG it is. Paid for in chips and Scrap, and the numbers shown
+     *    (cooldown, active window) are the LEVELLED ones from
+     *    resolveSkillDefAtLevel, not the level-1 table. A card that advertised
+     *    8s while the player's own upgraded skill runs at 6.56s would make the
+     *    upgrade look like it did nothing.
      */
+    const economy = this.handlers.getEconomy?.() ?? null;
+    const progressBySkill = new Map(
+      economy ? describeSkillProgress(economy).map((row) => [row.skillId, row]) : []
+    );
+
     this.el.skills.innerHTML = describeActiveSkills(state)
-      .map(
-        (row) => `
+      .map((row) => {
+        const progress = progressBySkill.get(row.id);
+        const level = progress?.level ?? 1;
+        const def = resolveSkillDefAtLevel(row.id, level) ?? row;
+
+        return `
         <article class="bay bay--livery${row.equipped ? ' bay--equipped' : ''}">
           <span class="bay__tab">${row.mark} SYSTEM</span>
           <h4 class="bay__name">${row.name}</h4>
           <p class="bay__desc">${row.description}</p>
-          <div class="bay__status">${row.cooldown}s cooldown${
-            row.duration > 0 ? ` · ${row.duration}s active` : ' · instant'
+          <div class="bay__status">${def.cooldown}s cooldown${
+            def.duration > 0 ? ` · ${def.duration}s active` : ' · instant'
           }</div>
-          <button class="meta__btn meta__btn--buy" data-skill="${row.id}" ${
-            row.equipped ? 'disabled' : ''
-          }>${row.equipped ? 'Equipped' : 'Equip'}</button>
-        </article>`
-      )
+          ${
+            progress
+              ? `
+          ${meter(level, MAX_SKILL_LEVEL, `Level ${level} of ${MAX_SKILL_LEVEL}`)}
+          <div class="chip-tube${progress.isMax ? ' chip-tube--max' : ''}">
+            <span class="chip-tube__label">Chip</span>
+            <b class="chip-tube__count">${
+              progress.isMax
+                ? `${progress.ownedChips}`
+                : `${progress.ownedChips} / ${progress.cost.chips}`
+            }</b>
+          </div>`
+              : ''
+          }
+          <div class="bay__actions">
+            <button class="meta__btn meta__btn--buy" data-skill="${row.id}" ${
+              row.equipped ? 'disabled' : ''
+            }>${row.equipped ? 'Equipped' : 'Equip'}</button>
+            ${progress ? upgradeButton(progress) : ''}
+          </div>
+        </article>`;
+      })
       .join('');
 
-    this.el.cosmetics.innerHTML = describeCosmetics(state)
+    this.el.cosmetics.innerHTML = describeCosmetics(state, scrap)
       .map(
         (row) => `
         <article class="bay bay--livery${row.equipped ? ' bay--equipped' : ''}${
@@ -352,6 +458,11 @@ export class MetaUi {
     for (const button of this.el.skills.querySelectorAll('[data-skill]')) {
       button.addEventListener('click', () => this.handlers.onEquipSkill?.(button.dataset.skill));
     }
+    for (const button of this.el.skills.querySelectorAll('[data-upgrade-chip]')) {
+      button.addEventListener('click', () =>
+        this.handlers.onUpgradeSkill?.(button.dataset.upgradeChip)
+      );
+    }
     for (const button of this.el.cosmetics.querySelectorAll('[data-cosmetic]')) {
       button.addEventListener('click', () => this.handlers.onBuyCosmetic?.(button.dataset.cosmetic));
     }
@@ -369,8 +480,11 @@ export class MetaUi {
    *
    * @param {Object} result - Run outcome {wave, score, kills, won}
    * @param {Object} capsule - From completeRun(): {reward, newCosmetics, pityApplied, odds}
+   * @param {Object} [crate] - The salvage crate the run earned, from openCrate().
+   *   Omitted leaves the crate console hidden, so a run that somehow failed to
+   *   award one shows a debrief without it rather than an empty box.
    */
-  showResults(result, capsule) {
+  showResults(result, capsule, crate = null) {
     this.el['results-title'].textContent = result.won ? 'Mission Complete' : 'Hive Wins';
 
     this.el['results-summary'].innerHTML = [
@@ -388,7 +502,7 @@ export class MetaUi {
 
     this.el['capsule-tier'].textContent = TIER_LABEL[reward.tier] ?? reward.tier;
     this.el['capsule-tier'].className = `meta__tier meta__tier--${reward.tier}`;
-    this.el['capsule-petals'].textContent = `+${reward.petals} Scrap`;
+    this.el['capsule-scrap'].textContent = `+${reward.scrap} Scrap`;
     this.el['capsule-drop'].textContent = newCosmetics.length
       ? `New livery unlocked: ${newCosmetics.join(', ')}`
       : pityApplied
@@ -398,12 +512,35 @@ export class MetaUi {
     this.el.odds.innerHTML = renderOdds(odds);
     this.el.odds.classList.remove('meta__odds--visible');
 
+    this.renderCrateAward(crate);
+
     // Restart the capsule-opening animation from closed each time.
     this.el.capsule.classList.remove('meta__capsule--open');
     void this.el.capsule.offsetWidth;
     this.el.capsule.classList.add('meta__capsule--open');
 
     this.showScreen('results');
+  }
+
+  /**
+   * The earned-crate console under the scoreboard.
+   *
+   * @param {Object|null} crate - openCrate() result, or null to hide the box
+   * @param {boolean} [opened] - Whether the modal has already been through it
+   */
+  renderCrateAward(crate, opened = false) {
+    this.el['crate-award'].hidden = !crate;
+    if (!crate) return;
+
+    this.el['crate-stencil'].textContent = `[ ${
+      CRATE_STENCIL[crate.crateId] ?? 'SALVAGE RECOVERED'
+    } ]`;
+    this.el['crate-award'].dataset.crateType = crate.crateId;
+
+    // A crate stays visible after it has been opened — it is the record of what
+    // the run earned — but its button stops inviting a second opening.
+    this.el['open-crate'].disabled = opened;
+    this.el['open-crate'].textContent = opened ? 'Collected' : 'Open Crate';
   }
 
   /* ------------------------------------------------------------------ */
@@ -420,7 +557,7 @@ export class MetaUi {
   showToast(reward) {
     this.el.toast.innerHTML =
       `<span class="meta__toast-tier meta__toast-tier--${reward.tier}">` +
-      `${TIER_LABEL[reward.tier] ?? reward.tier}</span> Salvage Capsule · +${reward.petals} Scrap`;
+      `${TIER_LABEL[reward.tier] ?? reward.tier}</span> Salvage Capsule · +${reward.scrap} Scrap`;
     this.el.toast.classList.add('meta__toast--visible');
 
     clearTimeout(this.toastTimer);

@@ -1,7 +1,38 @@
 # Data tables
 
 Plain data, no logic beyond pure lookups. `enemies.js`, `roster-config.js`,
-`cards.js`, `rewards.js`, `cosmetics.js`, `meta-upgrades.js`, `animations.js`.
+`cards.js`, `rewards.js`, `crates-config.js`, `cosmetics.js`, `meta-upgrades.js`,
+`animations.js`.
+
+---
+
+## Tuning the crate economy: `crates-config.js`
+
+The designer-facing surface for Salvage Crates and Tactical Chips: what a crate
+pays, how often each rarity drops, what a skill level costs, and how much
+stronger the level makes the skill. `src/core/meta-economy.js` holds the roll
+algorithm, the wallet and the `localStorage` save; nothing in it hardcodes a
+number from this file.
+
+- **The chip table is a 1:1 cover of `ACTIVE_SKILL_IDS`.** One chip per active
+  skill, no more and no fewer — a chip that upgrades nothing is a dead drop, and
+  a skill nobody can upgrade is a dead hangar slot.
+- **Rarity is drop rate, not power.** Every skill costs the same to take to
+  level 5. A chip is rare because its skill warps a run, not because it is
+  better per point.
+- **`scaling` entries are multipliers against the level-1 value** in
+  `active-skills.js`, indexed by level - 1, and index 0 is always exactly 1 — so
+  retuning a base cooldown there never means retuning five numbers here.
+  `resolveSkillDefAtLevel()` applies them and hands back an ordinary
+  `ActiveSkillDef`, so `ActiveSkillSystem` never learns what a chip is.
+- **Discrete params are listed in `INTEGER_PARAMS`, not inferred.** `turnRate: 5`
+  and `cooldown: 8` are integers to JavaScript and continuous to the game;
+  rounding them would flatten their curves to nothing.
+- **Run the validator.** `tests/crates-config.test.js` calls
+  `validateCratesConfig()`, which reports every unknown rarity, uncovered skill,
+  unreachable guarantee, malformed curve and scaled param that no longer exists
+  on its skill, in one pass. A rename in `active-skills.js` fails a test naming
+  the row instead of silently scaling nothing.
 
 ---
 

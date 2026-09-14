@@ -219,10 +219,10 @@ describe('Reward payouts', () => {
     expect(seen.has(max)).toBe(true);
   });
 
-  it('grants both the skin and Petals on Legendary', () => {
+  it('grants both the skin and Scrap on Legendary', () => {
     const reward = resolveTierReward('legendary', mulberry32(4));
     expect(reward.cosmetics).toEqual(['prestij-skin']);
-    expect(reward.petals).toBeGreaterThan(0);
+    expect(reward.scrap).toBeGreaterThan(0);
   });
 
   it('grants no cosmetic below Legendary', () => {
@@ -233,7 +233,7 @@ describe('Reward payouts', () => {
 
   it('pays more for rarer tiers', () => {
     const ranges = REWARD_TIERS.map(
-      (tier) => REWARD_POOL[tier].find((e) => e.type === 'petal').amount
+      (tier) => REWARD_POOL[tier].find((e) => e.type === 'scrap').amount
     );
     for (let i = 1; i < ranges.length; i++) {
       expect(ranges[i][0], `tier ${REWARD_TIERS[i]} min`).toBeGreaterThan(ranges[i - 1][0]);
@@ -244,11 +244,11 @@ describe('Reward payouts', () => {
   it('resolves a small capsule to a payable reward', () => {
     const reward = resolveSmallCapsule(mulberry32(2));
     expect(REWARD_TIERS).toContain(reward.tier);
-    expect(reward.petals).toBeGreaterThan(0);
+    expect(reward.scrap).toBeGreaterThan(0);
   });
 
   it('honours an injected pool so calibration tunes the real logic', () => {
-    const doubled = { ...REWARD_POOL, common: [{ type: 'petal', amount: [1000, 1000] }] };
-    expect(resolveTierReward('common', mulberry32(1), doubled).petals).toBe(1000);
+    const doubled = { ...REWARD_POOL, common: [{ type: 'scrap', amount: [1000, 1000] }] };
+    expect(resolveTierReward('common', mulberry32(1), doubled).scrap).toBe(1000);
   });
 });
