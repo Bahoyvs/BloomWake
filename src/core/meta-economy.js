@@ -19,8 +19,10 @@
  * is what lets a test pin an exact dice roll and an exact instant.
  *
  * The persistence half at the bottom of the file is the one exception, and it
- * is kept honest by taking its storage as an argument that defaults to
- * `globalThis.localStorage`. So the browser gets real localStorage for free,
+ * is kept honest by taking its storage as an argument that defaults to the
+ * game's storage service (src/services/storage-service.js), which is what
+ * decides between the player's CrazyGames cloud save, this browser, and
+ * nothing at all. So the browser gets whichever of those is actually available,
  * a test passes a Map-backed fake, and Node's lack of a `window` is a
  * no-op rather than a crash. Every failure path is non-fatal: a player with a
  * corrupt save, a full disk, or storage disabled entirely still reaches the
@@ -52,6 +54,12 @@ import { rollAmount } from './rewards.js';
 // player's own calendar day rolled over since this timestamp" — so they share
 // the answer, including its handling of a clock set backwards.
 import { isDailyBloomAvailable as isNewLocalDaySince, msUntilNextLocalDay } from './daily-bloom.js';
+/*
+ * Imported for the persistence tail at the bottom of this file only. The pure
+ * half above it never reaches for storage, and every test of that half either
+ * injects an adapter or passes state in directly.
+ */
+import { storageService } from '../services/storage-service.js';
 
 /**
  * Bump only on a BREAKING change — a field whose type or meaning changes, or
@@ -736,21 +744,23 @@ export function claimDailyShipment(state, nowMs, rng) {
 /**
  * The storage this module writes to unless one is passed in.
  *
- * Wrapped because merely TOUCHING `localStorage` throws in some hardened and
- * private-browsing configurations, rather than being cleanly absent — and
- * because Node has no such global at all, which is what lets the pure half of
- * this file be tested without a DOM.
+ * No longer goes looking for `localStorage`: which backing a save actually
+ * lives in — the player's CrazyGames account, this browser, or nothing at all —
+ * is one decision made for the whole game in src/services/storage-service.js,
+ * and duplicating the probe here was how the economy and the settings ended up
+ * able to disagree about whether storage worked.
+ *
+ * `undefined` means "use the game's storage"; an explicit `null` means "there
+ * is none", which is a thing a test needs to be able to ask for and would
+ * otherwise be indistinguishable from omitting the argument.
  *
  * @param {Storage|null} [storage]
  * @returns {Storage|null}
  */
 function resolveStorage(storage) {
+  if (storage === null) return null;
   if (storage) return storage;
-  try {
-    return globalThis.localStorage ?? null;
-  } catch {
-    return null;
-  }
+  return storageService;
 }
 
 /**
@@ -775,7 +785,8 @@ function isStorageWritable(storage) {
 /**
  * Read and validate the economy save, falling back to a fresh wallet.
  *
- * @param {Storage} [storage] - Defaults to globalThis.localStorage
+ * @param {Storage|null} [storage] - Defaults to the game's storage service;
+ *   pass `null` to read from nothing at all
  * @returns {Object} A complete economy state
  */
 export function loadEconomyFromStorage(storage) {
@@ -797,7 +808,8 @@ export function loadEconomyFromStorage(storage) {
  * Persist the economy state.
  *
  * @param {Object} state
- * @param {Storage} [storage] - Defaults to globalThis.localStorage
+ * @param {Storage|null} [storage] - Defaults to the game's storage service;
+ *   pass `null` to write to nothing at all
  * @returns {boolean} Whether the write succeeded
  */
 export function saveEconomyToStorage(state, storage) {
@@ -845,7 +857,8 @@ export class MetaEconomy {
   /**
    * @param {Object} [options]
    * @param {Object} [options.state] - Starting state; loaded from storage if absent
-   * @param {Storage} [options.storage] - Defaults to globalThis.localStorage
+   * @param {Storage|null} [options.storage] - Defaults to the game's storage
+   *   service; pass `null` for a wallet that deliberately persists nothing
    * @param {() => number} [options.rng] - Defaults to Math.random
    * @param {() => number} [options.now] - Clock, ms. Defaults to Date.now
    * @param {boolean} [options.autoSave] - Write through on every mutation
@@ -971,10 +984,24 @@ export class MetaEconomy {
     return saveEconomyToStorage(this.state, this.storage);
   }
 
-  /** Discard in-memory state and re-read the save. */
-  reload() {
+  /**
+   * Discard in-memory state and re-read the save.
+   *
+   * Called at boot once the storage driver is resolved, and again if the player
+   * signs in mid-session — at which point the Data module has silently swapped
+   * to a different account's wallet and everything in memory belongs to the
+   * guest who was here a moment ago.
+   *
+   * @returns {Object} The freshly loaded state
+   */
+  load() {
     this.state = loadEconomyFromStorage(this.storage);
     return this.state;
+  }
+
+  /** @returns {Object} Alias of load(), kept for existing callers. */
+  reload() {
+    return this.load();
   }
 
   /** Wipe the wallet and the stored save. */

@@ -75,6 +75,10 @@ export class CrateModal {
    *   Runs the ad and banks the bonus. Resolves {ok, scrap, chips}.
    * @param {(state: Object) => void} [handlers.onCollect] - Modal dismissed
    * @param {() => Object} [handlers.getState] - Economy state, for chip totals
+   * @param {(phase: 'open'|'blast') => void} [handlers.onPhase] - The reveal
+   *   reaching a beat worth hearing. A callback rather than a bus emit because
+   *   this module is a view: it renders a crate and calls handlers, and the
+   *   decision that a beat makes a noise belongs to whoever wires it up.
    */
   constructor(root, handlers = {}) {
     this.root = root;
@@ -278,6 +282,7 @@ export class CrateModal {
 
     this.renderCards();
     this.spawnSparks();
+    this.handlers.onPhase?.('open');
 
     this.timers.push(setTimeout(() => this.detonate(), CHARGE_MS));
   }
@@ -295,6 +300,7 @@ export class CrateModal {
     this.el.shockwave.classList.add('crate__shockwave--fire');
     this.el.sparks.classList.add('crate__sparks--fire');
     this.el.console.classList.add('crate__console--thud');
+    this.handlers.onPhase?.('blast');
 
     const cards = [...this.el.cards.children];
     cards.forEach((card, index) => {
@@ -318,6 +324,12 @@ export class CrateModal {
    */
   revealAll() {
     this.clearTimers();
+    // A skip during the charge-up cancels the detonation timer, so the blast
+    // has to be announced here instead — but a skip AFTER it has already gone
+    // off must not announce it twice, and the pod's own class is the record of
+    // which side of that line we are on.
+    const alreadyBlown = this.el.pod.classList.contains('crate__pod--blown');
+
     this.layer.classList.add('crate--instant');
 
     this.el.pod.classList.remove('crate__pod--charging');
@@ -325,6 +337,8 @@ export class CrateModal {
     this.el.shockwave.classList.remove('crate__shockwave--fire');
     this.el.sparks.classList.remove('crate__sparks--fire');
     this.el.console.classList.remove('crate__console--thud');
+
+    if (!alreadyBlown) this.handlers.onPhase?.('blast');
 
     for (const card of this.el.cards.children) card.classList.add('crate__card--in');
     this.finishReveal();
@@ -441,7 +455,7 @@ export class CrateModal {
     try {
       outcome = (await this.handlers.onDoubleRewards?.(2)) ?? { ok: false };
     } catch (error) {
-      // requestRewardedAd does not reject, but a handler above it might. The
+      // The ad service does not reject, but a handler above it might. The
       // base reward is already banked, so the safe response is to let the
       // player collect it.
       console.warn('[BloomWake] Reward doubling failed.', error);

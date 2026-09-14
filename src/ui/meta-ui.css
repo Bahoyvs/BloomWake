@@ -36,10 +36,37 @@
 }
 
 /*
+ * The UA's `[hidden] { display: none }` is a type-selector rule and loses to
+ * every `display` this file sets by class — the same gotcha hud.css documents
+ * for `.hud`. `.meta__capsule` and `.crate-award` both set `display: flex`,
+ * so toggling either with `el.hidden` (the forfeited-run debrief does, to hide
+ * the capsule and the crate console together) would leave them visibly flexed
+ * with nothing in them without this override.
+ */
+.meta [hidden] {
+  display: none;
+}
+
+/*
  * The void the console stands in. No backdrop-filter: the old glass blur cost a
  * full-screen filter pass every frame and, now that the panel is opaque metal,
  * bought nothing. The scanline layer is what makes the dark read as a terminal
  * room rather than as empty space.
+ */
+/*
+ * `justify-content: center` is deliberately NOT used here, and that is the fix
+ * for the cut-off SETTINGS key.
+ *
+ * A centred flex container whose content is taller than itself spills the
+ * overflow out of BOTH ends, and the overflow above the start edge is
+ * unreachable — scrolling cannot travel backwards past a flex line's start.
+ * On a landscape phone the menu console is taller than the viewport, so the
+ * bottom of the key column simply vanished under the fold with no way to
+ * scroll to it.
+ *
+ * `auto` block margins on the child (see `.console` below) centre exactly the
+ * same way while the content fits, and collapse to zero when it does not,
+ * which hands the whole overflow to the scroll container where it belongs.
  */
 .meta__screen {
   position: absolute;
@@ -47,7 +74,7 @@
   display: none;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   padding: 28px 16px;
   overflow-y: auto;
   background:
@@ -69,10 +96,18 @@
 /* Console chassis — the component all three screens are built from    */
 /* ------------------------------------------------------------------ */
 
+/*
+ * `margin: auto 0` is the vertical centring (see .meta__screen for why it is
+ * not `justify-content`). `flex-shrink: 0` stops the column-flex parent
+ * squashing the chassis to fit instead of letting it scroll — without it the
+ * plate compresses and the key labels collide before anything overflows.
+ */
 .console {
   display: flex;
   flex-direction: column;
   align-items: stretch;
+  flex-shrink: 0;
+  margin: auto 0;
   width: min(520px, 92vw);
 }
 
@@ -574,6 +609,48 @@
 /* Debrief + capsule                                                   */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Forfeit notice: an Abandon Run that quit before the first boss wave.
+ *
+ * A recessed dark readout, like `.meta__odds` below it, rather than a soft red
+ * banner — the debrief is otherwise light steel, and a loud red card here
+ * would read as an error in the SCREEN rather than a report about the RUN.
+ * The hazard stripe is confined to the top 4px for the same reason: enough to
+ * mark it as a warning, not enough to fight the summary underneath for
+ * attention.
+ */
+.meta__warning {
+  position: relative;
+  width: 100%;
+  max-width: 440px;
+  margin: 0 0 4px;
+  padding: 13px 16px 10px;
+  overflow: hidden;
+  border-radius: 3px;
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 1.6;
+  text-align: center;
+  text-transform: uppercase;
+  color: #ff6b57;
+  background: var(--panel-dark-bg);
+  box-shadow:
+    inset 0 3px 8px rgba(0, 0, 0, 0.65),
+    0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.meta__warning::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: repeating-linear-gradient(45deg, var(--tab-red) 0 8px, #1b2029 8px 16px);
+}
+
 .meta__summary {
   display: flex;
   gap: 26px;
@@ -975,5 +1052,138 @@
 @media (prefers-reduced-motion: reduce) {
   .crate-award__pod {
     animation: none;
+  }
+}
+
+/* ==========================================================================
+ * Short landscape — a phone held sideways
+ * ==========================================================================
+ *
+ * The console is laid out for a tall viewport, and every device the game is
+ * actually played on in landscape is the opposite: 852x393 (iPhone 14/15 Pro),
+ * 915x412 (Galaxy S2x), 884x345 (unfolded Fold). At 393px of height the title
+ * alone claims 58px, the tagline and the Scrap badge another 70, and the four
+ * keys 60 each — roughly 370px of content plus 50px of chassis padding in a
+ * 393px box. That is the overflow, and it is a TYPE problem before it is a
+ * layout one: shrinking the display type is what makes the column fit at all.
+ *
+ * Keyed on height and orientation rather than width, because the same 852px
+ * width on a tablet has 1100px of height and wants none of this.
+ *
+ * The scroll fallback above still stands behind all of it. This query is what
+ * keeps the player from needing it.
+ */
+@media (max-height: 520px) and (orientation: landscape) {
+  .meta__screen {
+    padding: 12px 16px;
+  }
+
+  /*
+   * Capped in `vh` rather than shrunk by a fixed step: at 345px the mark has to
+   * give up more than it does at 520px, and one clamp covers the whole band
+   * without a second breakpoint. The `vw` term stays so a wide-but-short window
+   * still scales the mark to its width.
+   */
+  .meta__title {
+    font-size: clamp(20px, min(6vw, 8vh), 34px);
+  }
+
+  .meta__tagline {
+    font-size: 10px;
+    letter-spacing: 0.16em;
+  }
+
+  .console__body {
+    gap: 6px;
+    padding: 14px clamp(13px, 4vw, 22px) 12px;
+  }
+
+  /*
+   * The keys keep a 44px minimum through all of this. Below that they stop
+   * being reliable thumb targets, and a menu that fits but cannot be pressed
+   * has traded one bug for a worse one. 44px is the platform-guideline floor
+   * and the bottom padding stays heaviest because the key plate's 16px plinth
+   * band is baked into the art — the label centres in the face, not the box.
+   */
+  .meta__btn {
+    min-height: 44px;
+    padding: 10px 18px 16px;
+    font-size: 12px;
+  }
+
+  .meta__menu-actions,
+  .meta__results-actions {
+    gap: 6px;
+  }
+
+  .meta__heading {
+    font-size: clamp(16px, 4vh, 22px);
+  }
+
+  .scrap {
+    padding: 4px 11px;
+  }
+
+  .scrap__count {
+    font-size: 16px;
+  }
+
+  .scrap__cell i {
+    height: 9px;
+  }
+
+  .meta__stats {
+    font-size: 10px;
+  }
+}
+
+/*
+ * Wider than it is tall, and tall enough to keep full-size type: give the menu
+ * its horizontal room back.
+ *
+ * This is the pillarboxing in the screenshot. The chassis is capped at 520px
+ * because that is a comfortable measure on a portrait phone, but on an 852px
+ * landscape screen it leaves ~165px of dead void down each side. Letting the
+ * menu chassis follow the viewport closes the gap without touching the depot
+ * or the debrief, which have their own widths for their own reasons.
+ */
+@media (orientation: landscape) and (max-height: 620px) {
+  .console--menu {
+    width: min(680px, 78vw);
+  }
+
+  /* The key column tracks the wider chassis rather than staying at its
+     portrait 300px, which would leave the keys marooned in the middle. */
+  .meta__menu-actions {
+    width: min(420px, 70vw);
+  }
+}
+
+/*
+ * Very short landscape — an unfolded Fold at 884x345, and the URL bar eating
+ * 40-odd px off anything else in this band.
+ *
+ * At this height the four keys alone are 176px of the 345 available, and they
+ * are the one thing that must NOT shrink further: 44px is already the floor for
+ * a reliable thumb. So the decoration goes instead. The tagline and the
+ * lifetime-stats line are the only two elements on this screen that carry no
+ * action and no state the player needs before pressing something, which makes
+ * them the correct things to spend.
+ *
+ * Everything still scrolls if a device lands under even this. The queries are
+ * there to keep the player from having to.
+ */
+@media (max-height: 430px) and (orientation: landscape) {
+  .meta__tagline,
+  .meta__stats {
+    display: none;
+  }
+
+  .meta__screen {
+    padding: 8px 16px;
+  }
+
+  .console__body {
+    padding: 12px clamp(13px, 4vw, 22px) 10px;
   }
 }

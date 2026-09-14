@@ -28,10 +28,23 @@ export class ScreenShake {
    * @param {number} [options.maxRotation] - Peak rotation in radians
    * @param {number} [options.decay] - Trauma lost per second
    */
-  constructor({ maxOffset = 26, maxRotation = 0.022, decay = 1.6 } = {}) {
+  constructor({ maxOffset = 26, maxRotation = 0.022, decay = 1.6, intensity = 1 } = {}) {
     this.maxOffset = maxOffset;
     this.maxRotation = maxRotation;
     this.decay = decay;
+
+    /**
+     * Player-facing intensity multiplier, from the accessibility settings.
+     *
+     * Scales the OUTPUT rather than the trauma, and that distinction matters:
+     * trauma also drives how long the effect lasts, so damping it at the
+     * source would make a player on Light spend less time shaken as well as
+     * shaking less — the camera would settle at a different moment than
+     * everybody else's. Scaling the offsets keeps the timing identical at
+     * every setting and changes only the amplitude, which is the thing being
+     * asked for.
+     */
+    this.intensity = intensity;
 
     this.trauma = 0;
     this.time = 0;
@@ -63,11 +76,26 @@ export class ScreenShake {
     }
 
     // Squared response: quiet at low trauma, dramatic at high.
-    const magnitude = this.trauma * this.trauma;
+    const magnitude = this.trauma * this.trauma * this.intensity;
     // Three different frequencies keep the motion from looking like a loop.
     this.offsetX = this.maxOffset * magnitude * noise(this.time * 31.7);
     this.offsetY = this.maxOffset * magnitude * noise(this.time * 27.3 + 100);
     this.rotation = this.maxRotation * magnitude * noise(this.time * 19.1 + 200);
+  }
+
+  /**
+   * @param {number} value - 0 (off) to 1 (full)
+   */
+  setIntensity(value) {
+    this.intensity = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
+    // Settling the camera immediately matters: a player turning shake off
+    // mid-eruption is doing it BECAUSE the screen is moving, and waiting for
+    // the trauma to decay would leave it moving for another second.
+    if (this.intensity === 0) {
+      this.offsetX = 0;
+      this.offsetY = 0;
+      this.rotation = 0;
+    }
   }
 
   /**

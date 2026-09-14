@@ -87,4 +87,35 @@ describe('GameState Engine & Pure Simulation', () => {
     expect(game.currentState).toBe(GAME_STATES.GAME_OVER);
     expect(gameOverFn).toHaveBeenCalledTimes(1);
   });
+
+  it('marks a death as game:over with abandoned: false', () => {
+    // The reward layer (forfeitsRunRewards) branches on this flag, so a death
+    // must carry it as false rather than leaving it absent — an absent field
+    // and an explicit false both read as "not abandoned" today, but only one
+    // of them is a promise a future refactor can rely on.
+    const bus = new EventBus();
+    const gameOverFn = vi.fn();
+    bus.on('game:over', gameOverFn);
+
+    const game = new GameState(bus);
+    game.startRun();
+    game.damagePlayer(150);
+
+    expect(gameOverFn).toHaveBeenCalledWith(expect.objectContaining({ abandoned: false }));
+  });
+
+  it('marks Abandon Run as game:over with abandoned: true, at the wave it happened', () => {
+    const bus = new EventBus();
+    const gameOverFn = vi.fn();
+    bus.on('game:over', gameOverFn);
+
+    const game = new GameState(bus);
+    game.startRun();
+    game.triggerGameOver({ abandoned: true });
+
+    expect(game.currentState).toBe(GAME_STATES.GAME_OVER);
+    expect(gameOverFn).toHaveBeenCalledWith(
+      expect.objectContaining({ abandoned: true, wave: 1 })
+    );
+  });
 });

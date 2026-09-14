@@ -176,6 +176,14 @@ export class CompositeBossRenderer {
     this.resolve = resolve ?? ((spriteKey) => this.assets?.get(BOSS_TEXTURE_KEY[spriteKey] ?? spriteKey));
     /** boss id -> view record */
     this.views = new Map();
+    /**
+     * Whether white hit flashes are drawn, from the accessibility settings.
+     *
+     * A plain field the renderer writes, not a settings import: this module
+     * draws a boss from a render state and has no business knowing that player
+     * preferences exist.
+     */
+    this.damageFlash = true;
   }
 
   /**
@@ -272,7 +280,7 @@ export class CompositeBossRenderer {
     view.root.rotation = state.rotation;
     view.root.visible = state.alive;
 
-    const flashing = state.hitFlash > 0;
+    const flashing = this.damageFlash && state.hitFlash > 0;
     const chassisTint = flashing ? BOSS_VIEW.flashTint : BOSS_VIEW.hullTint;
     view.chassis.tint = chassisTint;
     // The fallback block is a stand-in for the sprite, not a second layer of
@@ -306,7 +314,7 @@ export class CompositeBossRenderer {
         : part.def.rotation ?? 0;
 
       const base = part.def.role === 'reactor' ? BOSS_VIEW.reactorTint : BOSS_VIEW.turretTint;
-      if (partState.hitFlash > 0) {
+      if (this.damageFlash && partState.hitFlash > 0) {
         part.live.tint = BOSS_VIEW.flashTint;
         part.liveFallback.tint = BOSS_VIEW.flashTint;
       } else {

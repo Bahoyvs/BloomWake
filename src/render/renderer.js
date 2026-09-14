@@ -222,6 +222,26 @@ export class Renderer {
     this.shake = new ScreenShake();
     this.particles = new ParticleSystem(this.assets);
 
+    /**
+     * Whether white impact flashes are drawn, from the accessibility settings.
+     *
+     * Held here rather than read from a settings module, because the renderer
+     * must not know that a settings store exists — main.js pushes the value in
+     * on change, exactly as it pushes the shake intensity. That keeps the
+     * render layer configurable without making it a consumer of preferences.
+     */
+    this.damageFlash = true;
+    /**
+     * The player's damage-number preference.
+     *
+     * Stored and honoured here so the setting is live the moment a
+     * damage-number layer lands. Nothing reads it today — the game has no
+     * floating-damage renderer yet — and that is recorded plainly rather than
+     * left for the next reader to discover by grepping for a consumer that
+     * does not exist.
+     */
+    this.showDamageNumbers = true;
+
     this.buildStage();
     this.bindEvents();
     this.resize();
@@ -553,6 +573,32 @@ export class Renderer {
 
     bus.on('game:over', () => this.shake.add(TRAUMA.DEATH));
     bus.on('state:reset', () => this.resetVisuals());
+  }
+
+  /**
+   * Apply the player's display preferences.
+   *
+   * One entry point rather than three public setters, because main.js already
+   * receives the whole settings object on every change and splitting it up
+   * here would only invite a caller to apply two of the three.
+   *
+   * Unknown and missing fields are ignored: the renderer takes what it
+   * understands from the settings object and leaves the audio fields alone.
+   *
+   * @param {{screenShake?: number, damageFlash?: boolean,
+   *          showDamageNumbers?: boolean}} settings
+   */
+  applySettings(settings = {}) {
+    if (typeof settings.screenShake === 'number') {
+      this.shake.setIntensity(settings.screenShake);
+    }
+    if (typeof settings.damageFlash === 'boolean') {
+      this.damageFlash = settings.damageFlash;
+      this.compositeBossRenderer.damageFlash = settings.damageFlash;
+    }
+    if (typeof settings.showDamageNumbers === 'boolean') {
+      this.showDamageNumbers = settings.showDamageNumbers;
+    }
   }
 
   resetVisuals() {
@@ -895,6 +941,11 @@ export class Renderer {
 
       // TIER B — the whole swarm animation system, one shared transform.
       applyJuice(enemy, t, this.juiceTransform);
+      // Gated here rather than inside syncEnemySprite so the sprite layer stays
+      // a pure function of the transform it is handed. The squash, the rotation
+      // and the dissolve all survive — only the white frame is withheld, which
+      // is what the setting actually asks for.
+      if (!this.damageFlash) this.juiceTransform.flash = false;
       syncEnemySprite(view, enemy, this.juiceTransform, t);
       this.applySwarmCycle(view, enemy, t);
 
@@ -1009,7 +1060,7 @@ export class Renderer {
     sprite.scale.y = view.baseScale * pulse.scale * fx.scaleY;
     sprite.alpha = fx.alpha;
 
-    const flash = fx.flash || boss.hitFlash > 0;
+    const flash = this.damageFlash && (fx.flash || boss.hitFlash > 0);
     if (parts) {
       parts.spine.tint = flash ? DAMAGE_TINT : DREADNOUGHT.hullTint;
       parts.beam.tint = flash ? DAMAGE_TINT : DREADNOUGHT.beamTint;
@@ -1298,7 +1349,7 @@ export class Renderer {
     sprite.scale.y = baseScale * fx.scaleY;
     sprite.rotation = this.heroFacing + fx.rotation;
     sprite.alpha = fx.alpha;
-    if (fx.flash) sprite.tint = DAMAGE_TINT;
+    if (this.damageFlash && fx.flash) sprite.tint = DAMAGE_TINT;
 
     /*
      * Recoil shoves the Drifter off its own shot.

@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import { qrcode } from 'vite-plugin-qrcode';
 
 /**
  * Vite config.
@@ -29,9 +30,11 @@ export default defineConfig({
   server: {
     port: 3000,
     open: false,
+    host: true, // Bind on LAN too, so the printed QR code resolves from a phone.
     watch: {
       // The vendor packs are inputs to `npm run assets`, not to the dev server.
       ignored: ['**/assets/**'],
     },
   },
+  plugins: [qrcode()],
 });

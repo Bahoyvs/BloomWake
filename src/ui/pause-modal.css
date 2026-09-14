@@ -1,0 +1,204 @@
+/*
+ * Pause modal.
+ *
+ * Reuses meta-ui.css's chassis — `.console`, `.console__tab`, `.console__body`,
+ * `.meta__btn` — so a player who hits Escape sees the same hardware they left
+ * in the menu. Only the panel's own layout and the armed Abandon key are new.
+ *
+ * THE SCRIM IS HEAVIER HERE THAN ANYWHERE ELSE.
+ * Every other modal covers a static screen. This one covers a LIVE playfield
+ * frozen mid-frame — bullets in the air, a boss halfway through a telegraph —
+ * and at the crate modal's 78% that frozen chaos reads through the panel and
+ * makes the buttons hard to find. 88% plus a heavier blur is what turns the
+ * arena into a backdrop instead of a competing image.
+ */
+
+/*
+ * `align-items: flex-start` plus auto margins on the panel, not `center` — the
+ * same centred-flex overflow trap meta-ui.css documents: content taller than a
+ * centred container spills past the start edge where no scroll can reach it.
+ * A pause panel whose Abandon Run button is unreachable strands the player in
+ * a run they cannot leave, which is worse than the menu version of the bug.
+ */
+.pause {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: none;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 16px;
+  overflow-y: auto;
+  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+  color: var(--console-ink);
+}
+
+.pause--active {
+  display: flex;
+  animation: pause-fade 140ms ease-out;
+}
+
+@keyframes pause-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.pause__scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 7, 14, 0.88);
+  backdrop-filter: blur(5px);
+}
+
+.console--pause {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  margin: auto 0;
+  width: min(380px, 92vw);
+}
+
+
+.pause__body {
+  gap: 6px;
+}
+
+.pause__title {
+  font-family: var(--font-display);
+  font-size: clamp(28px, 7vw, 40px);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  line-height: 1;
+  color: var(--console-ink);
+}
+
+.pause__status {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--console-ink-dim);
+}
+
+.pause__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(280px, 82vw);
+  margin-top: 14px;
+}
+
+/*
+ * Abandon is styled as a hazard key before it is ever pressed: a red rim on the
+ * resting state, so the eye separates it from Resume and Settings without
+ * having to read all three. It is still the calm version — the armed state
+ * below is where it goes loud.
+ */
+.meta__btn--abandon {
+  color: #6a1b12;
+}
+
+.meta__btn--abandon::after {
+  border-color: rgba(232, 65, 24, 0.55);
+}
+
+.meta__btn--abandon:hover:not(:disabled)::after {
+  border-color: var(--tab-red);
+}
+
+/*
+ * Armed: one press from ending the run.
+ *
+ * The pulse is the point. A static red button is just a red button, and this
+ * has to read as a state the player has entered rather than as a colour the
+ * button always had — they pressed something a moment ago and need to see that
+ * it did something before they press it again.
+ */
+.meta__btn--abandon-armed {
+  color: #ffffff;
+  text-shadow: 0 1px 0 rgba(10, 16, 30, 0.6);
+  animation: abandon-pulse 900ms ease-in-out infinite;
+}
+
+.meta__btn--abandon-armed::before {
+  /* Tints the key plate itself red rather than only its rim. */
+  filter: sepia(1) saturate(6) hue-rotate(-28deg) brightness(0.92);
+}
+
+.meta__btn--abandon-armed::after {
+  border-color: var(--tab-red);
+}
+
+@keyframes abandon-pulse {
+  0%, 100% { filter: drop-shadow(0 3px 0 rgba(16, 24, 42, 0.42)); }
+  50% { filter: drop-shadow(0 3px 0 rgba(16, 24, 42, 0.42)) brightness(1.14); }
+}
+
+/* Motion sickness is exactly who the accessibility settings are for, and a
+   pulsing button is motion. The colour still carries the state. */
+@media (prefers-reduced-motion: reduce) {
+  .meta__btn--abandon-armed {
+    animation: none;
+  }
+
+  .pause--active,
+  .settings--active {
+    animation: none;
+  }
+}
+
+.pause__warning {
+  max-width: 30ch;
+  margin-top: 10px;
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+  color: #8c2a17;
+}
+
+.pause__hint {
+  margin-top: 14px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--console-ink-dim);
+}
+
+/*
+ * Short landscape. A phone held sideways gives this panel ~350px of height for
+ * a layout drawn at 600, so the chassis padding and the key size come down —
+ * but never below the 44px thumb floor, since the thing being shrunk is the
+ * only way out of a run.
+ *
+ * Last in the file on purpose: several of the rules it overrides (`.pause__body`
+ * above, and `.meta__btn` from meta-ui.css) match at equal specificity, so
+ * source order is what decides it.
+ */
+@media (max-height: 520px) and (orientation: landscape) {
+  .pause {
+    padding: 10px 16px;
+  }
+
+  .console--pause .console__body {
+    padding: 14px 18px 12px;
+  }
+
+  .console--pause .meta__btn {
+    min-height: 44px;
+    padding: 10px 18px 16px;
+    font-size: 12px;
+  }
+
+  .pause__hint {
+    margin-top: 8px;
+  }
+
+  .pause__warning {
+    margin-top: 6px;
+  }
+}

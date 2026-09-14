@@ -71,7 +71,7 @@ export const ENEMIES = {
     id: ENEMY_TYPES.TARLING,
     // Tarling -> Xeno Larva
     name: 'Xeno Larva',
-    description: 'Fasetli elmas çekirdek; ince canlı, yüksek hızlı, sürü hâlinde düz hücum.',
+    description: 'Faceted diamond core; a lean, fast body that charges straight in as part of a swarm.',
     baseHp: 10,
     baseSpeed: 2.7,
     behavior: ENEMY_BEHAVIORS.DIRECT,
@@ -88,7 +88,7 @@ export const ENEMIES = {
     id: ENEMY_TYPES.ASHFISH,
     // Ashfish -> Mantis Strider
     name: 'Mantis Strider',
-    description: 'Çift mandibulalı sivri gövde; sinüs dalgası çizerek oyuncuyu yandan kuşatır.',
+    description: 'Twin-mandibled, spike-bodied hunter; weaves a sine path to flank the player from the side.',
     baseHp: 15,
     baseSpeed: 3.0,
     behavior: ENEMY_BEHAVIORS.SINE_WAVE,
@@ -108,7 +108,7 @@ export const ENEMIES = {
     id: ENEMY_TYPES.CRACKED_WISP,
     // Cracked Wisp -> Dart Ravager
     name: 'Dart Ravager',
-    description: 'Sivri iğne kanat; kilitlenip kırmızı uyarı verir, sonra iki kat hızla düz dalar.',
+    description: 'Needle-winged striker; locks on with a red warning, then dives straight in at double speed.',
     baseHp: 6,
     baseSpeed: 4.4,
     behavior: ENEMY_BEHAVIORS.LOCK_ON_CHARGE,
@@ -134,7 +134,7 @@ export const ENEMIES = {
     id: ENEMY_TYPES.RUSTBLOOM,
     // Rustbloom -> Brood Spore
     name: 'Brood Spore',
-    description: '4 düğümlü polip gövde; ağır ilerler ve öldüğünde 4 Xeno Larva saçar.',
+    description: 'Four-node polyp body; advances slowly and scatters 4 Xeno Larvae on death.',
     baseHp: 30,
     baseSpeed: 1.0,
     behavior: ENEMY_BEHAVIORS.BROOD_SPORE,
@@ -157,7 +157,7 @@ export const ENEMIES = {
     id: ENEMY_TYPES.SMOGMOTH,
     // Smogmoth -> Phantom Stalker
     name: 'Phantom Stalker',
-    description: 'Çift kademeli fasetli kabuk; kamufle olup hızlanır, vuruş mesafesinde belirir.',
+    description: 'Twin-stage faceted shell; cloaks and speeds up, then reveals itself at striking range.',
     baseHp: 12,
     baseSpeed: 3.3,
     behavior: ENEMY_BEHAVIORS.CLOAK_STALK,
@@ -186,7 +186,7 @@ export const ENEMIES = {
      * trying to reach you first — it is trying to be in the way.
      */
     name: 'Bio-Goliath',
-    description: 'Çok düğümlü ağır zırhlı kütle; mermilerin delme özelliğini sıfırlar, arkasındakilere zırh olur.',
+    description: 'Multi-node, heavily armoured mass; strips pierce from any round that hits it, shielding whatever is behind it.',
     baseHp: 90,
     baseSpeed: 0.9,
     behavior: ENEMY_BEHAVIORS.ARMORED_GUARD,
@@ -210,7 +210,7 @@ export const ENEMIES = {
     id: ENEMY_TYPES.RUSTWHALE,
     // Rustwhale -> Dreadnought Station
     name: 'Dreadnought Station',
-    description: 'Boss: Üç aşamalı kovan istasyonu — radyal mermi çemberi, eskort çağrısı, mega ölüm ışını.',
+    description: 'Boss: a three-phase hive station — radial bullet rings, escort summons, a mega death ray.',
     baseHp: 400, // Dynamic HP formula applied in wave logic
     baseSpeed: 1.35,
     behavior: ENEMY_BEHAVIORS.BOSS_STATION,

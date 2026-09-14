@@ -16,10 +16,10 @@
  *
  * NAMES vs DESCRIPTIONS
  * `name`, `type` and `description` are all player-facing and all English: they
- * render in the in-run draft, and the HUD is English throughout even though the
- * meta screens are Turkish. Rarity and behaviour values are English too, but
- * for a different reason — they are keys (CSS class suffixes, dispatch labels),
- * not prose. Nothing downstream translates any of this.
+ * render in the in-run draft, and every screen in the game — HUD and meta
+ * alike — is English throughout. Rarity and behaviour values are English too,
+ * but for a different reason — they are keys (CSS class suffixes, dispatch
+ * labels), not prose. Nothing downstream translates any of this.
  */
 
 export const CARD_RARITIES = {

@@ -2,37 +2,100 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <!--
+    `viewport-fit=cover` is what makes env(safe-area-inset-*) resolve to
+    anything but 0px. Without it the page is laid out inside the notch's
+    bounding box, the insets read zero, and the padding further down this file
+    silently does nothing on exactly the devices it was written for.
+  -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>BloomWake — Void Drifter</title>
   <meta name="description" content="A survivor-arena web game: the Void Drifter holds the line against the Chitin Swarm." />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@600;700&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+  <!--
+    The CrazyGames SDK v3.
+
+    A classic script, not a module, and deliberately not deferred: it has to
+    have defined `window.CrazyGames` before /src/main.js evaluates, because the
+    service there reads the global at import time to decide whether it is on
+    the portal or on a mock. There is no integrity hash because the portal
+    serves this URL unversioned and rolls it forward under us.
+
+    Loading it off-portal — on localhost, or from a file:// build — simply
+    fails, and that is a supported state: the service falls back to its mock
+    and the game boots with ads and telemetry going nowhere.
+  -->
+  <script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
+
   <style>
+    /*
+     * No text selection anywhere.
+     *
+     * On a phone a long press on the canvas otherwise raises the OS selection
+     * bubble and the magnifier over the game, which on a twin-stick survivor is
+     * a lost run. All four prefixes are spelled out because the platform QA
+     * checks for them and because the unprefixed property alone is not honoured
+     * by every mobile WebView the portal's apps ship on.
+     */
     * {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
       user-select: none;
       -webkit-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
       touch-action: none;
+      /* Kills the grey tap highlight iOS paints over every tapped element. */
+      -webkit-tap-highlight-color: transparent;
+      /* The long-press "Copy / Share" callout, which survives user-select on
+         iOS Safari and is the other half of the magnifier problem above. */
+      -webkit-touch-callout: none;
     }
 
-    /* Page background matches the canvas backdrop's darkest stop, so any
-       overscroll or letterbox blends into the void rather than framing it. */
+    /*
+     * Page background matches the canvas backdrop's darkest stop, so any
+     * overscroll or letterbox blends into the void rather than framing it.
+     *
+     * `position: fixed` on top of `overflow: hidden` is not redundant on mobile.
+     * `overflow: hidden` alone still lets Safari and Chrome-on-Android rubber-
+     * band the whole document and fire pull-to-refresh when a drag starts near
+     * the top edge — which on this game is a thumb steering north. Taking the
+     * body out of flow removes the scroll container those gestures act on, and
+     * `overscroll-behavior: none` closes the same door on the browsers that
+     * honour it. The joystick lives near the left edge, where a horizontal drag
+     * is also the browser's back-swipe, so all three are load-bearing.
+     */
     body, html {
       width: 100%;
       height: 100%;
       overflow: hidden;
+      position: fixed;
+      top: 0;
+      left: 0;
+      overscroll-behavior: none;
       background-color: #05070f;
       font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
       color: #e6feff;
     }
 
+    /*
+     * `dvh` after `vh`, so a browser without it keeps the old behaviour.
+     *
+     * On mobile `100vh` is the LARGE viewport — the height the page would have
+     * if the URL bar were hidden — so with the bar showing, the bottom of the
+     * layout sits under it. That is where the menu's last button goes when the
+     * console is already tight, which is exactly the SETTINGS-is-cut-off bug.
+     * `dvh` tracks the viewport the player can actually see.
+     */
     #app-container {
       position: relative;
       width: 100vw;
       height: 100vh;
+      height: 100dvh;
       display: flex;
       justify-content: center;
       align-items: center;
@@ -45,6 +108,17 @@
       background: linear-gradient(180deg, #0a1024, #02030a);
     }
 
+    /*
+     * The UI sits inside the device's safe area; the canvas does not.
+     *
+     * The CrazyGames mobile apps run the game genuinely edge to edge, so a
+     * notch, a rounded corner or a home indicator will sit ON TOP of anything
+     * flush to the screen edge. The arena wants every pixel and loses nothing
+     * to a corner being obscured — the HUD, the modals and the menus are the
+     * things that must stay reachable, so the padding goes on their container
+     * alone. `env()` resolves to 0px everywhere else, which makes this a no-op
+     * on desktop rather than a branch.
+     */
     #ui-layer {
       position: absolute;
       top: 0;
@@ -52,10 +126,28 @@
       width: 100%;
       height: 100%;
       pointer-events: none;
+      padding-top: env(safe-area-inset-top, 0px);
+      padding-right: env(safe-area-inset-right, 0px);
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+      padding-left: env(safe-area-inset-left, 0px);
     }
 
     #ui-layer * {
       pointer-events: auto;
+    }
+
+    /*
+     * While a video ad is on screen.
+     *
+     * The ad renders in the portal's own layer above this document, so the risk
+     * is not that our UI is visible — it is that it is still CLICKABLE through
+     * the gap between the request being made and the video appearing, which is
+     * several seconds of auctions. One class on the body beats disabling every
+     * button on whichever screen the ad happened to interrupt.
+     */
+    body.ad-presenting #ui-layer,
+    body.ad-presenting #ui-layer * {
+      pointer-events: none;
     }
 
     /* Boot overlay — shown until every texture has resolved. */
@@ -107,7 +199,7 @@
     <!-- Removed by boot() once the texture manifest resolves. -->
     <div id="boot-screen">
       <div id="boot-mark">BLOOMWAKE</div>
-      <div id="boot-status">Sistemler yükleniyor…</div>
+      <div id="boot-status">Loading systems…</div>
     </div>
   </div>
   <script type="module" src="/src/main.js"></script>

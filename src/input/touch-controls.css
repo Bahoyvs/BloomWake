@@ -1,0 +1,92 @@
+/*
+ * Floating joystick chrome.
+ *
+ * The layer is a sibling of #ui-layer rather than a child of it, for one
+ * concrete reason: #ui-layer sets `pointer-events: auto` on `*`, an id-plus-
+ * universal selector that outranks any class rule this file could write. A
+ * joystick that swallows its own pointer events cannot be dragged. Sitting
+ * outside that subtree means `pointer-events: none` here just works.
+ *
+ * It is also deliberately OUTSIDE the safe-area padding: the stick is drawn at
+ * the thumb, wherever that is, so insetting it would only misalign the ring
+ * from the finger that opened it.
+ */
+.tjoy-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/*
+ * Positioned by `left`/`top` at the press point, with the ring and knob both
+ * centre-translated onto it. Transform is left free for the knob to animate on,
+ * which is what keeps the per-move write to a single compositor-only property.
+ */
+.tjoy {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+.tjoy[hidden] {
+  display: none;
+}
+
+/*
+ * Industrial ring: gunmetal glass with a cyan rim, matching the HUD's plate
+ * palette rather than the menu's light console steel — this is drawn over the
+ * arena, so it follows the arena's lighting.
+ */
+.tjoy__ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 120px;
+  height: 120px;
+  margin: -60px 0 0 -60px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(30, 35, 45, 0.28) 0%,
+    rgba(30, 35, 45, 0.7) 72%,
+    rgba(30, 35, 45, 0.52) 100%
+  );
+  box-shadow:
+    inset 0 0 0 2px rgba(103, 232, 249, 0.42),
+    inset 0 0 18px rgba(0, 0, 0, 0.65),
+    0 0 14px rgba(0, 0, 0, 0.5);
+}
+
+/* The thumb. Amber against the ring's cyan, so the two never read as one mass
+   at a glance in peripheral vision. */
+.tjoy__knob {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 48px;
+  height: 48px;
+  margin: -24px 0 0 -24px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 38% 32%,
+    rgba(120, 132, 150, 0.95),
+    rgba(42, 48, 60, 0.95)
+  );
+  box-shadow:
+    inset 0 0 0 2px rgba(251, 197, 49, 0.75),
+    0 2px 8px rgba(0, 0, 0, 0.6);
+}
+
+/*
+ * The stick is pure feedback, so it is the first thing to go when the player
+ * has asked for less motion — but it must still be VISIBLE, or they lose the
+ * only readout of where their thumb is anchored. Only the glow goes.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .tjoy__ring,
+  .tjoy__knob {
+    box-shadow: inset 0 0 0 2px rgba(103, 232, 249, 0.42);
+  }
+}

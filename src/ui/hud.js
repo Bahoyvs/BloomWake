@@ -11,11 +11,10 @@
  * darkened to gunmetal in hud.css rather than shipped light, because this layer
  * sits OVER the playfield and a light panel would out-read the Drifter.
  *
- * ALL IN-RUN COPY IS ENGLISH.
- * The meta screens (menu, Salvage Depot) are Turkish; the HUD is not. Card
- * names, types and descriptions come from src/data/cards.js already in English,
- * so this module no longer translates anything — the rarity keys ARE the words
- * the player reads.
+ * ALL COPY IN THE GAME IS ENGLISH.
+ * Card names, types and descriptions come from src/data/cards.js already in
+ * English, so this module never translates anything — the rarity keys ARE the
+ * words the player reads.
  */
 
 import './hud.css';
@@ -97,6 +96,7 @@ export class Hud {
    * @param {import('../core/simulation.js').Simulation} simulation
    * @param {Object} handlers
    * @param {() => void} handlers.onStart
+   * @param {() => void} [handlers.onPause] - The HUD's pause key was pressed
    */
   constructor(root, simulation, handlers = {}) {
     this.root = root;
@@ -142,6 +142,19 @@ export class Hud {
             <span class="tally"><span class="tally__label">Score</span><b data-hud="score">0</b></span>
             <span class="tally"><span class="tally__label">Kills</span><b data-hud="kills">0</b></span>
           </div>
+
+          <!--
+            The pause key, at the end of the telemetry band.
+
+            In the band rather than floating in a corner because it is console
+            hardware like every other readout, and on a phone there IS no
+            Escape key — this is the only way into the pause screen and the
+            settings behind it, so it cannot be a desktop afterthought.
+          -->
+          <button class="tbay tbay--pause" data-hud="pause" type="button"
+                  aria-label="Pause" title="Pause (Esc)">
+            <span class="tbay__pause-glyph" aria-hidden="true"></span>
+          </button>
         </div>
 
         <!-- Left rail: one console chip per owned system. -->
@@ -254,6 +267,17 @@ export class Hud {
     // would otherwise do nothing, since the keyboard path goes through
     // KeyboardInput rather than through this element.
     this.el['skill-slot'].addEventListener('click', (event) => event.preventDefault());
+
+    /*
+     * The pause key stays on `click`, unlike the skill socket.
+     *
+     * The socket casts on `pointerdown` because a beat of latency costs the
+     * player the dodge. Pausing has the opposite requirement: a thumb that
+     * brushes the top of the screen while dodging must not freeze the run, and
+     * click — which needs press and release on the same element — is what
+     * makes a graze harmless.
+     */
+    this.el.pause.addEventListener('click', () => this.handlers.onPause?.());
 
     bus.on('wave:start', (data) => {
       if (data.wave > 1) this.showBanner(`[ WAVE ${pad2(data.wave)} // ENGAGE ]`);

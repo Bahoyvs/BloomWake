@@ -284,14 +284,25 @@ export class GameState {
 
   /**
    * Trigger Game Over state
+   *
+   * @param {Object} [options]
+   * @param {boolean} [options.abandoned] - True when the player ended the run
+   *   themselves via Abandon Run rather than being defeated at 0 HP. Carried
+   *   on the event rather than inferred downstream, because by the time
+   *   `game:over` reaches the reward layer there is no way left to tell a
+   *   death from a walkaway apart — the state transition is identical. The
+   *   flag is what lets completeRun's caller withhold salvage from a run that
+   *   quit before it took any risk; see forfeitsRunRewards in
+   *   meta-progression.js.
    */
-  triggerGameOver() {
+  triggerGameOver({ abandoned = false } = {}) {
     this.currentState = GAME_STATES.GAME_OVER;
     this.bus.emit('game:over', {
       wave: this.wave,
       score: this.score,
       kills: this.kills,
       scrapEarned: this.scrapEarned,
+      abandoned,
     });
   }
 

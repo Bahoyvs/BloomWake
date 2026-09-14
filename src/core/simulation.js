@@ -444,6 +444,21 @@ export class Simulation {
   updatePlayer(dt, input) {
     const player = this.state.player;
     const dir = normalize(input.x ?? 0, input.y ?? 0);
+    /*
+     * Analog throttle, for the touch stick.
+     *
+     * `dir` is a UNIT heading and has to stay one — getFacing() hands it to the
+     * Singularity Lance, which fires along it, and to the Wingman, whose escort
+     * V is built from it. Scaling those by a half-pressed thumb would shorten
+     * the Lance. So the magnitude is carried separately and applied only to
+     * velocity.
+     *
+     * Clamped, not normalised: the keyboard's diagonals arrive at length 1.41
+     * and must keep reading as full speed, exactly as they did when this was a
+     * bare normalize(). Every input at or past unit length is 1 here, so the
+     * desktop balance envelope is untouched by this line.
+     */
+    const throttle = Math.min(Math.hypot(input.x ?? 0, input.y ?? 0), 1);
     const skills = this.activeSkills;
     // Multiplicative with the card passive rather than replacing it: Afterburner
     // on a Wingman build should be faster than Afterburner without one.
@@ -459,8 +474,8 @@ export class Simulation {
       // Exponential approach — frame-rate independent, and it cannot overshoot
       // the target the way a fixed `v += a * dt` step can at a low frame rate.
       const k = 1 - Math.exp(-PLAYER_CFG.ACCEL * skills.accelMultiplier * dt);
-      this.playerVx += (dir.x * speed - this.playerVx) * k;
-      this.playerVy += (dir.y * speed - this.playerVy) * k;
+      this.playerVx += (dir.x * speed * throttle - this.playerVx) * k;
+      this.playerVy += (dir.y * speed * throttle - this.playerVy) * k;
       // Facing follows INPUT, not velocity: during a drifting reversal the two
       // point opposite ways, and the ship should already be aimed where the
       // player is steering rather than where its momentum is still carrying it.

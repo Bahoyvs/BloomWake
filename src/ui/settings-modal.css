@@ -1,0 +1,457 @@
+/*
+ * System settings modal.
+ *
+ * Reuses meta-ui.css's chassis wholesale — `.console`, `.console__tab`,
+ * `.console__body`, `.meta__btn`, `.meta__section-label` — so this is visibly
+ * the same riveted hardware as the menu and the depot rather than a settings
+ * screen bolted on beside it. Only the three controls that do not exist
+ * anywhere else in the game are declared here: the slider, the segmented
+ * selector and the toggle.
+ *
+ * ALL THREE CONTROLS ARE DRAWN ON NATIVE INPUTS.
+ * The slider is an `<input type="range">` and the toggle is an
+ * `<input type="checkbox">`, both styled rather than replaced. That is not
+ * purism: a div pretending to be a slider has to reimplement drag, arrow keys,
+ * Home/End, the focus ring, the value announcement and the touch target, and
+ * it gets at least one of them wrong. Styling the real control keeps every one
+ * of those for free.
+ *
+ * THE MODAL IS LIT LIKE THE MENU, NOT LIKE THE HUD.
+ * It opens over both — the pause screen mid-run and the menu between runs — so
+ * it carries the light steel plate and a dark blurred scrim, exactly as the
+ * crate modal does over the debrief.
+ */
+
+.settings {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+  color: var(--console-ink);
+}
+
+.settings--active {
+  display: flex;
+  animation: settings-fade 160ms ease-out;
+}
+
+@keyframes settings-fade {
+  from { opacity: 0; transform: scale(0.99); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.settings__scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 7, 14, 0.78);
+  backdrop-filter: blur(3px);
+}
+
+.console--settings {
+  position: relative;
+  z-index: 1;
+  width: min(520px, 94vw);
+}
+
+.settings__body {
+  gap: 10px;
+  align-items: stretch;
+  /* A phone in landscape has barely 300px of height; the panel scrolls rather
+     than pushing Close off the bottom of the screen. */
+  max-height: min(88vh, 720px);
+  overflow-y: auto;
+}
+
+/* The section labels come from meta-ui.css; these only fix their rhythm here. */
+.settings__body .meta__section-label {
+  align-self: flex-start;
+  margin-top: 6px;
+}
+
+.settings__body .meta__section-label:first-child {
+  margin-top: 0;
+}
+
+/*
+ * A sunk bay for each group, matching the depot's sub-console faces: the
+ * grouping has to be visible at a glance, because "Audio" and "Display" are
+ * the two things a player is scanning for when they open this.
+ */
+.settings__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #e4e5ea, #cfd1d9);
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.26),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.18),
+    0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+/* ------------------------------------------------------------------ */
+/* Rows                                                                */
+/* ------------------------------------------------------------------ */
+
+.settings__row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 11px 0;
+}
+
+/* A hairline between rows, never under the last one. */
+.settings__row + .settings__row {
+  border-top: 1px solid rgba(20, 26, 36, 0.13);
+}
+
+.settings__row--switch,
+.settings__row--segmented {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.settings__label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--console-ink);
+  cursor: pointer;
+}
+
+/*
+ * On a volume row the label and its percentage share one line, so the readout
+ * is pulled to the right edge of the label rather than sitting under it.
+ */
+.settings__row:not(.settings__row--switch) > .settings__label {
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.settings__readout {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: var(--tab-blue-deep);
+}
+
+/*
+ * Muted: the percentages go grey with their sliders.
+ *
+ * The numbers still SAY 80% — the level is not lost, and the player gets it
+ * back the moment they unmute — but a live blue readout next to a dead slider
+ * claims the game is making sound at that volume, which is the one thing that
+ * is not true.
+ */
+.settings--muted .settings__readout {
+  color: var(--console-ink-dim);
+}
+
+.settings__hint {
+  max-width: 34ch;
+  font-family: 'Outfit', sans-serif;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  text-transform: none;
+  line-height: 1.35;
+  color: var(--console-ink-dim);
+}
+
+/* ------------------------------------------------------------------ */
+/* Slider                                                              */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A recessed channel with a raised key riding in it — the same two materials
+ * as the rest of the console, at control scale.
+ *
+ * The track is painted on the input's own background rather than on a wrapper,
+ * which is what keeps the thumb and the channel in exact register on every
+ * engine: the browser positions the thumb against the input box, so anything
+ * drawn on a different element has to guess at the thumb's width to line up.
+ */
+.slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.slider:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.slider::-webkit-slider-runnable-track {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(180deg, #8f939f, #b9bcc6);
+  box-shadow:
+    inset 0 2px 4px rgba(0, 0, 0, 0.5),
+    0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+.slider::-moz-range-track {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(180deg, #8f939f, #b9bcc6);
+  box-shadow:
+    inset 0 2px 4px rgba(0, 0, 0, 0.5),
+    0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+/* Firefox fills the travelled part of the track for free; Chrome cannot. */
+.slider::-moz-range-progress {
+  height: 10px;
+  border-radius: 5px;
+  background: linear-gradient(180deg, #9ff8ff, var(--tab-blue));
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  /* Centres the 20px thumb on the 10px track. */
+  margin-top: -5px;
+  border: 2px solid var(--console-stroke);
+  border-radius: 4px;
+  background: linear-gradient(180deg, #f2f3f7 0%, #c6c9d3 52%, #9da1ad 100%);
+  box-shadow: 0 2px 0 rgba(16, 24, 42, 0.45);
+}
+
+.slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--console-stroke);
+  border-radius: 4px;
+  background: linear-gradient(180deg, #f2f3f7 0%, #c6c9d3 52%, #9da1ad 100%);
+  box-shadow: 0 2px 0 rgba(16, 24, 42, 0.45);
+}
+
+.slider:focus-visible {
+  outline: 3px solid var(--tab-blue);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Segmented selector                                                  */
+/* ------------------------------------------------------------------ */
+
+.segmented {
+  display: flex;
+  flex: 0 0 auto;
+  border-radius: 5px;
+  overflow: hidden;
+  box-shadow:
+    inset 0 0 0 1px var(--console-stroke),
+    0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+.segmented__key {
+  padding: 9px 13px;
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--console-ink-dim);
+  background: linear-gradient(180deg, #d3d5dd, #b3b6c0);
+  border: 0;
+  border-right: 1px solid rgba(16, 24, 42, 0.3);
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.segmented__key:last-child {
+  border-right: 0;
+}
+
+.segmented__key:hover:not(.segmented__key--on) {
+  background: linear-gradient(180deg, #dee0e7, #c0c3cc);
+}
+
+/* The engaged stop: sunk into the plate and lit, like a latched switch. */
+.segmented__key--on {
+  color: #ffffff;
+  background: linear-gradient(180deg, var(--tab-blue), var(--tab-blue-deep));
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.42);
+  text-shadow: 0 1px 0 rgba(10, 16, 30, 0.5);
+}
+
+.segmented__key:focus-visible {
+  outline: 3px solid var(--tab-blue);
+  outline-offset: -3px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Toggle                                                              */
+/* ------------------------------------------------------------------ */
+
+.toggle {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  width: 52px;
+  height: 28px;
+}
+
+/*
+ * The input is invisible but NOT `display: none` — it still has to receive
+ * focus, still has to be reachable by Tab, and still has to be the thing a
+ * screen reader announces. It is laid over the drawn switch at zero opacity so
+ * the whole control is its own hit target.
+ */
+.toggle__input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/*
+ * Squared, not a pill.
+ *
+ * This used to carry `border-radius: 14px` — exactly half its 28px height,
+ * which is what turns a rectangle into a fully rounded capsule. Against a
+ * square-cornered knob (below) that read as two different vocabularies on one
+ * control: a mobile-OS switch wearing a console's own thumb. 3px matches the
+ * segmented selector and the console keys elsewhere in this file, so the
+ * toggle is now built from the same corners as everything around it.
+ *
+ * The rim is an inset box-shadow rather than a `border`. `.toggle__knob`
+ * below is absolutely positioned INSIDE this element, and its `top`/`left`
+ * are measured from the padding edge — a real border shrinks that edge inward
+ * and would throw off both the knob's resting position and the
+ * `translateX(24px)` travel distance, forcing every offset in this block to
+ * be retuned around the border width. An inset shadow draws the identical rim
+ * without moving the box model at all, the same trick `.segmented` uses above.
+ */
+.toggle__track {
+  position: absolute;
+  inset: 0;
+  border-radius: 3px;
+  /* A cooler, duller grey than the slider/segmented rest-state on purpose —
+     next to the lit blue below, THIS is what reads as "off" at a glance. */
+  background: linear-gradient(180deg, #6d7079, #878a92);
+  /*
+   * 1px rim, matching `.segmented`'s — not the 2px this control shipped with
+   * first. A 2px stroke at THIS scale (a 28px-tall track, a 22px knob inside
+   * it) reads as a bold outline rather than as the same hairline edge every
+   * other control in this modal uses; 1px is the width that actually matches.
+   */
+  box-shadow:
+    inset 0 0 0 1px var(--console-stroke),
+    inset 0 2px 4px rgba(0, 0, 0, 0.6);
+  transition: background 0.14s ease;
+}
+
+.toggle__knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--console-stroke);
+  border-radius: 3px;
+  background: linear-gradient(180deg, #f2f3f7 0%, #c6c9d3 52%, #9da1ad 100%);
+  box-shadow: 0 2px 0 rgba(16, 24, 42, 0.4);
+  transition: transform 0.14s cubic-bezier(0.3, 1.4, 0.6, 1);
+}
+
+/*
+ * Blue on engagement, matching the slider's fill and the segmented selector's
+ * lit stop rather than a hazard amber or green of its own — three separate
+ * "this is on" colours across one modal would read as three controls that
+ * disagree, not as three that agree on the same accent.
+ */
+.toggle__input:checked + .toggle__track {
+  background: linear-gradient(180deg, #9ff8ff, var(--tab-blue));
+}
+
+.toggle__input:checked + .toggle__track .toggle__knob {
+  transform: translateX(24px);
+}
+
+.toggle__input:focus-visible + .toggle__track {
+  outline: 3px solid var(--tab-blue);
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Footer                                                              */
+/* ------------------------------------------------------------------ */
+
+.settings__actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 14px;
+}
+
+.settings__actions .meta__btn {
+  flex: 1 1 0;
+  padding: 12px 14px 18px;
+  font-size: 12px;
+}
+
+.settings__note {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+  color: var(--console-ink-dim);
+}
+
+/* ------------------------------------------------------------------ */
+/* Narrow screens                                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Under 420px the label plus a 3-key segmented selector cannot share a line
+ * without the hint text collapsing to two words per row, so those rows stack.
+ * The switch rows do not: a label beside its toggle survives any width, and
+ * stacking them would push Close off a landscape phone.
+ */
+@media (max-width: 420px) {
+  .settings__row--segmented {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .segmented__key {
+    flex: 1 1 0;
+    padding: 10px 6px;
+  }
+
+  .settings__hint {
+    max-width: none;
+  }
+}

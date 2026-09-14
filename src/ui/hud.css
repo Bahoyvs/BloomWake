@@ -184,7 +184,9 @@
   left: 50%;
   transform: translateX(-50%);
   display: grid;
-  grid-template-columns: repeat(3, 104px) 132px;
+  /* The fifth track is the pause key: square, so it reads as a button in a
+     row of readouts rather than as a fifth bay with nothing in it. */
+  grid-template-columns: repeat(3, 104px) 132px 50px;
   gap: 8px;
   max-width: calc(100vw - 20px);
 }
@@ -881,7 +883,7 @@
    * exactly the jitter the fixed grid exists to remove.
    */
   .hud__telemetry {
-    grid-template-columns: repeat(3, 82px) 104px;
+    grid-template-columns: repeat(3, 82px) 104px 34px;
     gap: 5px;
   }
 
@@ -1494,4 +1496,130 @@
   color: #ffffff;
   text-shadow: 0 1px 2px #000000, 0 0 6px #000000;
   pointer-events: none;
+}
+
+/* ------------------------------------------------------------------ */
+/* Pause key                                                           */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The fifth telemetry slot, and the only one that does anything when pressed.
+ *
+ * It inherits .tbay wholesale — the same 9-sliced plate, the same gunmetal
+ * filter — so it reads as part of the band rather than as a control dropped on
+ * top of it. Everything below is only what a bay needs in order to also be a
+ * button: a reset for the <button> element's own chrome, a cursor, and the
+ * press states the other bays have no use for.
+ */
+.tbay--pause {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  transition: transform 0.08s ease, filter 0.12s ease;
+}
+
+.tbay--pause:hover {
+  filter: brightness(1.15);
+}
+
+/* Sinks into the band on press, the way the console keys drop onto their
+   plinths. */
+.tbay--pause:active {
+  transform: translateY(2px);
+  filter: brightness(0.92);
+}
+
+.tbay--pause:focus-visible {
+  outline: 2px solid var(--neon-cyan);
+  outline-offset: 2px;
+}
+
+/*
+ * The glyph is two drawn bars, not a "⏸" character.
+ *
+ * The emoji pause renders as a colour emoji on some platforms and as a
+ * monochrome glyph on others, at wildly different optical sizes and with its
+ * own baseline. Two boxes are identical everywhere and cost nothing.
+ */
+.tbay__pause-glyph {
+  display: block;
+  width: 14px;
+  height: 16px;
+  background:
+    linear-gradient(var(--hull-text-bright, #e6feff) 0 0) 0 0 / 5px 100% no-repeat,
+    linear-gradient(var(--hull-text-bright, #e6feff) 0 0) 9px 0 / 5px 100% no-repeat;
+}
+
+@media (max-width: 720px) {
+  .tbay__pause-glyph {
+    width: 11px;
+    height: 13px;
+    background:
+      linear-gradient(var(--hull-text-bright, #e6feff) 0 0) 0 0 / 4px 100% no-repeat,
+      linear-gradient(var(--hull-text-bright, #e6feff) 0 0) 7px 0 / 4px 100% no-repeat;
+  }
+}
+
+/* ==========================================================================
+ * Touch mode
+ * ==========================================================================
+ *
+ * Gated on a `touch-mode` class that main.js puts on <body>, not on a
+ * `(pointer: coarse)` media query. Both would work, but the joystick is
+ * spawned from the same JS predicate, and a phone where the stick appears and
+ * the socket stays desktop-sized — or the reverse — is the kind of split-brain
+ * bug that only shows up on the one device nobody tested. One source of truth
+ * for "this is a touch session", read by both halves.
+ */
+
+/*
+ * The socket goes from 58px to 76px.
+ *
+ * 58 is fine under a mouse, where the pointer is a single pixel and the player
+ * can see exactly what they are about to hit. A thumb contact patch is roughly
+ * 45px across and lands with the fingertip ahead of where the player thinks
+ * they are aiming, which is why the platform floor is ~48px and why a control
+ * this important — it is the dodge — is taken well past it.
+ */
+body.touch-mode .socket {
+  width: 76px;
+  height: 76px;
+}
+
+/*
+ * Out of the corner and clear of the home indicator.
+ *
+ * `max()` rather than a plain inset: `env()` is 0px on a phone with no gesture
+ * bar and on every desktop, and a bare `env()` would slam the socket flush to
+ * the edge on exactly those devices. The floor is the desktop spacing, and the
+ * inset only ever adds to it.
+ */
+body.touch-mode .hud__skill-slot {
+  right: max(16px, env(safe-area-inset-right, 0px));
+  bottom: max(18px, env(safe-area-inset-bottom, 0px));
+}
+
+/*
+ * The keyboard legend, hidden.
+ *
+ * `[ SPACE ]` under the socket is a lie on a phone — there is no Space key, and
+ * the badge is occupying the row where the thumb actually rests. The socket's
+ * own ready/cooldown states carry the information the badge was decorating.
+ */
+body.touch-mode .socket__key {
+  display: none;
+}
+
+/*
+ * The pause bay is ~30px wide — a 14px glyph in 8px of padding — which is a
+ * miss waiting to happen next to a thumb that is already busy steering. The
+ * plate is 9-sliced so it simply draws wider; nothing needs redrawing.
+ *
+ * Its height comes from `.tbay` at 50px and is already past the floor, so only
+ * the cross-axis needs the minimum. Top-edge safe-area is handled for the whole
+ * HUD by #ui-layer's padding, so the notch is already accounted for here.
+ */
+body.touch-mode .tbay--pause {
+  min-width: 48px;
 }

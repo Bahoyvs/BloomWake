@@ -35,6 +35,7 @@ import { REWARD_TIERS } from '../data/rewards.js';
 import { describeSkillProgress, resolveSkillDefAtLevel } from '../core/meta-economy.js';
 import { MAX_SKILL_LEVEL } from '../data/crates-config.js';
 import { CRATE_STENCIL } from './crate-modal.js';
+import { ABANDON_REWARD_THRESHOLD_WAVE } from '../core/meta-progression.js';
 
 /**
  * Player-facing tier names. The keys stay the English identifiers the reward
@@ -140,11 +141,18 @@ export class MetaUi {
    * @param {() => Object} handlers.getEconomy - Crate economy state, which holds
    *   the game's single Scrap balance and the chip inventory
    * @param {() => void} handlers.onPlay
+   * @param {() => void} [handlers.onOpenSettings] - Settings pressed in the menu
    * @param {(id: string) => void} handlers.onBuyUpgrade
    * @param {(id: string) => void} handlers.onBuyCosmetic
    * @param {(id: string) => void} handlers.onEquipCosmetic
    * @param {(id: string) => void} handlers.onEquipSkill
    * @param {() => void} handlers.onClaimDaily
+   * @param {() => void} [handlers.onReturnToHangar] - Leaving the DEBRIEF for
+   *   the main menu. Separate from the shop's Back button, which also lands on
+   *   the menu, because this one is the end of a run — the natural break the
+   *   midgame interstitial is placed at. Optional: with no handler the screen
+   *   simply navigates, which is what keeps this component usable without the
+   *   portal wired up.
    */
   constructor(root, handlers = {}) {
     this.root = root;
@@ -172,6 +180,7 @@ export class MetaUi {
             <div class="meta__menu-actions">
               <button class="meta__btn meta__btn--primary" data-meta="play">Launch Mission</button>
               <button class="meta__btn" data-meta="open-shop">Salvage Depot</button>
+              <button class="meta__btn" data-meta="open-settings">Settings</button>
               <button class="meta__btn meta__btn--daily" data-meta="daily"></button>
             </div>
 
@@ -216,6 +225,14 @@ export class MetaUi {
           <div class="console__tab console__tab--amber">[ DEBRIEF // MISSION REPORT ]</div>
           <div class="console__body">
             <h2 class="meta__heading" data-meta="results-title">Mission Complete</h2>
+
+            <!--
+              Forfeit notice: an abandoned run that quit before the first boss
+              wave. Sits ABOVE the score box on purpose — the player has to see
+              why the capsule and the crate below are both about to be missing
+              before they go looking for numbers that will not be there.
+            -->
+            <p class="meta__warning" data-meta="results-warning" hidden></p>
 
             <div class="meta__summary" data-meta="results-summary"></div>
 
@@ -271,8 +288,22 @@ export class MetaUi {
     this.el.again.addEventListener('click', () => this.handlers.onPlay?.());
     this.el['open-shop'].addEventListener('click', () => this.showShop());
     this.el['close-shop'].addEventListener('click', () => this.showMenu());
-    this.el['to-menu'].addEventListener('click', () => this.showMenu());
+    /*
+     * The run is over, the crate is banked and nothing is half-finished on
+     * screen — the one moment in the game where an interstitial interrupts
+     * nothing. The handler owns both the ad and the navigation, because the
+     * menu has to appear whether or not an ad played and this screen cannot
+     * know which happened.
+     */
+    this.el['to-menu'].addEventListener('click', () => {
+      if (this.handlers.onReturnToHangar) this.handlers.onReturnToHangar();
+      else this.showMenu();
+    });
     this.el.daily.addEventListener('click', () => this.handlers.onClaimDaily?.());
+    // The menu's way in. The pause screen has the other one, and a player who
+    // wants to turn the shake down before their first run must not have to
+    // start a run to reach it.
+    this.el['open-settings'].addEventListener('click', () => this.handlers.onOpenSettings?.());
     this.el['open-crate'].addEventListener('click', () => this.handlers.onOpenCrate?.());
     this.el['odds-toggle'].addEventListener('click', () => {
       this.el.odds.classList.toggle('meta__odds--visible');
@@ -315,6 +346,17 @@ export class MetaUi {
   /** Hide all meta screens so the run is visible. */
   hide() {
     this.showScreen(null);
+  }
+
+  /**
+   * @returns {boolean} Whether the main menu is the screen currently up.
+   *
+   * Asked by the re-hydration path: signing in swaps which account's Scrap
+   * balance is live, and the menu is the one screen that has that number
+   * printed on it.
+   */
+  isMenuVisible() {
+    return this.el.menu.classList.contains('meta__screen--visible');
   }
 
   /* ------------------------------------------------------------------ */
@@ -479,10 +521,14 @@ export class MetaUi {
    * Show the mission debrief with the run's large salvage capsule.
    *
    * @param {Object} result - Run outcome {wave, score, kills, won}
-   * @param {Object} capsule - From completeRun(): {reward, newCosmetics, pityApplied, odds}
+   * @param {Object} capsule - From completeRun(): {reward, newCosmetics,
+   *   pityApplied, odds}, or from forfeitRunRewards() when the run was
+   *   abandoned before the reward threshold: {reward: {scrap: 0, ...},
+   *   newCosmetics: [], pityApplied: false, odds: null, forfeited: true}
    * @param {Object} [crate] - The salvage crate the run earned, from openCrate().
    *   Omitted leaves the crate console hidden, so a run that somehow failed to
-   *   award one shows a debrief without it rather than an empty box.
+   *   award one shows a debrief without it rather than an empty box. Always
+   *   omitted when `capsule.forfeited` is true.
    */
   showResults(result, capsule, crate = null) {
     this.el['results-title'].textContent = result.won ? 'Mission Complete' : 'Hive Wins';
@@ -498,26 +544,50 @@ export class MetaUi {
       )
       .join('');
 
-    const { reward, newCosmetics, pityApplied, odds } = capsule;
-
-    this.el['capsule-tier'].textContent = TIER_LABEL[reward.tier] ?? reward.tier;
-    this.el['capsule-tier'].className = `meta__tier meta__tier--${reward.tier}`;
-    this.el['capsule-scrap'].textContent = `+${reward.scrap} Scrap`;
-    this.el['capsule-drop'].textContent = newCosmetics.length
-      ? `New livery unlocked: ${newCosmetics.join(', ')}`
-      : pityApplied
-        ? 'Pity guarantee applied'
-        : '';
-
-    this.el.odds.innerHTML = renderOdds(odds);
+    /*
+     * A forfeited run (Abandon Run before the first boss wave) never rolled a
+     * capsule — forfeitRunRewards() hands back a zeroed reward specifically so
+     * this branch never has to guess whether one exists. The capsule display,
+     * the odds toggle and the crate console are hidden rather than shown at
+     * zero: a "+0 Scrap" capsule still looks like a reward, and the warning
+     * banner above the score box is the honest version of that message.
+     */
+    const forfeited = Boolean(capsule.forfeited);
+    this.el['results-warning'].hidden = !forfeited;
+    if (forfeited) {
+      this.el['results-warning'].textContent =
+        `// MISSION ABORTED: INSUFFICIENT PROGRESS (MIN. WAVE ${ABANDON_REWARD_THRESHOLD_WAVE}) // NO SALVAGE RECOVERED`;
+    }
+    this.el.capsule.hidden = forfeited;
+    this.el['odds-toggle'].hidden = forfeited;
     this.el.odds.classList.remove('meta__odds--visible');
 
-    this.renderCrateAward(crate);
+    if (!forfeited) {
+      const { reward, newCosmetics, pityApplied, odds } = capsule;
 
-    // Restart the capsule-opening animation from closed each time.
-    this.el.capsule.classList.remove('meta__capsule--open');
-    void this.el.capsule.offsetWidth;
-    this.el.capsule.classList.add('meta__capsule--open');
+      this.el['capsule-tier'].textContent = TIER_LABEL[reward.tier] ?? reward.tier;
+      this.el['capsule-tier'].className = `meta__tier meta__tier--${reward.tier}`;
+      this.el['capsule-scrap'].textContent = `+${reward.scrap} Scrap`;
+      this.el['capsule-drop'].textContent = newCosmetics.length
+        ? `New livery unlocked: ${newCosmetics.join(', ')}`
+        : pityApplied
+          ? 'Pity guarantee applied'
+          : '';
+
+      this.el.odds.innerHTML = renderOdds(odds);
+
+      // Restart the capsule-opening animation from closed each time.
+      this.el.capsule.classList.remove('meta__capsule--open');
+      void this.el.capsule.offsetWidth;
+      this.el.capsule.classList.add('meta__capsule--open');
+    } else {
+      this.el.odds.innerHTML = '';
+    }
+
+    // Forfeited implies no crate — finishRun never passes one for a forfeited
+    // run — but the guard costs nothing and keeps this method correct even if
+    // a future caller gets that ordering wrong.
+    this.renderCrateAward(forfeited ? null : crate);
 
     this.showScreen('results');
   }
