@@ -30,6 +30,11 @@ const MAX_FRAME_TIME = 0.25;
 const state = new GameState(globalBus, { maxWaves: PHASE1.MAX_WAVES });
 const simulation = new Simulation({
   useCompositeBosses: true,
+  // Regular arrivals now come from src/data/roster-config.js's archetypes
+  // (spawnRosterEnemy) instead of the legacy Chitin Swarm roster, so the new
+  // species — spore_barrage at wave 4, brood_bastion at wave 5 — actually
+  // reach the field.
+  useRosterConfig: true,
   bus: globalBus,
   state,
   seed: Math.floor(Math.random() * 0xffffffff),

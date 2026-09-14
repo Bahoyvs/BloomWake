@@ -406,3 +406,104 @@ describe('roster-config in the simulation', () => {
     expect(sim.enemies.every((e) => e.archetypeId === 'larva_swarm')).toBe(true);
   });
 });
+
+describe('useRosterConfig — the wave engine spawns from roster-config', () => {
+  /**
+   * Runs a wave's chaff spawner for a while, periodically clearing the field
+   * so the concurrent cap never blocks a fresh draw, and collects every
+   * archetype id that landed. This goes through Simulation.update ->
+   * updateSpawning -> spawnRosterEnemy, not spawnRosterEnemy directly — it is
+   * the WAVE ENGINE's routing under test, not the picker function on its own
+   * (that is covered above).
+   *
+   * @param {number} wave
+   * @param {number} seed
+   * @returns {Set<string>} Every archetypeId seen (legacy spawns show as '').
+   */
+  function collectWaveSpawns(wave, seed, options = {}) {
+    const sim = new Simulation({ seed, useRosterConfig: true, ...options });
+    sim.startRun();
+    sim.state.wave = wave;
+    sim.spawner.beginWave(wave);
+
+    const seen = new Set();
+    for (let cycle = 0; cycle < 40; cycle++) {
+      for (let i = 0; i < 60; i++) sim.update(1 / 60);
+      for (const enemy of sim.enemies) seen.add(enemy.archetypeId);
+      // Clear the field rather than letting attrition happen naturally: the
+      // point is to keep drawing fresh spawns, not to simulate a real fight.
+      sim.enemies.length = 0;
+    }
+    return seen;
+  }
+
+  it('spawns nothing but larva_swarm on wave 1', () => {
+    expect(collectWaveSpawns(1, 77)).toEqual(new Set(['larva_swarm']));
+  });
+
+  it('adds spore_kiter and mantis_weaver from wave 2, dart_rammer from wave 3', () => {
+    expect(collectWaveSpawns(2, 77)).toEqual(
+      new Set(['larva_swarm', 'spore_kiter', 'mantis_weaver'])
+    );
+    const wave3 = collectWaveSpawns(3, 77);
+    expect(wave3.has('dart_rammer')).toBe(true);
+    expect(wave3.has('spore_barrage')).toBe(false);
+    expect(wave3.has('brood_bastion')).toBe(false);
+  });
+
+  it('lands spore_barrage on wave 4, not before', () => {
+    const wave4 = collectWaveSpawns(4, 77);
+    expect(wave4.has('spore_barrage')).toBe(true);
+    expect(wave4.has('brood_bastion')).toBe(false);
+  });
+
+  /**
+   * brood_bastion's minWave is 5, but wave 5 is a BOSS wave and
+   * WaveSpawner.beginWave shuts the chaff spawner off entirely for the whole
+   * of a boss wave (BOSS ARENA ISOLATION — see spawner.js). So "unlocked at
+   * wave 5" and "first seen on the field" are different waves here: it is
+   * unlocked on 5, and the field is next open to chaff on wave 6, which is
+   * where it actually shows up.
+   */
+  it('never spawns chaff during a boss wave, and brood_bastion arrives the next wave chaff reopens', () => {
+    expect(collectWaveSpawns(5, 77)).toEqual(new Set(['']));
+    const wave6 = collectWaveSpawns(6, 77);
+    expect(wave6.has('brood_bastion')).toBe(true);
+  });
+
+  it('leaves the legacy Chitin Swarm roster untouched when the flag is off', () => {
+    const sim = new Simulation({ seed: 77 });
+    sim.startRun();
+    sim.state.wave = 1;
+    sim.spawner.beginWave(1);
+    for (let i = 0; i < 120; i++) sim.update(1 / 60);
+
+    expect(sim.enemies.length).toBeGreaterThan(0);
+    expect(sim.enemies.every((e) => !e.archetypeId)).toBe(true);
+    expect(sim.enemies.every((e) => e.typeId === 'tarling')).toBe(true);
+  });
+
+  it('spawns the modular Hive Cruiser on wave 5 alongside roster-config chaff waves', () => {
+    const sim = new Simulation({ seed: 33, useRosterConfig: true, useCompositeBosses: true });
+    sim.startRun();
+
+    for (let wave = 1; wave <= 4; wave++) {
+      sim.state.wave = wave;
+      sim.spawner.beginWave(wave);
+      for (let i = 0; i < 30; i++) sim.update(1 / 60);
+      // Chaff from waves 1-4 isn't the point of this test — clear it so the
+      // wave-5 assertion below is about wave 5 alone.
+      sim.enemies.length = 0;
+    }
+
+    sim.state.wave = 5;
+    sim.spawner.beginWave(5);
+    for (let i = 0; i < 30; i++) sim.update(1 / 60);
+
+    expect(sim.compositeBosses).toHaveLength(1);
+    expect(sim.compositeBosses[0].templateId).toBe('hive_cruiser');
+    // The boss wave itself spawns no roster-config chaff — arena isolation
+    // applies to both catalogues equally.
+    expect(sim.enemies).toHaveLength(0);
+  });
+});

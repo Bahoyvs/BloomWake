@@ -66,6 +66,7 @@ export class Simulation {
     seed = 1337,
     maxWaves = PHASE1.MAX_WAVES,
     useCompositeBosses = false,
+    useRosterConfig = false,
   } = {}) {
     this.bus = bus ?? new EventBus();
     this.state = state ?? new GameState(this.bus, { maxWaves });
@@ -81,6 +82,20 @@ export class Simulation {
      * this file.
      */
     this.useCompositeBosses = useCompositeBosses;
+    /**
+     * Which chaff catalogue updateSpawning draws regular arrivals from.
+     *
+     * False keeps the shipped Chitin Swarm roster (src/data/enemies.js) via
+     * WaveSpawner.pickEnemyType + spawnEnemy — the species the balance and
+     * roster suites are written against. True switches regular arrivals to
+     * src/data/roster-config.js's archetypes via pickArchetypeForWave +
+     * spawnArchetype, unlocking larva_swarm/spore_kiter/mantis_weaver early,
+     * dart_rammer at wave 3, spore_barrage at wave 4 and brood_bastion at
+     * wave 5 — each by its own `minWave`/`spawnWeight`. Same FLAG contract as
+     * useCompositeBosses: which catalogue a wave spawns from is configuration,
+     * not a code edit.
+     */
+    this.useRosterConfig = useRosterConfig;
     this.spawner = new WaveSpawner(this.rng);
     this.spatialGrid = new SpatialHashGrid(64);
 
@@ -574,11 +589,17 @@ export class Simulation {
       this.spawner.close();
     }
 
-    // Spawn regular enemies up to concurrent cap
+    // Spawn regular enemies up to concurrent cap. WaveSpawner still owns the
+    // TIMING (cap, interval, spawn ring) regardless of catalogue — only WHICH
+    // species fills each slot changes with the flag.
     const toSpawn = this.spawner.update(dt, this.enemies.length);
     for (let i = 0; i < toSpawn; i++) {
-      const enemyDef = this.spawner.pickEnemyType();
-      this.spawnEnemy(enemyDef.id);
+      if (this.useRosterConfig) {
+        this.spawnRosterEnemy(this.state.wave);
+      } else {
+        const enemyDef = this.spawner.pickEnemyType();
+        this.spawnEnemy(enemyDef.id);
+      }
     }
   }
 
