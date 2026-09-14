@@ -25,6 +25,9 @@ public/assets/                 (generated — this is what ships)
     panel_card.png             level-up card plate (9-sliced in hud.css)
     panel_glass.png            translucent plate
     panel_button.png           button plate
+    console_plate.png          meta-UI chassis: riveted steel (9-sliced at 16)
+    console_bay.png            meta-UI sub-console face, 4 screws
+    console_key.png            meta-UI key, depth plinth baked into the bottom
     badge_common.png           rarity badges: blue / green / yellow / red
     badge_uncommon.png
     badge_rare.png

@@ -210,6 +210,12 @@ const UI_FILES = [
   ['PNG/Extra/Default/panel_rectangle.png', 'panel_card.png'],
   ['PNG/Extra/Default/panel_glass.png', 'panel_glass.png'],
   ['PNG/Extra/Default/button_rectangle.png', 'panel_button.png'],
+  // Meta-UI console chrome. All three 9-slice at 16px, which is what keeps the
+  // corner screws intact: every screw sits at source pixels 8-11 from its edge,
+  // so a 16px corner region contains one whole and stretches none of it.
+  ['PNG/Extra/Default/panel_rectangle_screws.png', 'console_plate.png'],
+  ['PNG/Extra/Default/panel_glass_screws.png', 'console_bay.png'],
+  ['PNG/Extra/Default/button_rectangle_depth.png', 'console_key.png'],
   // Rarity badge colours, per the theme spec: blue/green/yellow/red.
   ['PNG/Blue/Default/button_square_header_notch_square.png', 'badge_common.png'],
   ['PNG/Green/Default/button_square_header_notch_square.png', 'badge_uncommon.png'],

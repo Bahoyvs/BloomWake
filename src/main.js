@@ -18,6 +18,7 @@ import { assets, ASSET_MANIFEST } from './core/assets.js';
 import { createPixiLoader, installPlaceholders } from './render/pixi-loader.js';
 import { reportAssetContrast } from './render/asset-audit.js';
 import { Hud } from './ui/hud.js';
+import { equipActiveSkill } from './core/active-skills.js';
 import { MetaUi } from './ui/meta-ui.js';
 import { loadSave, saveState } from './ui/storage.js';
 
@@ -28,6 +29,7 @@ const MAX_FRAME_TIME = 0.25;
 
 const state = new GameState(globalBus, { maxWaves: PHASE1.MAX_WAVES });
 const simulation = new Simulation({
+  useCompositeBosses: true,
   bus: globalBus,
   state,
   seed: Math.floor(Math.random() * 0xffffffff),
@@ -83,6 +85,11 @@ const metaUi = new MetaUi(uiLayer, {
     if (result.ok) commitMeta(result.state);
     metaUi.renderShop();
   },
+  onEquipSkill: (id) => {
+    const result = equipActiveSkill(metaState, id);
+    if (result.ok) commitMeta(result.state);
+    metaUi.renderShop();
+  },
   onClaimDaily: () => {
     const result = claimDailyBloom(metaState, Date.now(), rewardRng);
     if (result.ok) {
@@ -121,6 +128,9 @@ const input = new KeyboardInput({
       startRun();
     }
   },
+  // Space and Shift both cast. simulation.triggerActiveSkill refuses outside a
+  // running state, so this shares Space with onConfirm without a guard here.
+  onSkill: () => simulation.triggerActiveSkill(),
   onPause: () => {
     if (state.currentState === GAME_STATES.RUNNING) state.pause();
     else if (state.currentState === GAME_STATES.PAUSED) state.resume();

@@ -7,7 +7,7 @@
   <meta name="description" content="A survivor-arena web game: the Void Drifter holds the line against the Chitin Swarm." />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@600;700&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
   <style>
     * {
       box-sizing: border-box;
@@ -71,22 +71,32 @@
       z-index: 10;
     }
 
+    /*
+     * Same industrial mark the menu uses, inlined because the boot screen runs
+     * before any stylesheet module has been imported. The eight-way ring is a
+     * 2px outline drawn with shadows rather than -webkit-text-stroke, which
+     * centres its stroke and would eat into the glyph at this weight.
+     */
     #boot-mark {
+      font-family: 'Chakra Petch', 'Outfit', sans-serif;
       font-size: clamp(28px, 7vw, 54px);
-      font-weight: 800;
-      letter-spacing: 0.22em;
-      background: linear-gradient(180deg, #eafdff, #00f0ff);
-      -webkit-background-clip: text;
-      background-clip: text;
-      color: transparent;
-      filter: drop-shadow(0 0 26px rgba(0, 240, 255, 0.55));
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      color: #dcdde1;
+      text-shadow:
+        -2px -2px 0 #10182a, 2px -2px 0 #10182a,
+        -2px 2px 0 #10182a, 2px 2px 0 #10182a,
+        0 -2px 0 #10182a, 0 2px 0 #10182a,
+        -2px 0 0 #10182a, 2px 0 0 #10182a,
+        0 6px 0 rgba(16, 24, 42, 0.92),
+        0 9px 14px rgba(0, 0, 0, 0.6);
     }
 
     #boot-status {
       font-size: 12px;
       letter-spacing: 0.18em;
       text-transform: uppercase;
-      color: #5c7f96;
+      color: #7f8fa6;
     }
   </style>
 </head>

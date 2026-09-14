@@ -202,6 +202,14 @@ export const UI_ASSETS = {
   CARD_PANEL: `${ASSET_ROOT.UI}panel_card.png`,
   GLASS_PANEL: `${ASSET_ROOT.UI}panel_glass.png`,
   BUTTON_PANEL: `${ASSET_ROOT.UI}panel_button.png`,
+  /*
+   * Meta-UI console chrome: the riveted chassis the menu and the Salvage Depot
+   * are built from, the lighter sub-console face its cards use, and the raised
+   * key with the depth plinth its buttons use. All three 9-slice at 16px.
+   */
+  CONSOLE_PLATE: `${ASSET_ROOT.UI}console_plate.png`,
+  CONSOLE_BAY: `${ASSET_ROOT.UI}console_bay.png`,
+  CONSOLE_KEY: `${ASSET_ROOT.UI}console_key.png`,
   BADGE_COMMON: `${ASSET_ROOT.UI}badge_common.png`,
   BADGE_UNCOMMON: `${ASSET_ROOT.UI}badge_uncommon.png`,
   BADGE_RARE: `${ASSET_ROOT.UI}badge_rare.png`,

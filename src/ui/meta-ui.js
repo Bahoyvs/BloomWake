@@ -2,21 +2,34 @@
  * Meta-progression UI: main menu, Salvage Depot, mission-debrief results
  * screen, wave-clear toast, daily-shipment indicator.
  *
- * COPY IS TRANSLATED HERE, NOT IN THE DATA.
+ * ALL COPY IS ENGLISH.
  * The reward tiers, the currency and the upgrade ids keep their original
  * English keys in src/data/ and src/core/ — they are save-game and dispatch
- * keys. This module is where they become words a player reads, which is the
- * same split RARITY_LABEL uses in hud.js.
+ * keys — and the words a player reads happen to be English too, on both this
+ * screen and the in-run HUD (src/data/cards.js). Kept as its own module
+ * rather than folded into the data tables anyway: a reward tier or an
+ * upgrade id is a save-game key first, and tying its shape to what a menu
+ * displays would make the data table awkward to touch for anyone who isn't
+ * currently editing copy.
  *
  * Strictly a view layer, same separation as Phases 1-4: it renders whatever the
  * core action functions return and never mutates meta-state itself. Every
  * purchase goes out through a handler, comes back as {ok, reason, state}, and
  * the screen re-renders from that.
+ *
+ * EVERY SCREEN IS A CONSOLE.
+ * The three meta screens share one chassis component — `.console`, a riveted
+ * Kenney sci-fi plate with a coloured title tab — rather than floating their
+ * contents on the void. The tab colour is the screen's job: blue for systems,
+ * red for the depot, amber for economy. Markup for that chassis is built here
+ * and its art lives in meta-ui.css, so adding a screen is a matter of picking
+ * a tab colour, not of restating a panel.
  */
 
 import './meta-ui.css';
 import { describeShop } from '../core/meta-shop.js';
 import { describeCosmetics } from '../core/cosmetics.js';
+import { describeActiveSkills } from '../core/active-skills.js';
 import { isDailyBloomAvailable, msUntilNextLocalDay } from '../core/daily-bloom.js';
 import { REWARD_TIERS } from '../data/rewards.js';
 
@@ -25,11 +38,63 @@ import { REWARD_TIERS } from '../data/rewards.js';
  * tables and CSS class suffixes use; only the words change.
  */
 const TIER_LABEL = {
-  common: 'Yaygın',
-  uncommon: 'Sıra Dışı',
-  rare: 'Nadir',
-  legendary: 'Efsanevi',
+  common: 'Common',
+  uncommon: 'Uncommon',
+  rare: 'Rare',
+  legendary: 'Legendary',
 };
+
+/**
+ * The stencilled corner tab on each upgrade bay.
+ *
+ * Keyed by the same English upgrade ids src/data/meta-upgrades.js owns, for the
+ * same reason TIER_LABEL is: those ids are save-game keys and stay English,
+ * while the words a player reads are decided here. Anything unmapped falls back
+ * to a bay number, so a new upgrade renders a plausible tab rather than blank.
+ */
+const BAY_LABEL = {
+  startHp: 'HULL',
+  pickupRadius: 'PULL',
+  startSpeed: 'THRUST',
+  fourthCardSlot: 'SLOT',
+};
+
+/**
+ * The scrap wallet as a recessed console badge: an amber energy cell beside the
+ * count, in place of a line of text.
+ *
+ * @param {string} slot - data-meta key the count element answers to
+ * @returns {string}
+ */
+function scrapBadge(slot) {
+  const cells = '<i></i>'.repeat(5);
+  return `
+    <div class="scrap">
+      <span class="scrap__cell" aria-hidden="true">${cells}</span>
+      <b class="scrap__count" data-meta="${slot}">0</b>
+      <span class="scrap__unit">Scrap</span>
+    </div>`;
+}
+
+/**
+ * Level as a segmented cell meter rather than a "3 / 5" string.
+ *
+ * The numbers still reach a screen reader through the label, because the
+ * segments carry no text of their own — `role="img"` collapses the strip of
+ * <i>s into that one description.
+ *
+ * @param {number} level
+ * @param {number} maxLevel
+ * @param {string} label - what the meter reads as, e.g. "Level 3 of 5"
+ * @returns {string}
+ */
+function meter(level, maxLevel, label) {
+  const segments = Array.from(
+    { length: maxLevel },
+    (_, i) => `<i class="meter__seg${i < level ? ' meter__seg--on' : ''}"></i>`
+  ).join('');
+  return `<div class="meter" role="img" aria-label="${label}">${segments}</div>`;
+}
 
 export class MetaUi {
   /**
@@ -40,6 +105,7 @@ export class MetaUi {
    * @param {(id: string) => void} handlers.onBuyUpgrade
    * @param {(id: string) => void} handlers.onBuyCosmetic
    * @param {(id: string) => void} handlers.onEquipCosmetic
+   * @param {(id: string) => void} handlers.onEquipSkill
    * @param {() => void} handlers.onClaimDaily
    */
   constructor(root, handlers = {}) {
@@ -57,57 +123,75 @@ export class MetaUi {
     this.layer.innerHTML = `
       <!-- Main menu -->
       <section class="meta__screen meta__screen--menu" data-meta="menu">
-        <h1 class="meta__title">BloomWake</h1>
-        <p class="meta__tagline">Void Drifter // Chitin Swarm</p>
+        <div class="console console--menu">
+          <div class="console__tab console__tab--blue">TERMINAL // SECTOR CONTROL</div>
+          <div class="console__body">
+            <h1 class="meta__title">BloomWake</h1>
+            <p class="meta__tagline">Void Drifter // Chitin Swarm</p>
 
-        <div class="meta__wallet"><b data-meta="menu-petals">0</b> Hurda</div>
+            ${scrapBadge('menu-petals')}
 
-        <div class="meta__menu-actions">
-          <button class="meta__btn meta__btn--primary" data-meta="play">Görevi Başlat</button>
-          <button class="meta__btn" data-meta="open-shop">Hurda Deposu</button>
-          <button class="meta__btn meta__btn--daily" data-meta="daily"></button>
+            <div class="meta__menu-actions">
+              <button class="meta__btn meta__btn--primary" data-meta="play">Launch Mission</button>
+              <button class="meta__btn" data-meta="open-shop">Salvage Depot</button>
+              <button class="meta__btn meta__btn--daily" data-meta="daily"></button>
+            </div>
+
+            <p class="meta__stats" data-meta="menu-stats"></p>
+          </div>
         </div>
-
-        <p class="meta__stats" data-meta="menu-stats"></p>
       </section>
 
       <!-- Salvage depot -->
-      <section class="meta__screen" data-meta="shop">
-        <header class="meta__header">
-          <h2 class="meta__heading">Hurda Deposu</h2>
-          <div class="meta__wallet"><b data-meta="shop-petals">0</b> Hurda</div>
-        </header>
+      <section class="meta__screen meta__screen--shop" data-meta="shop">
+        <div class="console console--bay">
+          <div class="console__tab console__tab--red">[ REINFORCEMENT BAY // SALVAGE DEPOT ]</div>
+          <div class="console__body">
+            <header class="meta__header">
+              <h2 class="meta__heading">Salvage Depot</h2>
+              ${scrapBadge('shop-petals')}
+            </header>
 
-        <h3 class="meta__section-label">Kalıcı Yükseltmeler</h3>
-        <div class="meta__grid" data-meta="upgrades"></div>
+            <h3 class="meta__section-label">Permanent Upgrades</h3>
+            <div class="meta__grid" data-meta="upgrades"></div>
 
-        <h3 class="meta__section-label">Drifter Livreleri</h3>
-        <div class="meta__grid" data-meta="cosmetics"></div>
+            <h3 class="meta__section-label">Tactical Systems</h3>
+            <div class="meta__grid" data-meta="skills"></div>
 
-        <button class="meta__btn meta__back" data-meta="close-shop">Geri</button>
+            <h3 class="meta__section-label">Drifter Liveries</h3>
+            <div class="meta__grid" data-meta="cosmetics"></div>
+
+            <button class="meta__btn meta__back" data-meta="close-shop">Back</button>
+          </div>
+        </div>
       </section>
 
       <!-- Mission debrief -->
       <section class="meta__screen meta__screen--results" data-meta="results">
-        <h2 class="meta__heading" data-meta="results-title">Görev Tamamlandı</h2>
+        <div class="console console--results">
+          <div class="console__tab console__tab--amber">[ DEBRIEF // MISSION REPORT ]</div>
+          <div class="console__body">
+            <h2 class="meta__heading" data-meta="results-title">Mission Complete</h2>
 
-        <div class="meta__summary" data-meta="results-summary"></div>
+            <div class="meta__summary" data-meta="results-summary"></div>
 
-        <div class="meta__capsule" data-meta="capsule">
-          <div class="meta__bud" data-meta="bud"></div>
-          <div class="meta__capsule-reveal" data-meta="capsule-reveal">
-            <span class="meta__tier" data-meta="capsule-tier"></span>
-            <span class="meta__petals" data-meta="capsule-petals"></span>
-            <span class="meta__drop" data-meta="capsule-drop"></span>
+            <div class="meta__capsule" data-meta="capsule">
+              <div class="meta__bud" data-meta="bud"></div>
+              <div class="meta__capsule-reveal" data-meta="capsule-reveal">
+                <span class="meta__tier" data-meta="capsule-tier"></span>
+                <span class="meta__petals" data-meta="capsule-petals"></span>
+                <span class="meta__drop" data-meta="capsule-drop"></span>
+              </div>
+            </div>
+
+            <button class="meta__odds-btn" data-meta="odds-toggle" title="Show drop odds">?</button>
+            <div class="meta__odds" data-meta="odds"></div>
+
+            <div class="meta__results-actions">
+              <button class="meta__btn meta__btn--primary" data-meta="again">Fly Again</button>
+              <button class="meta__btn" data-meta="to-menu">Menu</button>
+            </div>
           </div>
-        </div>
-
-        <button class="meta__odds-btn" data-meta="odds-toggle" title="Düşme oranlarını göster">?</button>
-        <div class="meta__odds" data-meta="odds"></div>
-
-        <div class="meta__results-actions">
-          <button class="meta__btn meta__btn--primary" data-meta="again">Tekrar Uç</button>
-          <button class="meta__btn" data-meta="to-menu">Menu</button>
         </div>
       </section>
 
@@ -172,15 +256,15 @@ export class MetaUi {
     this.el['menu-petals'].textContent = state.petals;
     const runs = state.stats.totalRuns;
     this.el['menu-stats'].textContent = runs
-      ? `${runs} görev · en iyi dalga ${state.stats.bestWaveReached}`
-      : 'Henüz görev yok.';
+      ? `${runs} runs · best wave ${state.stats.bestWaveReached}`
+      : 'No runs yet.';
 
     const available = isDailyBloomAvailable(state.dailyBloom.lastClaimedAt, nowMs);
     this.el.daily.disabled = !available;
     this.el.daily.classList.toggle('meta__btn--ready', available);
     this.el.daily.textContent = available
-      ? 'Günlük Sevkiyat · Hazır'
-      : `Günlük Sevkiyat · ${formatCountdown(msUntilNextLocalDay(nowMs))}`;
+      ? 'Daily Shipment · Ready'
+      : `Daily Shipment · ${formatCountdown(msUntilNextLocalDay(nowMs))}`;
   }
 
   /* ------------------------------------------------------------------ */
@@ -193,17 +277,46 @@ export class MetaUi {
 
     this.el.upgrades.innerHTML = describeShop(state)
       .map(
-        (row) => `
-        <article class="meta__card${row.maxed ? ' meta__card--maxed' : ''}">
-          <h4 class="meta__card-name">${row.name}</h4>
-          <p class="meta__card-desc">${row.description}</p>
-          <div class="meta__card-level">${
-            row.maxLevel > 1 ? `Seviye ${row.level} / ${row.maxLevel}` : row.level ? 'Açık' : 'Kilitli'
-          }</div>
+        (row, index) => `
+        <article class="bay${row.maxed ? ' bay--maxed' : ''}">
+          <span class="bay__tab">${BAY_LABEL[row.id] ?? `BAY ${String(index + 1).padStart(2, '0')}`}</span>
+          <h4 class="bay__name">${row.name}</h4>
+          <p class="bay__desc">${row.description}</p>
+          ${meter(
+            row.level,
+            row.maxLevel,
+            row.maxLevel > 1
+              ? `Level ${row.level} of ${row.maxLevel}`
+              : row.level
+                ? 'Unlocked'
+                : 'Locked'
+          )}
           <button class="meta__btn meta__btn--buy" data-upgrade="${row.id}"
             ${row.maxed || !row.affordable ? 'disabled' : ''}>
-            ${row.maxed ? 'Tam' : `${row.cost} Hurda`}
+            ${row.maxed ? 'Maxed' : `${row.cost} Scrap`}
           </button>
+        </article>`
+      )
+      .join('');
+
+    /*
+     * Active skills. Every one is always selectable — they are a tactical
+     * choice rather than a purchase, so these cards carry no price and the
+     * button is only ever Equip or Equipped.
+     */
+    this.el.skills.innerHTML = describeActiveSkills(state)
+      .map(
+        (row) => `
+        <article class="bay bay--livery${row.equipped ? ' bay--equipped' : ''}">
+          <span class="bay__tab">${row.mark} SYSTEM</span>
+          <h4 class="bay__name">${row.name}</h4>
+          <p class="bay__desc">${row.description}</p>
+          <div class="bay__status">${row.cooldown}s cooldown${
+            row.duration > 0 ? ` · ${row.duration}s active` : ' · instant'
+          }</div>
+          <button class="meta__btn meta__btn--buy" data-skill="${row.id}" ${
+            row.equipped ? 'disabled' : ''
+          }>${row.equipped ? 'Equipped' : 'Equip'}</button>
         </article>`
       )
       .join('');
@@ -211,20 +324,23 @@ export class MetaUi {
     this.el.cosmetics.innerHTML = describeCosmetics(state)
       .map(
         (row) => `
-        <article class="meta__card${row.equipped ? ' meta__card--equipped' : ''}">
-          <h4 class="meta__card-name">${row.name}</h4>
-          <p class="meta__card-desc">${row.description}</p>
-          <div class="meta__card-level">${
-            row.locked ? 'Yalnızca efsanevi kapsülden' : row.owned ? 'Sahip' : `${row.cost} Hurda`
+        <article class="bay bay--livery${row.equipped ? ' bay--equipped' : ''}${
+          row.locked ? ' bay--locked' : ''
+        }">
+          <span class="bay__tab">LIVERY</span>
+          <h4 class="bay__name">${row.name}</h4>
+          <p class="bay__desc">${row.description}</p>
+          <div class="bay__status">${
+            row.locked ? 'Legendary capsule only' : row.owned ? 'Owned' : `${row.cost} Scrap`
           }</div>
           ${
             row.owned
               ? `<button class="meta__btn meta__btn--buy" data-equip="${row.id}" ${
                   row.equipped ? 'disabled' : ''
-                }>${row.equipped ? 'Takılı' : 'Tak'}</button>`
+                }>${row.equipped ? 'Equipped' : 'Equip'}</button>`
               : `<button class="meta__btn meta__btn--buy" data-cosmetic="${row.id}" ${
                   row.affordable ? '' : 'disabled'
-                }>${row.locked ? 'Kilitli' : 'Satın Al'}</button>`
+                }>${row.locked ? 'Locked' : 'Purchase'}</button>`
           }
         </article>`
       )
@@ -232,6 +348,9 @@ export class MetaUi {
 
     for (const button of this.el.upgrades.querySelectorAll('[data-upgrade]')) {
       button.addEventListener('click', () => this.handlers.onBuyUpgrade?.(button.dataset.upgrade));
+    }
+    for (const button of this.el.skills.querySelectorAll('[data-skill]')) {
+      button.addEventListener('click', () => this.handlers.onEquipSkill?.(button.dataset.skill));
     }
     for (const button of this.el.cosmetics.querySelectorAll('[data-cosmetic]')) {
       button.addEventListener('click', () => this.handlers.onBuyCosmetic?.(button.dataset.cosmetic));
@@ -252,12 +371,12 @@ export class MetaUi {
    * @param {Object} capsule - From completeRun(): {reward, newCosmetics, pityApplied, odds}
    */
   showResults(result, capsule) {
-    this.el['results-title'].textContent = result.won ? 'Görev Tamamlandı' : 'Kovan Kazandı';
+    this.el['results-title'].textContent = result.won ? 'Mission Complete' : 'Hive Wins';
 
     this.el['results-summary'].innerHTML = [
-      ['Dalga', result.wave],
-      ['Skor', result.score],
-      ['Kill', result.kills],
+      ['Wave', result.wave],
+      ['Score', result.score],
+      ['Kills', result.kills],
     ]
       .map(
         ([label, value]) =>
@@ -269,11 +388,11 @@ export class MetaUi {
 
     this.el['capsule-tier'].textContent = TIER_LABEL[reward.tier] ?? reward.tier;
     this.el['capsule-tier'].className = `meta__tier meta__tier--${reward.tier}`;
-    this.el['capsule-petals'].textContent = `+${reward.petals} Hurda`;
+    this.el['capsule-petals'].textContent = `+${reward.petals} Scrap`;
     this.el['capsule-drop'].textContent = newCosmetics.length
-      ? `Yeni livre açıldı: ${newCosmetics.join(', ')}`
+      ? `New livery unlocked: ${newCosmetics.join(', ')}`
       : pityApplied
-        ? 'Telafi garantisi uygulandı'
+        ? 'Pity guarantee applied'
         : '';
 
     this.el.odds.innerHTML = renderOdds(odds);
@@ -301,7 +420,7 @@ export class MetaUi {
   showToast(reward) {
     this.el.toast.innerHTML =
       `<span class="meta__toast-tier meta__toast-tier--${reward.tier}">` +
-      `${TIER_LABEL[reward.tier] ?? reward.tier}</span> Kurtarma Kapsülü · +${reward.petals} Hurda`;
+      `${TIER_LABEL[reward.tier] ?? reward.tier}</span> Salvage Capsule · +${reward.petals} Scrap`;
     this.el.toast.classList.add('meta__toast--visible');
 
     clearTimeout(this.toastTimer);
@@ -325,7 +444,7 @@ function renderOdds(odds) {
   ).join('');
 
   return `
-    <p class="meta__odds-title">Düşme oranları · dalga ${range}</p>
+    <p class="meta__odds-title">Drop odds · wave ${range}</p>
     <table class="meta__odds-table">${rows}</table>
   `;
 }

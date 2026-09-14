@@ -42,8 +42,15 @@ import {
   BOSS_PHASES,
 } from '../data/enemies.js';
 import { PROJECTILE_KINDS } from './cards.js';
+import { ActiveSkillSystem } from './active-skills.js';
+import { applyArchetype, stepEnemy } from './enemy-system.js';
+import { CompositeBoss } from './composite-boss.js';
+import { pickArchetypeForWave, pickBossTemplate } from '../data/roster-config.js';
 
 const STARTER_CARD_ID = 'dewdrop_barrage';
+
+/** Shared empty result for getCompositeTargets(). Never mutate this. */
+const EMPTY_ARRAY = [];
 
 export class Simulation {
   /**
@@ -53,10 +60,27 @@ export class Simulation {
    * @param {number} [options.seed] - Seed for deterministic spawning and drafts
    * @param {number} [options.maxWaves]
    */
-  constructor({ bus, state, seed = 1337, maxWaves = PHASE1.MAX_WAVES } = {}) {
+  constructor({
+    bus,
+    state,
+    seed = 1337,
+    maxWaves = PHASE1.MAX_WAVES,
+    useCompositeBosses = false,
+  } = {}) {
     this.bus = bus ?? new EventBus();
     this.state = state ?? new GameState(this.bus, { maxWaves });
     this.rng = mulberry32(seed);
+    /**
+     * Which boss a boss wave puts on the field.
+     *
+     * False keeps the shipped Dreadnought Station (src/data/enemies.js), whose
+     * phase-gating rules the balance suites are written against. True switches
+     * boss waves to the modular templates in roster-config. A FLAG rather than
+     * a code edit because that is the whole premise of the migration: the boss
+     * a wave spawns is configuration, and flipping it must not mean touching
+     * this file.
+     */
+    this.useCompositeBosses = useCompositeBosses;
     this.spawner = new WaveSpawner(this.rng);
     this.spatialGrid = new SpatialHashGrid(64);
 
@@ -125,7 +149,39 @@ export class Simulation {
      */
     this.enemyPool = new ObjectPool(makeEnemy, 64);
 
+    /**
+     * Modular bosses (src/core/composite-boss.js). A separate list from
+     * `enemies` on purpose: a composite boss is not one circle with one HP bar,
+     * so it cannot go through the enemy pool, the spatial grid, or the
+     * single-radius collision path without every one of them learning about
+     * parts. Kept apart, each stays simple and the boss owns its own hit
+     * resolution.
+     */
+    this.compositeBosses = [];
+    /**
+     * Reusable context handed to the enemy-system state machines.
+     *
+     * One object for the whole run rather than one per enemy per frame: at the
+     * 200-enemy cap a fresh literal here would be the single largest source of
+     * allocation in the tick. stepEnemy writes its aim vector into it, so
+     * nothing may hold a reference to it across calls.
+     */
+    this.behaviorCtx = {
+      target: null,
+      dirX: 0,
+      dirY: 0,
+      distance: 0,
+      rng: () => this.rng(),
+      fire: (spec) => this.spawnEnemyBullet(spec),
+      emit: (type, payload) => this.bus.emit(type, payload),
+    };
+
     this.cards = new CardSystem(this);
+    /**
+     * Pilot-triggered skills. Owns its own cooldown clock and effects; the
+     * Simulation only forwards `dt` and reads a handful of multipliers off it.
+     */
+    this.activeSkills = new ActiveSkillSystem(this);
     this.animation = new AnimationDirector(this.bus);
 
     this.nextEntityId = 1;
@@ -185,6 +241,7 @@ export class Simulation {
     this.enemyBullets.length = 0;
     this.effects.length = 0;
     this.enemies.length = 0;
+    this.compositeBosses.length = 0;
     this.orbs.length = 0;
     this.sporePools.length = 0;
     this.spatialGrid.clear();
@@ -193,6 +250,7 @@ export class Simulation {
     this.deathRay.active = false;
     this.deathRay.firing = false;
     this.cards.reset();
+    this.activeSkills.reset();
     this.animation.reset();
     this.playerMoving = false;
     this.playerVx = 0;
@@ -224,6 +282,10 @@ export class Simulation {
         applyMetaUpgradesToRunStart(metaState, DEFAULT_PLAYER_STATS)
       );
       this.offerCount = getDraftOfferCount(metaState, DRAFT_CFG.OFFER_COUNT);
+      // Equipped in the hangar, carried in here. equip() validates the id, so
+      // a save naming a skill this build does not have falls back rather than
+      // starting the run with a dead key.
+      this.activeSkills.equip(metaState.activeSkillId);
     } else {
       this.offerCount = DRAFT_CFG.OFFER_COUNT;
     }
@@ -264,8 +326,16 @@ export class Simulation {
     }
     if (this.state.currentState !== GAME_STATES.RUNNING) return;
 
+    /*
+     * Before the enemies move, not after. An Afterburner ram or a Singularity
+     * pull that resolves after updateEnemies would be overwritten by the
+     * enemy's own step on the same frame, so the push would be invisible for
+     * one tick and the crush would land on stale positions.
+     */
+    this.activeSkills.update(dt);
     this.updateSpawning(dt);
     this.updateEnemies(dt);
+    this.updateCompositeBosses(dt);
     this.updateSporePools(dt);
     this.updateBossTelegraph(dt);
     this.updateDeathRay(dt);
@@ -349,7 +419,11 @@ export class Simulation {
   updatePlayer(dt, input) {
     const player = this.state.player;
     const dir = normalize(input.x ?? 0, input.y ?? 0);
-    const speed = player.moveSpeed * this.cards.moveSpeedMultiplier * UNIT_PX;
+    const skills = this.activeSkills;
+    // Multiplicative with the card passive rather than replacing it: Afterburner
+    // on a Wingman build should be faster than Afterburner without one.
+    const speed =
+      player.moveSpeed * this.cards.moveSpeedMultiplier * skills.moveSpeedMultiplier * UNIT_PX;
     const thrusting = dir.x !== 0 || dir.y !== 0;
 
     // Movement INTENT, not displacement: a Dewling pushing into a wall is
@@ -359,7 +433,7 @@ export class Simulation {
     if (thrusting) {
       // Exponential approach — frame-rate independent, and it cannot overshoot
       // the target the way a fixed `v += a * dt` step can at a low frame rate.
-      const k = 1 - Math.exp(-PLAYER_CFG.ACCEL * dt);
+      const k = 1 - Math.exp(-PLAYER_CFG.ACCEL * skills.accelMultiplier * dt);
       this.playerVx += (dir.x * speed - this.playerVx) * k;
       this.playerVy += (dir.y * speed - this.playerVy) * k;
       // Facing follows INPUT, not velocity: during a drifting reversal the two
@@ -421,6 +495,34 @@ export class Simulation {
    */
   get wingmen() {
     return this.cards?.drones ?? [];
+  }
+
+  /**
+   * Fire the equipped active skill.
+   *
+   * The one entry point input has into the skill system, and it is deliberately
+   * a thin forward: the guard about WHEN a skill may be cast belongs here (a
+   * run must be in progress), the guard about WHETHER it is off cooldown
+   * belongs to the system that owns the clock.
+   *
+   * Safe to call on a held key or a repeated tap — a rejected cast is a no-op
+   * that reports why.
+   *
+   * @returns {{ok: boolean, reason?: string, skillId: string}}
+   */
+  triggerActiveSkill() {
+    if (this.state.currentState !== GAME_STATES.RUNNING) {
+      return { ok: false, reason: 'NOT_RUNNING', skillId: this.activeSkills.skillId };
+    }
+    return this.activeSkills.trigger();
+  }
+
+  /**
+   * The Point-Defense blades currently in the air, for the renderer.
+   * @returns {Array<{x: number, y: number, radius: number}>}
+   */
+  get skillBlades() {
+    return this.activeSkills.blades;
   }
 
   /**
@@ -524,9 +626,9 @@ export class Simulation {
     const pos =
       options && options.x !== undefined
         ? {
-            x: clamp(options.x, def.radius, WORLD.WIDTH - def.radius),
-            y: clamp(options.y, def.radius, WORLD.HEIGHT - def.radius),
-          }
+          x: clamp(options.x, def.radius, WORLD.WIDTH - def.radius),
+          y: clamp(options.y, def.radius, WORLD.HEIGHT - def.radius),
+        }
         : this.spawner.spawnPosition(this.state.player.x, this.state.player.y);
 
     const enemy = this.enemyPool.acquire();
@@ -546,6 +648,8 @@ export class Simulation {
     enemy.scoreValue = def.scoreValue;
     enemy.hitFlash = 0;
     enemy.orbitCooldown = 0;
+    enemy.pdCooldown = 0;
+    enemy.rammedTimer = 0;
     enemy.timeAlive = 0;
     enemy.sporeTimer = randomRange(this.rng, 1.0, 3.5);
     enemy.telegraphTimer = 0;
@@ -577,6 +681,69 @@ export class Simulation {
   }
 
   /**
+   * Spawn an enemy from the roster config.
+   *
+   * The parametric twin of spawnEnemy: same pool, same wave scaling, same
+   * animation stamp, but every number comes out of ENEMY_ARCHETYPES and the
+   * behaviour runs on src/core/enemy-system.js instead of on the switch in
+   * updateEnemies. A designer adding a species touches the config and nothing
+   * else.
+   *
+   * @param {string} archetypeId - Key from ENEMY_ARCHETYPES
+   * @param {Object} [options]
+   * @param {number} [options.x] - Spawn here instead of on the spawn ring
+   * @param {number} [options.y]
+   * @returns {Object} The spawned enemy
+   */
+  spawnArchetype(archetypeId, options = null) {
+    const wave = this.state.wave;
+    const pos =
+      options && options.x !== undefined
+        ? { x: options.x, y: options.y }
+        : this.spawner.spawnPosition(this.state.player.x, this.state.player.y);
+
+    const enemy = this.enemyPool.acquire();
+    applyArchetype(enemy, archetypeId, {
+      hpScale: getEnemyHpMultiplier(wave),
+      speedScale: getEnemySpeedMultiplier(wave),
+      rng: this.rng,
+    });
+
+    enemy.id = this.nextEntityId++;
+    enemy.isBoss = false;
+    enemy.x = clamp(pos.x, enemy.radius, WORLD.WIDTH - enemy.radius);
+    enemy.y = clamp(pos.y, enemy.radius, WORLD.HEIGHT - enemy.radius);
+    enemy.vx = 0;
+    enemy.vy = 0;
+    enemy.hitFlash = 0;
+    enemy.orbitCooldown = 0;
+    enemy.pdCooldown = 0;
+    enemy.rammedTimer = 0;
+    enemy.stunTimer = 0;
+    enemy.knockVx = 0;
+    enemy.knockVy = 0;
+    enemy.breaksPierce = false;
+    enemy.visibility = 1;
+    enemy.cloaked = false;
+
+    this.stampAnimationFields(enemy);
+    this.enemies.push(enemy);
+    return enemy;
+  }
+
+  /**
+   * Weighted spawn from the roster config's unlock table.
+   *
+   * @param {number} [wave]
+   * @returns {Object|null} The spawned enemy, or null if nothing is unlocked
+   */
+  spawnRosterEnemy(wave = this.state.wave) {
+    const archetype = pickArchetypeForWave(wave, this.rng);
+    if (!archetype) return null;
+    return this.spawnArchetype(archetype.id);
+  }
+
+  /**
    * Reset the Tier B procedural-animation fields on a pooled entity.
    *
    * phaseOffset is the one that matters: without it every member of a swarm
@@ -599,6 +766,8 @@ export class Simulation {
    * Spawn the Dreadnought Station on a boss wave.
    */
   spawnBoss() {
+    if (this.useCompositeBosses) return this.spawnCompositeBoss();
+
     const def = ENEMIES[ENEMY_TYPES.RUSTWHALE];
     const wave = this.state.wave;
     const hp = getBossHp(wave);
@@ -621,6 +790,8 @@ export class Simulation {
     boss.scoreValue = def.scoreValue;
     boss.hitFlash = 0;
     boss.orbitCooldown = 0;
+    boss.pdCooldown = 0;
+    boss.rammedTimer = 0;
     boss.timeAlive = 0;
     boss.sporeTimer = 0;
     boss.telegraphTimer = 2.0;
@@ -660,6 +831,188 @@ export class Simulation {
     return boss;
   }
 
+  /* ------------------------------------------------------------------ */
+  /* Composite bosses                                                    */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * Put a modular boss on the field.
+   *
+   * Lives in `compositeBosses`, not in `enemies`: it is not one circle with one
+   * HP bar, and forcing it through the enemy pool would mean teaching the pool,
+   * the spatial grid and the contact check about parts. It resolves its own
+   * hits instead — see CompositeBoss.damageAt.
+   *
+   * @param {string} [templateId] - Key from COMPOSITE_BOSSES. Defaults to the
+   *   template this wave's tier calls for.
+   * @param {Object} [options]
+   * @param {number} [options.x]
+   * @param {number} [options.y]
+   * @param {number} [options.hpScale] - Defaults to the wave's HP multiplier
+   * @returns {CompositeBoss|null}
+   */
+  spawnCompositeBoss(templateId = null, options = {}) {
+    const wave = this.state.wave;
+    const template = templateId ?? pickBossTemplate(wave)?.id ?? null;
+    if (!template) return null;
+
+    const pos =
+      options.x !== undefined
+        ? { x: options.x, y: options.y }
+        : this.spawner.spawnPosition(this.state.player.x, this.state.player.y);
+
+    const boss = new CompositeBoss(template, {
+      x: clamp(pos.x, 0, WORLD.WIDTH),
+      y: clamp(pos.y, 0, WORLD.HEIGHT),
+      hpScale: options.hpScale ?? getEnemyHpMultiplier(wave),
+      id: this.nextEntityId++,
+      rng: this.rng,
+    });
+
+    this.compositeBosses.push(boss);
+    this.bus.emit('boss:spawned', {
+      wave,
+      id: boss.id,
+      hp: boss.totalHp,
+      templateId: boss.templateId,
+      composite: true,
+      phase: boss.phaseNumber,
+    });
+    return boss;
+  }
+
+  /**
+   * Whichever boss is currently up, in one shape the HUD can read without
+   * caring which system spawned it.
+   *
+   * The legacy Dreadnought lives in `this.enemies` with its HP directly on the
+   * entity; a CompositeBoss lives in `this.compositeBosses` with its HP spread
+   * across a chassis and several parts. A HUD health bar needs neither of
+   * those shapes — it needs a name, a phase number, and a current/max HP — so
+   * that normalisation happens here, once, instead of in the UI layer.
+   *
+   * @returns {{name: string, phase: number, hp: number, maxHp: number}|null}
+   */
+  getActiveBossView() {
+    const legacy = this.enemies.find((e) => e.alive && e.isBoss);
+    if (legacy) {
+      const def = ENEMIES[legacy.typeId];
+      return { name: def?.name ?? 'Dreadnought Station', phase: legacy.phase, hp: legacy.hp, maxHp: legacy.maxHp };
+    }
+
+    const composite = this.compositeBosses.find((b) => b.alive);
+    if (composite) {
+      return {
+        name: composite.template.name,
+        phase: composite.phaseNumber,
+        hp: composite.totalHp,
+        maxHp: composite.totalMaxHp,
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * Every live modular boss's aimable proxies, flattened.
+   *
+   * Empty when there is no composite boss on the field, which is the common
+   * case for most of the game — kept as a cheap early-out rather than
+   * allocating an empty array every call.
+   *
+   * @returns {Array<Object>}
+   */
+  getCompositeTargets() {
+    if (this.compositeBosses.length === 0) return EMPTY_ARRAY;
+    const targets = [];
+    for (const boss of this.compositeBosses) {
+      if (!boss.alive) continue;
+      for (const proxy of boss.getTargetProxies()) targets.push(proxy);
+    }
+    return targets;
+  }
+
+  /**
+   * Re-acquire a specific live target by id — legacy enemy or composite proxy
+   * alike. Used by steerMissile so a Nanite missile keeps tracking the SAME
+   * turret across frames instead of re-rolling findHighestHpEnemy on every one.
+   *
+   * @param {number|string} id
+   * @returns {Object|null}
+   */
+  findTargetById(id) {
+    for (let i = 0; i < this.enemies.length; i++) {
+      const enemy = this.enemies[i];
+      if (enemy.alive && enemy.id === id) return enemy;
+    }
+    for (const boss of this.compositeBosses) {
+      if (!boss.alive) continue;
+      for (const proxy of boss.getTargetProxies()) {
+        if (proxy.id === id) return proxy;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Tick every modular boss, then collect the wrecks.
+   *
+   * Contact damage is checked here rather than in resolveCollisions because a
+   * composite boss is several colliders: the hull AND every part that still
+   * stands. Routing that through the spatial grid would mean inserting parts
+   * into it as if they were enemies, and then every projectile query, every
+   * targeting card and every kill count would have to learn to ignore them.
+   *
+   * @param {number} dt
+   */
+  updateCompositeBosses(dt) {
+    if (this.compositeBosses.length === 0) return;
+    const player = this.state.player;
+    const ctx = this.behaviorCtx;
+    ctx.target = player;
+
+    for (const boss of this.compositeBosses) {
+      if (!boss.alive) continue;
+      boss.update(dt, ctx);
+
+      if (this.invulnTimer > 0) continue;
+      const hit = boss.hitTest(player.x, player.y, PLAYER_CFG.RADIUS);
+      if (hit) this.damagePlayer(boss.contactDamage);
+    }
+
+    for (let i = this.compositeBosses.length - 1; i >= 0; i--) {
+      const boss = this.compositeBosses[i];
+      if (boss.alive) continue;
+      this.onCompositeBossDown(boss);
+      this.compositeBosses.splice(i, 1);
+    }
+  }
+
+  /**
+   * Pay out a dead modular boss and end the wave.
+   *
+   * Parts the player wrecked have already paid their own score through
+   * onCompositeBossPartDown; this is the chassis bounty on top, which is why
+   * clearing the modules first is worth doing rather than merely necessary.
+   *
+   * @param {CompositeBoss} boss
+   */
+  onCompositeBossDown(boss) {
+    this.state.registerKill(boss.scoreValue);
+    this.spawnOrb(boss.x, boss.y, boss.xpValue);
+    if (isBossWave(this.state.wave)) this.state.completeWave();
+  }
+
+  /**
+   * Score and XP for a wrecked module.
+   * @param {CompositeBoss} boss
+   * @param {Object} part
+   */
+  onCompositeBossPartDown(boss, part) {
+    this.state.registerKill(part.scoreValue ?? 0);
+    this.spawnOrb(part.worldX, part.worldY, Math.round((part.scoreValue ?? 0) / 4));
+  }
+
   /**
    * Advance every enemy: per-species behaviour, then one shared integration.
    *
@@ -680,9 +1033,17 @@ export class Simulation {
     for (const enemy of this.enemies) {
       if (!enemy.alive) continue;
 
-      enemy.timeAlive += dt;
+      /**
+       * Archetype-driven enemies keep their own clock inside stepEnemy, so the
+       * legacy roster's tick is skipped for them. Advancing it in both places
+       * would run a Mantis Strider's weave at double rate — the kind of bug
+       * that looks like a tuning problem and is not.
+       */
+      if (!enemy.archetypeId) enemy.timeAlive += dt;
       if (enemy.hitFlash > 0) enemy.hitFlash -= dt;
       if (enemy.orbitCooldown > 0) enemy.orbitCooldown -= dt;
+      if (enemy.pdCooldown > 0) enemy.pdCooldown -= dt;
+      if (enemy.rammedTimer > 0) enemy.rammedTimer -= dt;
 
       // Kinetic recoil from being shot, decaying toward zero. Applied to every
       // species and outside the stun check: a frozen enemy still gets shoved.
@@ -708,6 +1069,20 @@ export class Simulation {
       if (enemy.stunTimer > 0) {
         enemy.stunTimer -= dt;
         speed = 0;
+      } else if (enemy.archetypeId) {
+        /*
+         * ROSTER-CONFIG PATH. Everything about how this enemy moves lives in
+         * src/data/roster-config.js and is executed by the state machines in
+         * src/core/enemy-system.js. The switch below is the pre-migration
+         * roster; a species moves from there to here by gaining a row in the
+         * config, and nothing in this file changes when it does.
+         */
+        const ctx = this.behaviorCtx;
+        ctx.target = player;
+        const step = stepEnemy(enemy, ctx, dt);
+        headingX = step.headingX;
+        headingY = step.headingY;
+        speed = step.speed;
       } else {
         switch (enemy.behavior) {
           case ENEMY_BEHAVIORS.SINE_WAVE: {
@@ -1368,14 +1743,10 @@ export class Simulation {
    * @param {number} dt
    */
   steerMissile(p, dt) {
-    let target = null;
-    for (let i = 0; i < this.enemies.length; i++) {
-      const enemy = this.enemies[i];
-      if (enemy.alive && enemy.id === p.targetId) {
-        target = enemy;
-        break;
-      }
-    }
+    // Re-acquires by id first, so a missile keeps tracking the SAME turret it
+    // launched at rather than re-rolling a target every frame — legacy enemy
+    // or composite boss proxy alike.
+    let target = p.targetId ? this.findTargetById(p.targetId) : null;
     if (!target) {
       target = this.findHighestHpEnemy(PROJECTILE_CFG.TARGET_RANGE);
       if (!target) return;
@@ -1417,6 +1788,19 @@ export class Simulation {
         best = enemy;
       }
     }
+    /*
+     * A MODULAR BOSS IS NOT IN `this.enemies` (see spawnCompositeBoss), so a
+     * weapon that only scanned that list goes cold the instant the last swarm
+     * enemy dies with a boss still standing on the field. Its aimable parts
+     * are checked here as a second, equally weighted pass.
+     */
+    for (const proxy of this.getCompositeTargets()) {
+      const dSq = distanceSq(player.x, player.y, proxy.x, proxy.y);
+      if (dSq <= bestDistSq) {
+        bestDistSq = dSq;
+        best = proxy;
+      }
+    }
     return best;
   }
 
@@ -1439,6 +1823,14 @@ export class Simulation {
       if (dSq <= bestDistSq) {
         bestDistSq = dSq;
         best = enemy;
+      }
+    }
+    // See findNearestEnemy: a modular boss's parts live outside `enemies`.
+    for (const proxy of this.getCompositeTargets()) {
+      const dSq = distanceSq(x, y, proxy.x, proxy.y);
+      if (dSq <= bestDistSq) {
+        bestDistSq = dSq;
+        best = proxy;
       }
     }
     return best;
@@ -1472,6 +1864,16 @@ export class Simulation {
         bestHp = enemy.hp;
         bestDistSq = dSq;
         best = enemy;
+      }
+    }
+    // See findNearestEnemy: a modular boss's parts live outside `enemies`.
+    for (const proxy of this.getCompositeTargets()) {
+      const dSq = distanceSq(player.x, player.y, proxy.x, proxy.y);
+      if (dSq > maxRangeSq) continue;
+      if (proxy.hp > bestHp || (proxy.hp === bestHp && dSq < bestDistSq)) {
+        bestHp = proxy.hp;
+        bestDistSq = dSq;
+        best = proxy;
       }
     }
     return best;
@@ -1525,6 +1927,35 @@ export class Simulation {
       }
     }
 
+    /*
+     * MODULAR BOSSES ARE CHECKED SEPARATELY, AND AFTER THE SWARM.
+     *
+     * After, so a pierced round spends its pierce on the chaff in front of the
+     * boss before it reaches the hull — the boss is the thing the player is
+     * trying to shoot past everything else, and a bolt that hit it first would
+     * make its escorts free. Separately, because `damageAt` resolves WHICH
+     * component was hit, which a single-radius grid entry cannot express.
+     */
+    for (const boss of this.compositeBosses) {
+      if (!boss.alive) continue;
+      for (const p of this.projectiles) {
+        if (!p.alive) continue;
+        const result = boss.damageAt(p.x, p.y, p.damage, this.behaviorCtx, p.radius);
+        if (result.kind === null) continue;
+
+        if (result.destroyed && result.partId) {
+          this.onCompositeBossPartDown(boss, boss.getPart(result.partId));
+        }
+
+        /*
+         * A deflected round dies too. It has to: leaving it alive means it
+         * re-tests against the armoured hull every frame it overlaps, and the
+         * player gets a stream of deflection events off a single shot.
+         */
+        p.alive = false;
+      }
+    }
+
     if (this.invulnTimer > 0) return;
 
     // Player contact collision using Spatial Hash Grid query
@@ -1545,6 +1976,9 @@ export class Simulation {
    * @param {number} amount
    */
   damagePlayer(amount) {
+    // Phase Shift's i-frames are checked before the barrier, so a blink never
+    // spends a shield charge it did not need to.
+    if (this.activeSkills.invulnerable) return;
     const remaining = this.cards.absorb(amount);
     if (remaining > 0) this.state.damagePlayer(remaining);
     this.invulnTimer = PLAYER_CFG.INVULN_SEC;
@@ -1558,6 +1992,25 @@ export class Simulation {
    * @param {number} [sourceVy]
    */
   damageEnemy(enemy, amount, sourceVx = 0, sourceVy = 0) {
+    /*
+     * A CARD'S TARGET MAY BE A COMPOSITE BOSS PROXY, NOT A REAL ENTITY.
+     *
+     * findNearestEnemy/findHighestHpEnemy/findNearestEnemyTo can now hand back
+     * one of CompositeBoss.getTargetProxies()'s throwaway objects (see those
+     * functions). A card that damages its target directly — the Tesla Arc's
+     * chain, the Graviton pulse — calls straight into damageEnemy with
+     * whatever it got back, so the redirect belongs here, in the one place
+     * every direct-damage path already funnels through. Everything below this
+     * (the flash refractory gate, the knockback impulse) assumes a pooled
+     * enemy with those fields and would just write them onto a proxy that is
+     * discarded before the next frame — redirecting first skips work that
+     * could not do anything anyway.
+     */
+    if (enemy.isCompositeTarget) {
+      this.damageCompositeTarget(enemy, amount);
+      return;
+    }
+
     if (enemy.isBoss && amount < enemy.hp) {
       // Phase Gating: Boss HP cannot cross phase thresholds until required attack cycles are completed
       if (enemy.phase === 1 && (enemy.radialCountExecuted ?? 0) < 2) {
@@ -1679,6 +2132,37 @@ export class Simulation {
         this.state.completeWave();
       }
     }
+  }
+
+  /**
+   * Redirect damage aimed at a CompositeBoss.getTargetProxies() proxy back
+   * onto the boss it actually came from.
+   *
+   * Mirrors what the projectile path already does through
+   * CompositeBoss.damageAt (see resolveCollisions) — same score/orb payout via
+   * onCompositeBossPartDown/onCompositeBossDown — but resolves against the
+   * SPECIFIC part or chassis the proxy named rather than re-running a hit
+   * test, because a direct-damage card has no projectile position to test
+   * against, only the target it was handed.
+   *
+   * @param {Object} proxy - A proxy from CompositeBoss.getTargetProxies()
+   * @param {number} amount
+   */
+  damageCompositeTarget(proxy, amount) {
+    const boss = this.compositeBosses.find((b) => b.id === proxy.bossId && b.alive);
+    if (!boss) return;
+
+    if (proxy.partId) {
+      const part = boss.getPart(proxy.partId);
+      if (!part || !part.alive) return;
+      boss.damagePart(proxy.partId, amount, this.behaviorCtx);
+      if (!part.alive) this.onCompositeBossPartDown(boss, part);
+      return;
+    }
+
+    if (!boss.isChassisVulnerable()) return;
+    boss.damageChassis(amount, this.behaviorCtx);
+    if (!boss.alive) this.onCompositeBossDown(boss);
   }
 
   spawnOrb(x, y, value) {
@@ -1842,6 +2326,14 @@ function makeEnemy() {
     scoreValue: 0,
     hitFlash: 0,
     orbitCooldown: 0,
+    /**
+     * Point-Defense Overdrive's re-hit clock. Its OWN field rather than
+     * sharing orbitCooldown with the Aegis Satellites: they are two separate
+     * weapons and one must not consume the other's hit window.
+     */
+    pdCooldown: 0,
+    /** Afterburner ram clock, so one burn cannot juggle the same enemy. */
+    rammedTimer: 0,
     timeAlive: 0,
     sporeTimer: 0,
     telegraphTimer: 0,
@@ -1862,6 +2354,31 @@ function makeEnemy() {
     /* ---- Phantom Stalker camouflage. 1 = fully visible. ---- */
     visibility: 1,
     cloaked: false,
+    /* ----------------------------------------------------------------
+     * Roster-config state (src/core/enemy-system.js).
+     *
+     * Declared here with everything else rather than attached by
+     * applyArchetype, for the reason the whole shape exists: an entity that
+     * grows fields after construction goes polymorphic, and the 200-enemy
+     * loops that read it fall off their inline caches. `archetypeId` empty
+     * means "legacy roster", which is what updateEnemies dispatches on.
+     * ---------------------------------------------------------------- */
+    archetypeId: '',
+    spriteKey: '',
+    mass: 1,
+    scrapValue: 0,
+    /** Kiting: strafe sense (-1 or 1) and its reversal clock. */
+    strafeSign: 1,
+    strafeTimer: 0,
+    /** True while a kiter is inside its standoff band and allowed to fire. */
+    inStandoffBand: false,
+    /** Weapon clock, for archetypes that carry a gun. */
+    fireTimer: 0,
+    /* ---- Rammer cycle: cruise -> telegraph -> dash -> recover ---- */
+    rammerState: 'cruise',
+    rammerTimer: 0,
+    lockDirX: 0,
+    lockDirY: 0,
     /* ---- Dreadnought Station attack clocks ---- */
     radialTimer: 0,
     escortTimer: 0,

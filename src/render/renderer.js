@@ -80,6 +80,8 @@ import {
 } from './sprite-factory.js';
 import { ParticleSystem } from './particles.js';
 import { ScreenShake, TRAUMA } from './screen-shake.js';
+import { SkillVfx } from './skill-vfx.js';
+import { CompositeBossRenderer } from './composite-boss-renderer.js';
 
 const TRAIL_SAMPLES = 14;
 const GRID_SIZE = 140;
@@ -278,14 +280,46 @@ export class Renderer {
       telegraph: new Container(),
       orb: new Container(),
       enemy: new Container(),
+      /**
+       * Modular bosses (src/core/composite-boss.js). Its own layer rather than
+       * a child of `enemy`: a composite boss is drawn from CompositeBoss's own
+       * render state, not from an entry in sim.enemies, and giving it a
+       * dedicated container keeps that fact visible in the z-order contract
+       * instead of being an implicit side effect of insertion order.
+       */
+      compositeBoss: new Container(),
       projectile: new Container(),
       cardEffect: new Container(),
+      skillVfx: new Container(),
       particle: this.particles.container,
       playerTrail: new Container(),
       player: new Container(),
     };
 
     for (const layer of Object.values(this.layers)) this.world.addChild(layer);
+
+    /**
+     * Renders every CompositeBoss on the field. A thin wrapper over one
+     * container per boss (see composite-boss-renderer.js); this class only
+     * decides WHEN to sync/release a view, driven off sim.compositeBosses.
+     */
+    this.compositeBossRenderer = new CompositeBossRenderer({
+      layer: this.layers.compositeBoss,
+      assets: this.assets,
+    });
+
+    /**
+     * Active-skill effects. Reads the simulation and draws; it owns no state
+     * the simulation does not already have, so it needs no teardown beyond
+     * its own container.
+     */
+    this.skillVfx = new SkillVfx(this.sim, {
+      // Lazy: buildPlayer() has not run yet, and the after-images need the
+      // hull's LIVE texture and heading at the instant of a blink, not
+      // whatever it was when the stage was built.
+      getHeroSprite: () => this.heroSprite ?? null,
+    });
+    this.layers.skillVfx.addChild(this.skillVfx.container);
 
     this.buildBackground();
     this.buildArena();
@@ -530,6 +564,7 @@ export class Renderer {
     this.dyingViews.length = 0;
     this.bossId = null;
     this.bossAnimator = null;
+    this.compositeBossRenderer.clear();
     this.heroAnimator.forceState(ANIM_STATES.IDLE);
   }
 
@@ -640,6 +675,7 @@ export class Renderer {
     this.recordTrail();
 
     this.syncEnemies(dt);
+    this.syncCompositeBosses();
     this.syncProjectiles();
     this.syncOrbs();
 
@@ -652,6 +688,7 @@ export class Renderer {
     this.drawBeam();
     this.drawSatellites();
     this.drawWingmen();
+    this.skillVfx.update(dt);
     this.drawHealthBars();
     this.drawTrail();
     this.drawPlayer(dt);
@@ -873,6 +910,29 @@ export class Renderer {
     }
 
     this.syncDyingViews(t);
+  }
+
+  /**
+   * Drive every modular boss's display tree from its own render state.
+   *
+   * A composite boss carries its OWN container per instance (built lazily by
+   * CompositeBossRenderer.sync on first sight) rather than going through the
+   * enemy sprite pool: it is not one texture key but a chassis-plus-parts
+   * tree, and the pool's "one sprite per texture key" contract has nowhere to
+   * put that.
+   */
+  syncCompositeBosses() {
+    const seen = new Set();
+    for (const boss of this.sim.compositeBosses) {
+      if (!boss.alive) continue;
+      seen.add(boss.id);
+      this.compositeBossRenderer.sync(boss.getRenderState());
+    }
+    // A boss that died or was cleared (arena wipe) without going through a
+    // one-frame "not alive" state still needs its tree torn down.
+    for (const id of [...this.compositeBossRenderer.views.keys()]) {
+      if (!seen.has(id)) this.compositeBossRenderer.release(id);
+    }
   }
 
   /**

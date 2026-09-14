@@ -65,6 +65,68 @@
     0 8px 24px rgba(0, 0, 0, 0.6);
 
   --hull-blur: blur(7px);
+
+  /*
+   * CONSOLE PALETTE — the meta layer only.
+   *
+   * The in-run HUD above stays dark plate on a dark void, because it overlays
+   * the playfield and must never compete with the Drifter. The menu and the
+   * Salvage Depot overlay nothing, so they are lit the other way round: Kenney
+   * sci-fi hardware, light steel with rivets and coloured title tabs, read as
+   * a terminal the pilot is standing at rather than a layer of glass over the
+   * game. Both sets live here so neither can drift.
+   */
+  --panel-bg: #dcdde1;
+  --panel-dark-bg: #2f3640;
+  --panel-border: #718093;
+  --tab-blue: #00a8ff;
+  --tab-red: #e84118;
+  --tab-amber: #fbc531;
+  --button-face: #f5f6fa;
+  --button-shadow: #7f8fa6;
+
+  /*
+   * Tab shoulders. A flat tab in the colours above cannot carry white 700 text
+   * at 3:1, so every tab is a short vertical gradient into these — the lower
+   * half, where most of the glyph mass sits, clears the large-text threshold.
+   */
+  --tab-blue-deep: #0077c2;
+  --tab-red-deep: #a82a11;
+  --tab-amber-deep: #c98f00;
+
+  /*
+   * Ink on light steel, and the navy the display type is stroked with. The dim
+   * ink is darker than it looks like it needs to be because it also has to
+   * clear 4.5:1 against the CHASSIS (~#b4b4c3), not only against the brighter
+   * #dadce7 bay faces the same colour sits on inside a card.
+   */
+  --console-ink: #141a24;
+  --console-ink-dim: #3c4353;
+  --console-stroke: #10182a;
+
+  --font-display: 'Chakra Petch', 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+
+  /*
+   * IN-RUN CONSOLE CHROME.
+   *
+   * The HUD is built from the same Kenney plates as the meta screens, put
+   * through this filter instead of shipped light: #9696a3 at 0.42 lands on
+   * roughly #3e3e44, gunmetal that holds its rivets and its bevel but stops
+   * competing with the playfield behind it. Declared once so the telemetry
+   * bays, the hull deck and the loadout chips cannot end up three shades of
+   * grey apart.
+   */
+  --hud-steel: brightness(0.42) saturate(0.8);
+
+  /* The near-black every LED readout is sunk into. */
+  --hud-recess: #0b0e14;
+
+  /*
+   * Labels on gunmetal. --hull-text-dim is tuned for the near-black draft
+   * panel and only reaches 3.6:1 against the plate, which 9px uppercase does
+   * not survive; this clears 5:1.
+   */
+  --hud-label: #a9bccd;
 }
 
 .hud {
@@ -75,199 +137,961 @@
   color: var(--hull-text);
 }
 
-.hud__top {
+/*
+ * The UA's `[hidden] { display: none }` is a type-selector rule and loses to
+ * every `display` this file sets by class — which is how the module socket
+ * rendered for players who had never drafted the module. Modules toggled with
+ * `el.hidden` need this to actually disappear.
+ */
+.hud [hidden] {
+  display: none;
+}
+
+/* ==========================================================================
+ * IN-RUN CONSOLE MODULES
+ *
+ * Same Kenney plates as the meta screens, darkened to gunmetal. The meta layer
+ * ships them light because it overlays nothing; this layer sits ON the
+ * playfield, where a light panel would out-read the Drifter itself. The
+ * readouts inside stay bright — the chassis recedes, the numbers do not.
+ * ======================================================================== */
+
+/* ------------------------------------------------------------------ */
+/* Telemetry band                                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * FIXED TRACKS, NOT AUTO — THIS IS THE WHOLE POINT OF THE GRID.
+ *
+ * The readouts change width constantly: "TIME 00:52" becomes "HOSTILES 06" the
+ * moment a spawn window closes, the wave counter gains a digit, the score gains
+ * one every few kills. On auto-sized tracks every one of those nudged all four
+ * bays sideways mid-fight, which is exactly the jitter this layout exists to
+ * stop. Fixed tracks plus `min-width: 0` and `overflow: hidden` on the bay mean
+ * nothing inside a bay can ever change the band's geometry.
+ *
+ * The tally track is wider than the other three because it is the only one
+ * carrying two labelled numbers, and a six-figure score has to fit without the
+ * track being negotiable.
+ *
+ * The band is also low and wide rather than four near-square boxes: at 38px it
+ * reads as an instrument strip along the horizon and gives back most of the
+ * top of the playfield it used to cover.
+ */
+.hud__telemetry {
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  grid-template-columns: repeat(3, 104px) 132px;
+  gap: 8px;
+  max-width: calc(100vw - 20px);
+}
+
+.tbay {
+  position: relative;
+  isolation: isolate;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 28px;
-  padding: 14px 20px;
-  background: var(--hull-specular), linear-gradient(180deg, rgba(5, 12, 26, 0.92), rgba(5, 10, 20, 0.1));
-  backdrop-filter: var(--hull-blur);
-  -webkit-backdrop-filter: var(--hull-blur);
-  border-bottom: 1px solid var(--hull-edge);
-  box-shadow: inset 0 -1px 0 rgba(0, 240, 255, 0.2), 0 6px 22px rgba(0, 0, 0, 0.55);
-  font-size: 14px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.hud__stat {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.hud__stat-label {
-  color: var(--hull-text-dim);
-  font-size: 11px;
-}
-
-.hud__stat-value {
-  font-size: 18px;
-  font-weight: 700;
+  gap: 2px;
+  height: 50px;
+  padding: 6px 8px;
+  box-sizing: border-box;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-display);
+  /* Every digit the same width, so a counter ticking over cannot reflow the
+     label beside it either. */
   font-variant-numeric: tabular-nums;
 }
 
-.hud__bars {
+.tbay::before {
+  content: '';
   position: absolute;
-  left: 50%;
-  bottom: 22px;
-  transform: translateX(-50%);
-  width: min(520px, 82vw);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  inset: 0;
+  z-index: -1;
+  border: 16px solid transparent;
+  border-image: url('/assets/ui/console_plate.png') 16 fill stretch;
+  filter: var(--hud-steel) drop-shadow(0 6px 14px rgba(0, 0, 0, 0.7));
 }
 
-.hud__bar {
+.tbay__label {
+  font-size: 8px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--hud-label);
+}
+
+.tbay__readout {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--hull-text);
+}
+
+/* Wave: amber, with the hazard blade along the plate's top edge. */
+.tbay--wave .tbay__readout {
+  color: var(--tab-amber);
+}
+
+.tbay--wave::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: var(--tab-amber);
+  box-shadow: 0 0 7px rgba(251, 197, 49, 0.8);
+}
+
+/*
+ * Time: a recessed LED counter sunk into the plate.
+ *
+ * `max-width: 100%` + `box-sizing: border-box` is what keeps this INSIDE the
+ * bay's own 16px border-image slice — the LED box's horizontal padding was
+ * pushing its border past the plate's screws at some viewport widths, since a
+ * plain inline padded span has no ceiling on how wide it can render.
+ */
+.tbay--time .tbay__readout {
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 1px 8px 2px;
+  color: #7df9ff;
+  background: var(--hud-recess);
+  border-radius: 2px;
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.85),
+    0 1px 0 rgba(255, 255, 255, 0.08);
+  text-shadow: 0 0 8px rgba(125, 249, 255, 0.55);
+}
+
+/*
+ * Level: label, number, tube — three rows in normal flow, grouped tight and
+ * centred as a block rather than spread with `space-between` across the
+ * bay's full height. Space-between was leaving the number stranded near the
+ * top with a wide dead gap below it, because this bay has less content than
+ * its siblings (no second line of text) to fill the same 50px. A fixed `gap`
+ * keeps the group compact — visually matching WAVE/TIME/SCORE — and still
+ * guarantees the same 4px+ clearance between the number and the tube, since
+ * that clearance is now the literal gap value, not leftover space.
+ */
+.tbay--level {
+  justify-content: center;
+  gap: 4px;
+}
+
+.tbay--level .tbay__readout {
+  color: #9ff8ff;
+  line-height: 1;
+}
+
+.tbay__tube {
   position: relative;
-  height: 16px;
-  border: 1px solid var(--hull-edge);
-  /* Clipped corners rather than a radius: this is hull plating, not glass. */
-  clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
-  background: var(--hull-specular), var(--hull-plate);
-  backdrop-filter: var(--hull-blur);
-  -webkit-backdrop-filter: var(--hull-blur);
-  box-shadow: var(--hull-shadow-soft);
+  width: 100%;
+  height: 4px;
+  background: var(--hud-recess);
+  border-radius: 2px;
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.85),
+    0 0 0 1px rgba(255, 255, 255, 0.08);
   overflow: hidden;
 }
 
-.hud__bar-fill {
+.tbay__tube i {
+  display: block;
   height: 100%;
+  width: 0%;
+  background: linear-gradient(180deg, #9ff8ff, var(--tab-blue));
+  box-shadow: 0 0 8px rgba(0, 168, 255, 0.85);
+  transition: width 0.12s linear;
+}
+
+/*
+ * Score and kills: two rows, label left and number right. space-between pins
+ * the number's RIGHT edge, so a score gaining a digit grows into the gap
+ * instead of pushing the label along in front of it.
+ */
+.tbay--tally {
+  align-items: stretch;
+  justify-content: center;
+  gap: 3px;
+}
+
+.tally {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.tally__label {
+  font-size: 8px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--hud-label);
+}
+
+.tally b {
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--hull-text);
+}
+
+/* ------------------------------------------------------------------ */
+/* Loadout rail                                                        */
+/* ------------------------------------------------------------------ */
+
+.hud__loadout {
+  position: absolute;
+  top: 76px;
+  left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 188px;
+  /* A maxed loadout is eight chips; on a short screen they stop rather than
+     run down into the hull deck. */
+  max-height: calc(100vh - 210px);
+  overflow: hidden;
+}
+
+.chip {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px 8px;
+}
+
+.chip::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border: 16px solid transparent;
+  border-image: url('/assets/ui/console_bay.png') 16 fill stretch;
+  filter: var(--hud-steel) drop-shadow(0 4px 10px rgba(0, 0, 0, 0.6));
+}
+
+/*
+ * The class code. Terse on purpose: the weapon's own name is right beside it,
+ * and what this is for is letting the eye sort the rail by colour at a glance.
+ */
+.chip__badge {
+  flex: none;
+  width: 28px;
+  padding: 3px 0 4px;
+  text-align: center;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  /* Near-black on every accent below, all of which are bright enough to take
+     it at 4.5:1 — the inverse never is. */
+  color: #0a0e18;
+  background: var(--chip-accent);
+  border-radius: 2px;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.55);
+}
+
+.chip__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.chip__name {
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--hull-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chip--kinetic { --chip-accent: #1c9fd7; }
+.chip--beam    { --chip-accent: #7df9ff; }
+.chip--arc     { --chip-accent: #ffcc00; }
+.chip--orbital { --chip-accent: #16bb77; }
+.chip--area    { --chip-accent: #ff8a3d; }
+.chip--shield  { --chip-accent: #00e5ff; }
+.chip--passive { --chip-accent: #9aa4b4; }
+.chip--control { --chip-accent: #b06cff; }
+
+/* Segmented level cells, in a recessed housing. */
+.hud__meter {
+  display: flex;
+  gap: 2px;
+  width: fit-content;
+  padding: 2px;
+  background: var(--hud-recess);
+  border-radius: 2px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+
+.hud__cell {
+  width: 9px;
+  height: 6px;
+  border-radius: 1px;
+  background: #333a48;
+}
+
+.hud__cell--on {
+  background: linear-gradient(180deg, #4dffa0, #16bb77);
+  box-shadow: 0 0 4px rgba(22, 187, 119, 0.85);
+}
+
+/* ------------------------------------------------------------------ */
+/* Hull deck                                                           */
+/* ------------------------------------------------------------------ */
+
+.hud__hull-deck {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  width: min(420px, 74vw);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* Same folder tab as the meta consoles, at HUD scale. */
+.deck__tab {
+  position: relative;
+  z-index: 0;
+  align-self: flex-start;
+  margin: 0 0 -7px 16px;
+  padding: 4px 22px 10px 11px;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #ffffff;
+  text-shadow: 0 1px 0 rgba(10, 16, 30, 0.6);
+  background: linear-gradient(180deg, var(--tab-red) 0%, var(--tab-red-deep) 60%);
+  clip-path: polygon(0 0, calc(100% - 11px) 0, 100% 100%, 0 100%);
+}
+
+.deck__body {
+  position: relative;
+  z-index: 1;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 11px 13px 12px;
+  /* No background of its own — the radius only shapes the hazard ring below,
+     so it has to match the plate's own corners. */
+  border-radius: 5px;
+}
+
+.deck__body::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border: 16px solid transparent;
+  border-image: url('/assets/ui/console_plate.png') 16 fill stretch;
+  filter: var(--hud-steel) drop-shadow(0 8px 20px rgba(0, 0, 0, 0.75));
+}
+
+.tube {
+  position: relative;
+  height: 20px;
+  background: var(--hud-recess);
+  border-radius: 3px;
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.9),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+
+.tube--shield {
+  height: 12px;
+}
+
+.tube__fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
   width: 0%;
   transition: width 0.12s linear;
 }
 
-.hud__bar--hp .hud__bar-fill {
-  background:
-    linear-gradient(180deg,
-      rgba(255, 255, 255, 0.6) 0%,
-      rgba(255, 255, 255, 0.2) 45%,
-      rgba(0, 0, 0, 0.05) 46%,
-      rgba(255, 255, 255, 0.12) 100%),
-    linear-gradient(180deg, #9ff8ff, var(--neon-cyan));
-  box-shadow: 0 0 16px rgba(0, 240, 255, 0.7), inset 0 -1px 3px rgba(0, 30, 60, 0.5);
+/*
+ * Hull runs hot orange into red rather than the old cyan. Cyan is the hero's
+ * own colour everywhere else in this game; spending it on the damage gauge
+ * meant the bar that says "you are dying" looked exactly like the bar that
+ * says "your shield is up".
+ */
+.tube--hull .tube__fill {
+  background: linear-gradient(180deg, #ffab5e 0%, #ff5f2e 48%, #d81f10 100%);
+  box-shadow: 0 0 14px rgba(255, 95, 46, 0.55);
 }
 
-.hud__bar--xp {
-  height: 8px;
+.tube--shield .tube__fill {
+  background: linear-gradient(180deg, #b6fbff, #00d2ff);
+  box-shadow: 0 0 10px rgba(0, 210, 255, 0.75);
 }
 
-.hud__bar--xp .hud__bar-fill {
-  background: linear-gradient(180deg, #b6ffdc, var(--bio-acid));
-  box-shadow: 0 0 14px rgba(0, 255, 136, 0.6);
-}
-
-.hud__bar-text {
+/*
+ * White with a hard shadow, over both the lit fill and the empty recess. The
+ * old bar used mix-blend-mode: difference plus an invert to get the same
+ * effect, which cost a blend pass every frame and went illegible the moment
+ * the fill colour approached mid-grey.
+ */
+.tube__text {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  font-family: var(--font-display);
   font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  color: #0d0f12;
-  mix-blend-mode: difference;
-  filter: invert(1);
-}
-
-.hud__banner {
-  position: absolute;
-  top: 34%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 36px;
-  font-weight: 800;
-  letter-spacing: 0.12em;
+  font-weight: 700;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  text-align: center;
-  color: var(--hull-text);
-  text-shadow: 0 0 18px rgba(0, 240, 255, 0.7), 0 2px 10px rgba(0, 0, 0, 0.8);
-  opacity: 0;
-  transition: opacity 0.25s ease;
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95);
 }
 
-.hud__banner--visible {
-  opacity: 1;
+.tube--shield .tube__text {
+  font-size: 9px;
+  letter-spacing: 0.16em;
+}
+
+/* Hazard alert below 25% hull: a ring around the whole deck, not a colour
+   change on the bar, because at 25% there is very little bar left to see. */
+.hud__hull-deck--critical .deck__body {
+  animation: hud-hazard 0.9s ease-in-out infinite;
+}
+
+@keyframes hud-hazard {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(255, 42, 85, 0);
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px rgba(255, 42, 85, 0.55),
+      0 0 26px rgba(255, 42, 85, 0.45);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Module socket                                                       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Active-skill socket.
+ *
+ * It is a <button>, so the browser's own button styling has to be unset before
+ * anything here applies. `touch-action: manipulation` suppresses the
+ * double-tap-to-zoom delay, which on a phone is the difference between the
+ * cast landing on contact and landing ~300ms later.
+ */
+.hud__skill-slot {
+  position: absolute;
+  right: 16px;
+  bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.hud__skill-slot:focus-visible {
+  outline: 3px solid var(--tab-blue);
+  outline-offset: 4px;
+  border-radius: 10px;
+}
+
+.socket {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 58px;
+  background: #11151d;
+  border-radius: 8px;
+  box-shadow:
+    inset 0 0 0 2px #47505f,
+    inset 0 3px 8px rgba(0, 0, 0, 0.85),
+    0 6px 16px rgba(0, 0, 0, 0.7);
+  transition: box-shadow 0.18s ease;
+}
+
+/* The equipped skill's glyph, dim until the skill can actually be cast. */
+.socket__mark {
+  font-family: var(--font-display);
+  font-size: 26px;
+  line-height: 1;
+  color: var(--neon-cyan);
+  opacity: 0.38;
+  transition: opacity 0.18s ease, filter 0.18s ease, color 0.18s ease;
 }
 
 /*
- * Clear-the-swarm objective prompt.
+ * Radial cooldown: the UNCHARGED remainder is what gets darkened, so the mask
+ * unwinds clockwise as the skill comes back. One custom property drives the
+ * sweep, so a frame of cooldown costs a variable write rather than a layout.
+ */
+.socket__mask {
+  position: absolute;
+  inset: 3px;
+  border-radius: 6px;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg var(--charge, 0deg),
+    rgba(4, 7, 14, 0.84) var(--charge, 0deg) 360deg
+  );
+  pointer-events: none;
+}
+
+/* Banked casts on a multi-charge loadout. Hidden at maxCharges 1. */
+.socket__charges {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  min-width: 17px;
+  padding: 1px 0 2px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+  color: #0a0e18;
+  background: var(--tab-amber);
+  border-radius: 3px;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.55);
+}
+
+.socket__charges[hidden] {
+  display: none;
+}
+
+/* ---- Ready ---- */
+
+.socket--ready .socket__mask {
+  background: none;
+}
+
+.socket--ready .socket__mark {
+  opacity: 1;
+  filter: drop-shadow(0 0 9px var(--neon-cyan));
+}
+
+.socket--ready {
+  box-shadow:
+    inset 0 0 0 2px var(--neon-cyan),
+    inset 0 0 16px rgba(0, 240, 255, 0.3),
+    0 0 18px rgba(0, 240, 255, 0.35),
+    0 6px 16px rgba(0, 0, 0, 0.7);
+}
+
+/*
+ * READY BURST — one shot, on the frame the refill completes.
  *
- * Sits BELOW the banner slot rather than in it: banners are transient events
- * ("Wave 3", "Phase 2") and this is a standing condition, so the two must be
- * able to be on screen at once. It is deliberately quieter than a banner —
- * hazard amber, letterspaced, no glow — because it is a persistent readout and
- * anything shoutier becomes noise within a couple of seconds.
+ * Separate from `socket--ready` because that class is the steady state: an
+ * animation hung on it would replay on every re-render for as long as the
+ * skill sat ready. hud.js adds this one on the rising edge only.
+ */
+.socket--burst {
+  animation: socket-ready-burst 0.45s ease-out;
+}
+
+@keyframes socket-ready-burst {
+  0% {
+    box-shadow:
+      inset 0 0 0 2px var(--neon-cyan),
+      0 0 0 0 rgba(0, 240, 255, 0.85),
+      0 6px 16px rgba(0, 0, 0, 0.7);
+  }
+  60% {
+    box-shadow:
+      inset 0 0 0 3px #ffffff,
+      0 0 0 12px rgba(0, 240, 255, 0),
+      0 0 30px rgba(0, 240, 255, 0.9),
+      0 6px 16px rgba(0, 0, 0, 0.7);
+  }
+  100% {
+    box-shadow:
+      inset 0 0 0 2px var(--neon-cyan),
+      0 0 0 18px rgba(0, 240, 255, 0),
+      0 6px 16px rgba(0, 0, 0, 0.7);
+  }
+}
+
+/*
+ * IMMINENT — the last second of the refill.
+ *
+ * Gated on seconds remaining, not on a fraction of the bar: at a 15s cooldown
+ * a fraction would start pulsing three seconds out and at 8s under two, so the
+ * same cue would mean a different amount of time depending on the loadout.
+ */
+.socket--imminent {
+  animation: socket-imminent 0.5s ease-in-out infinite;
+}
+
+.socket--imminent .socket__mark {
+  opacity: 0.72;
+}
+
+@keyframes socket-imminent {
+  0%, 100% {
+    box-shadow:
+      inset 0 0 0 2px #47505f,
+      inset 0 3px 8px rgba(0, 0, 0, 0.85),
+      0 6px 16px rgba(0, 0, 0, 0.7);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 2px rgba(0, 240, 255, 0.8),
+      inset 0 0 12px rgba(0, 240, 255, 0.25),
+      0 0 14px rgba(0, 240, 255, 0.3),
+      0 6px 16px rgba(0, 0, 0, 0.7);
+  }
+}
+
+/*
+ * ACTIVE — the skill is currently running.
+ *
+ * Amber overload rather than the ready cyan, because "you may cast this" and
+ * "this is firing right now" are different facts and the player is reading
+ * this socket in peripheral vision. Beats the ready styling on specificity by
+ * being declared after it.
+ */
+.socket--active {
+  box-shadow:
+    inset 0 0 0 2px var(--tab-amber),
+    inset 0 0 18px rgba(251, 197, 49, 0.4),
+    0 0 22px rgba(251, 197, 49, 0.55),
+    0 6px 16px rgba(0, 0, 0, 0.7);
+  animation: socket-overload 0.32s ease-in-out infinite;
+}
+
+.socket--active .socket__mark {
+  opacity: 1;
+  color: var(--tab-amber);
+  filter: drop-shadow(0 0 10px rgba(251, 197, 49, 0.9));
+}
+
+@keyframes socket-overload {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.06); }
+}
+
+.socket__key {
+  padding: 2px 8px 3px;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+  color: var(--hud-label);
+  background: #1a1f28;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px #47505f;
+}
+
+/* Sibling selectors: the state flag lives on .socket, the badge follows it. */
+.socket--ready ~ .socket__key {
+  color: #0a0e18;
+  background: var(--neon-cyan);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+.socket--active ~ .socket__key {
+  color: #0a0e18;
+  background: var(--tab-amber);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .socket--imminent,
+  .socket--active,
+  .socket--burst {
+    animation: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud__hull-deck--critical .deck__body {
+    animation: none;
+    box-shadow: 0 0 0 3px rgba(255, 42, 85, 0.55);
+  }
+}
+
+/*
+ * Phone docking. The hull deck stops being centred and spans the bottom edge
+ * instead, stopping short of the socket — at 390px a centred 74vw deck and a
+ * 58px socket overlap by about 30px, and the deck is the one that can move.
+ */
+@media (max-width: 620px) {
+  .hud__hull-deck {
+    left: 10px;
+    right: 92px;
+    width: auto;
+    transform: none;
+  }
+
+  .hud__loadout {
+    top: 70px;
+    left: 8px;
+    width: 150px;
+    max-height: calc(100vh - 190px);
+  }
+
+  .chip__name {
+    font-size: 9px;
+  }
+
+  /*
+   * 3x104 + 132 + gaps is 452px, which does not fit a phone. The tracks stay
+   * FIXED — just smaller — because shrinking them to auto would bring back
+   * exactly the jitter the fixed grid exists to remove.
+   */
+  .hud__telemetry {
+    grid-template-columns: repeat(3, 82px) 104px;
+    gap: 5px;
+  }
+
+  .tbay {
+    height: 34px;
+    padding: 3px 6px;
+  }
+
+  .tbay__readout {
+    font-size: 14px;
+  }
+
+  .tbay--time .tbay__readout {
+    padding: 1px 5px 2px;
+  }
+
+  .tally {
+    gap: 6px;
+  }
+
+  .tally b {
+    font-size: 11px;
+  }
+
+  .socket {
+    width: 50px;
+    height: 50px;
+  }
+
+  /* One line fewer on the longest alert, so a transient stamp covers less of
+     the loadout rail it has to overlap on a phone. */
+  .hud__banner {
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    padding: 11px 14px 12px;
+    max-width: 92vw;
+  }
+
+  .hud__objective {
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    padding: 7px 12px 8px;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Tactical alert plates                                               */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Banners are stamps, not headlines.
+ *
+ * The old one was 36px of bare glowing text across the middle of the screen,
+ * which both read as a debug print and covered the Drifter at exactly the
+ * moment a boss was arriving. This is a plate: a dark metallic band with a
+ * hazard strip along each edge, parked in the upper quarter, clear of the ship.
+ *
+ * --stripe is what the three tones actually differ by. Routine run chatter
+ * ("wave 04 cleared") gets steel and reads as chrome; alerts get amber; the
+ * boss gets red plus a pulsing rim. One property, so a new tone is one rule.
+ */
+.hud__banner {
+  --stripe: #3d4550;
+
+  position: absolute;
+  top: 24%;
+  left: 50%;
+  transform: translate(-50%, calc(-50% + 6px));
+  max-width: min(680px, 88vw);
+  /* The vertical padding clears the 5px hazard strips at both edges. */
+  padding: 14px 24px 15px;
+  font-family: var(--font-display);
+  font-size: clamp(13px, 2.1vw, 20px);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--hull-text);
+  background: linear-gradient(180deg, rgba(16, 21, 30, 0.93), rgba(8, 11, 17, 0.9));
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.72),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  opacity: 0;
+  /* Never eats a click meant for the canvas. */
+  pointer-events: none;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.hud__banner::before,
+.hud__banner::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 5px;
+  background: repeating-linear-gradient(
+    45deg,
+    var(--stripe) 0 7px,
+    #11141a 7px 14px
+  );
+}
+
+.hud__banner::before { top: 0; }
+.hud__banner::after { bottom: 0; }
+
+.hud__banner--visible {
+  opacity: 1;
+  transform: translate(-50%, -50%);
+}
+
+.hud__banner--alert {
+  --stripe: var(--tab-amber);
+  color: #ffe6b0;
+}
+
+.hud__banner--critical {
+  --stripe: var(--danger-red);
+  color: #ffdce3;
+  animation: hud-alarm 0.62s ease-in-out infinite;
+}
+
+@keyframes hud-alarm {
+  0%, 100% {
+    box-shadow:
+      0 12px 32px rgba(0, 0, 0, 0.72),
+      inset 0 0 0 1px rgba(255, 42, 85, 0.4);
+  }
+  50% {
+    box-shadow:
+      0 0 26px rgba(255, 42, 85, 0.5),
+      0 12px 32px rgba(0, 0, 0, 0.72),
+      inset 0 0 0 2px rgba(255, 42, 85, 0.92);
+  }
+}
+
+/*
+ * Clear-the-swarm alert — ONE plate, not two.
+ *
+ * This used to be a persistent "Hostiles Remaining N" readout sitting under a
+ * transient "[ ALERT // SPAWN DEPLETED ]" banner: the two fired together on
+ * spawn-close and, for the 2.2s the banner held, told the player the same
+ * thing twice, stacked. There is no banner for this event now — this single
+ * plate carries the bracketed alert text AND the live count, and it holds for
+ * as long as the condition does (which a transient banner cannot), sitting
+ * below the banner SLOT rather than in it so an unrelated transient (a level-
+ * up, a wave-clear) can still surface above it without a collision.
  */
 .hud__objective {
   position: absolute;
-  top: 44%;
+  top: 33%;
   left: 50%;
   transform: translate(-50%, -50%);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 5px 16px;
-  font-size: 14px;
+  max-width: min(620px, 88vw);
+  padding: 10px 20px 11px;
+  font-family: var(--font-display);
+  font-size: clamp(11px, 1.7vw, 14px);
   font-weight: 700;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: #ffb347;
-  background: rgba(10, 6, 2, 0.55);
-  border: 1px solid rgba(255, 179, 71, 0.35);
-  border-radius: 2px;
+  text-align: center;
+  color: #ffe6b0;
+  background: linear-gradient(180deg, rgba(16, 21, 30, 0.9), rgba(8, 11, 17, 0.87));
+  box-shadow: inset 0 0 0 1px rgba(251, 197, 49, 0.32);
   opacity: 0;
-  /* Not interactive, and must never eat a click meant for the canvas. */
   pointer-events: none;
   transition: opacity 0.2s ease;
+  font-variant-numeric: tabular-nums;
 }
+
+.hud__objective::before,
+.hud__objective::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: repeating-linear-gradient(
+    45deg,
+    var(--tab-amber) 0 5px,
+    #11141a 5px 10px
+  );
+}
+
+.hud__objective::before { top: 0; }
+.hud__objective::after { bottom: 0; }
 
 .hud__objective--visible {
   opacity: 1;
 }
 
-.hud__objective-count {
-  font-variant-numeric: tabular-nums;
-  color: var(--hull-text);
-  letter-spacing: 0.05em;
-}
-
-.hud__phase {
-  position: absolute;
-  bottom: 10px;
-  left: 12px;
-  font-size: 11px;
-  letter-spacing: 0.12em;
-  color: #3d4a5c;
-}
-
-/* Owned-card strip */
-.hud__cards {
-  position: absolute;
-  top: 58px;
-  left: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  font-size: 11px;
-  color: var(--hull-text-dim);
-}
-
-.hud__owned b {
-  color: var(--hull-text);
-  font-weight: 600;
+@media (prefers-reduced-motion: reduce) {
+  .hud__banner--critical {
+    animation: none;
+    box-shadow:
+      0 12px 32px rgba(0, 0, 0, 0.72),
+      inset 0 0 0 2px rgba(255, 42, 85, 0.92);
+  }
 }
 
 /* ------------------------------------------------------------------ */
-/* Level-up draft                                                      */
+/* Level-up draft — the one console that opens FULL SIZE               */
 /* ------------------------------------------------------------------ */
 
+/*
+ * The draft pauses the run, so unlike the rest of the HUD it does not have to
+ * stay out of the playfield's way. That is why it is the one in-run surface
+ * built LIGHT, from the same plates as the menu and the Salvage Depot: it is a
+ * console the pilot has turned to face, not an overlay they are fighting
+ * through.
+ */
 .hud__draft {
   position: absolute;
   inset: 0;
@@ -275,11 +1099,11 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 22px;
-  padding: 24px;
-  background: radial-gradient(circle at 50% 40%, rgba(6, 20, 40, 0.82), rgba(2, 3, 10, 0.95));
-  backdrop-filter: var(--hull-blur);
-  -webkit-backdrop-filter: var(--hull-blur);
+  padding: 20px 16px;
+  overflow-y: auto;
+  background:
+    radial-gradient(ellipse at 50% 38%, rgba(12, 24, 48, 0.9), rgba(2, 3, 10, 0.96)),
+    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.2) 0 2px, transparent 2px 4px);
   pointer-events: auto;
 }
 
@@ -287,181 +1111,289 @@
   display: flex;
 }
 
-.hud__draft-title {
-  font-size: clamp(20px, 4vw, 30px);
-  font-weight: 800;
+.draft {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: min(880px, 96vw);
+}
+
+.draft__tab {
+  position: relative;
+  z-index: 0;
+  align-self: flex-start;
+  max-width: calc(100% - 20px);
+  margin: 0 0 -8px 20px;
+  padding: 6px 28px 13px 15px;
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--hull-text);
-  text-shadow: 0 0 20px rgba(0, 240, 255, 0.5);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #ffffff;
+  text-shadow: 0 2px 0 rgba(10, 16, 30, 0.55);
+  /* Deep stop above the baseline: white 700 on flat #00a8ff is only 2.6:1. */
+  background: linear-gradient(180deg, var(--tab-blue) 0%, var(--tab-blue-deep) 58%);
+  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 100%, 0 100%);
+}
+
+.draft__body {
+  position: relative;
+  z-index: 1;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 24px clamp(14px, 3vw, 26px) 26px;
+}
+
+.draft__body::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border: 16px solid transparent;
+  border-image: url('/assets/ui/console_plate.png') 16 fill stretch;
+  /* Lit, not gunmetal: the run is paused behind this, so it is allowed to be
+     the brightest thing on screen. */
+  filter: brightness(1.2) drop-shadow(0 18px 34px rgba(0, 0, 0, 0.8));
+}
+
+/* Arcade contrast: a navy ring drawn as shadows, then a hard offset drop. */
+.hud__draft-title {
+  font-family: var(--font-display);
+  font-size: clamp(17px, 3.2vw, 26px);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--panel-bg);
+  text-shadow:
+    -2px -2px 0 var(--console-stroke), 2px -2px 0 var(--console-stroke),
+    -2px 2px 0 var(--console-stroke), 2px 2px 0 var(--console-stroke),
+    0 -2px 0 var(--console-stroke), 0 2px 0 var(--console-stroke),
+    -2px 0 0 var(--console-stroke), 2px 0 0 var(--console-stroke),
+    0 5px 0 rgba(16, 24, 42, 0.92),
+    0 8px 11px rgba(0, 0, 0, 0.45);
 }
 
 .hud__draft-options {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 16px;
+  gap: 14px;
 }
+
+/* ------------------------------------------------------------------ */
+/* Draft cards                                                         */
+/* ------------------------------------------------------------------ */
 
 .hud__card {
   position: relative;
+  isolation: isolate;
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  width: min(240px, 78vw);
-  /* Bottom padding leaves the pip rail its own strip along the edge. */
-  padding: 18px 16px 26px;
+  gap: 6px;
+  width: min(252px, 80vw);
+  /* Top padding leaves the rarity chip and the keycap their own row. */
+  padding: 34px 15px 16px;
   text-align: left;
-  color: inherit;
+  color: var(--console-ink);
   font: inherit;
   background: none;
   border: 0;
+  border-radius: 5px;
   cursor: pointer;
-  transition: transform 0.14s ease, filter 0.14s ease;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
 }
 
-/*
- * The Kenney plate, 9-sliced and pushed into the palette.
- *
- * `fill` makes border-image paint the centre as well as the frame, so one
- * image is the whole panel. The filter lives here rather than on .hud__card
- * because a filter on the button would dim the text with the plate.
- */
 .hud__card::before {
   content: '';
   position: absolute;
   inset: 0;
-  border: 14px solid transparent;
-  border-image: url('/assets/ui/panel_card.png') 14 fill stretch;
-  filter: brightness(0.26) saturate(1.6) hue-rotate(185deg);
-  z-index: 0;
+  z-index: -1;
+  border: 16px solid transparent;
+  border-image: url('/assets/ui/console_bay.png') 16 fill stretch;
 }
 
-/* Neon rim and glow, above the darkened plate but below the content. */
+/* The rarity rim: a colour band across the plate's top edge. */
 .hud__card::after {
   content: '';
   position: absolute;
-  inset: 0;
-  border-radius: 10px;
-  box-shadow: var(--hull-shadow);
-  pointer-events: none;
-  z-index: 0;
+  top: 0;
+  left: 4px;
+  right: 4px;
+  height: 4px;
+  z-index: -1;
+  border-radius: 2px 2px 0 0;
 }
 
-.hud__card > * {
-  position: relative;
-  z-index: 1;
-}
+.hud__card--common::after { background: var(--rarity-common); }
+.hud__card--uncommon::after { background: var(--rarity-uncommon); }
+.hud__card--rare::after { background: var(--rarity-rare); }
+.hud__card--legendary::after { background: var(--rarity-legendary); }
 
+/* Lifts toward the pilot and takes an ion rim. */
 .hud__card:hover {
   transform: translateY(-4px);
-  filter: brightness(1.14);
+  box-shadow:
+    0 0 0 2px var(--tab-blue),
+    0 14px 26px rgba(0, 0, 0, 0.6);
+}
+
+/* And goes back down into the console when it is actually pressed. */
+.hud__card:active {
+  transform: translateY(1px);
+  filter: brightness(0.95);
+  box-shadow:
+    0 0 0 2px var(--tab-blue-deep),
+    0 4px 10px rgba(0, 0, 0, 0.55);
 }
 
 .hud__card:focus-visible {
-  outline: 2px solid var(--neon-cyan);
+  outline: 3px solid var(--tab-blue);
   outline-offset: 3px;
 }
 
 /*
- * Rarity badge: the plate's coloured corner block, cropped to just that block.
+ * Rarity chip: a filled block of the plate's own colour, with the word on it.
  *
- * The source PNG is a full sci-fi button whose top-left QUADRANT (source pixels
- * 0-31 of 64) is the rarity colour and whose remaining three quarters are the
- * light-grey button face. Drawn whole at 22px that reads as a grey square with
- * a tinted corner — the colour, which is the only part that carries meaning,
- * would be the part that disappeared.
+ * The source PNG is a sci-fi button whose top-left QUADRANT is the rarity
+ * colour and whose remaining three quarters are light grey button face. Zoomed
+ * to 267% and offset 10%, the visible window lands wholly inside that colour
+ * block at this size — so what shows is a flat field of the pack's exact hue,
+ * which is why stretching it to a non-square chip costs nothing.
  *
- * So the background is zoomed to 267% and offset 10%, which frames source
- * pixels 4-28: inside the colour block, clear of the rounded outer edge. The
- * image URL comes from the asset manifest via hud.js, so this rule owns the
- * crop and the manifest owns the path.
+ * Coloured type on metal was the alternative and it does not work: every one of
+ * the four hues lands between 2 and 3:1 as text, and darkening them until they
+ * pass makes blue, green and red stop being tellable apart.
  */
-.hud__card-badge {
+.hud__card-chip {
   position: absolute;
-  top: 10px;
-  left: 12px;
-  width: 20px;
-  height: 20px;
+  top: 9px;
+  left: 13px;
   z-index: 2;
+  padding: 3px 9px 4px;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  /* Near-black clears 4.5:1 on all four; white clears it on none. */
+  color: #0a0e18;
   background-repeat: no-repeat;
   background-size: 267%;
   background-position: 10% 10%;
   border-radius: 2px;
-  box-shadow: 0 0 10px rgba(0, 0, 0, 0.6), inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(0, 0, 0, 0.25);
   pointer-events: none;
 }
 
+/* Retro keycap: a light face on a hard bottom bevel, as if it depresses. */
 .hud__card-key {
   position: absolute;
-  top: 10px;
+  top: 8px;
   right: 12px;
+  z-index: 2;
+  min-width: 21px;
+  padding: 2px 0 3px;
+  font-family: var(--font-display);
   font-size: 11px;
-  color: #5b6a7d;
+  font-weight: 700;
+  text-align: center;
+  color: var(--console-ink);
+  background: linear-gradient(180deg, var(--button-face), #c8ccd6);
+  border-radius: 3px;
+  box-shadow:
+    0 2px 0 var(--button-shadow),
+    0 3px 3px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  pointer-events: none;
+}
+
+.hud__card:active .hud__card-key {
+  transform: translateY(2px);
+  box-shadow: 0 0 0 var(--button-shadow), inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 
 .hud__card-name {
-  font-size: 17px;
+  font-family: var(--font-display);
+  font-size: 16px;
   font-weight: 700;
   letter-spacing: 0.02em;
-  /* Clear of the rarity badge in the top-left corner. */
-  padding-left: 20px;
 }
 
 .hud__card-meta {
-  font-size: 10px;
-  letter-spacing: 0.1em;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: #6d7f92;
+  color: var(--console-ink-dim);
 }
 
 .hud__card-level {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--neon-cyan);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #0a5c8f;
 }
 
 .hud__card-desc {
+  flex: 1;
   font-size: 12px;
   line-height: 1.5;
-  color: var(--hull-text-dim);
+  color: var(--console-ink-dim);
 }
 
-/* Level pips, flush to the card's bottom edge. */
-.hud__card-pips {
-  position: absolute;
-  left: 16px;
-  right: 16px;
-  bottom: 10px;
-  display: flex;
-  gap: 4px;
+/*
+ * The card's meter is the loadout rail's component, stretched.
+ *
+ * The rail's cells are a fixed 9px because a chip is only as wide as its name;
+ * here the meter spans the card, so equal `1fr` tracks divide whatever width
+ * the card has between however many levels the card actually allows — a
+ * three-level card gets three wide cells rather than five narrow ones and a gap.
+ */
+.hud__card .hud__meter {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  width: 100%;
+  margin-top: 2px;
 }
 
-.hud__pip {
-  flex: 1 1 0;
-  height: 4px;
-  background: rgba(255, 255, 255, 0.09);
-  box-shadow: inset 0 0 0 1px rgba(0, 240, 255, 0.14);
+.hud__card .hud__cell {
+  width: 100%;
+  height: 7px;
 }
 
-/* Rarity drives the badge colour, the top rim and the lit pips together, so
-   the three never disagree about what the card is worth. */
-.hud__card--common .hud__pip--on { background: var(--rarity-common); box-shadow: 0 0 8px var(--rarity-common); }
-.hud__card--uncommon .hud__pip--on { background: var(--rarity-uncommon); box-shadow: 0 0 8px var(--rarity-uncommon); }
-.hud__card--rare .hud__pip--on { background: var(--rarity-rare); box-shadow: 0 0 8px var(--rarity-rare); }
-.hud__card--legendary .hud__pip--on { background: var(--rarity-legendary); box-shadow: 0 0 8px var(--rarity-legendary); }
+@media (max-width: 620px) {
+  .draft__body {
+    padding: 20px 12px 22px;
+  }
 
-.hud__card--common::after { border-top: 3px solid var(--rarity-common); }
-.hud__card--uncommon::after { border-top: 3px solid var(--rarity-uncommon); }
-.hud__card--rare::after { border-top: 3px solid var(--rarity-rare); }
-.hud__card--legendary::after { border-top: 3px solid var(--rarity-legendary); }
+  .hud__card {
+    padding: 32px 13px 14px;
+  }
+}
 
 /* ==========================================================================
  * Fixed Top-Screen Boss Health Bar (Dreadnought Station HUD)
  * ======================================================================== */
 .hud__boss {
   position: absolute;
-  top: 66px;
+  /*
+   * Clears the telemetry band with 14px of air. The band runs 10px to 48px, so
+   * anything under 60px here has the boss track crowding the instrument strip —
+   * which is what it was doing at 66px before the band gained its own chassis.
+   */
+  top: 62px;
   left: 50%;
   transform: translate(-50%, -10px);
   width: min(620px, 56vw);

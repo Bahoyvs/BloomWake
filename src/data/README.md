@@ -1,7 +1,37 @@
 # Data tables
 
-Plain data, no logic beyond pure lookups. `enemies.js`, `cards.js`, `rewards.js`,
-`cosmetics.js`, `meta-upgrades.js`, `animations.js`.
+Plain data, no logic beyond pure lookups. `enemies.js`, `roster-config.js`,
+`cards.js`, `rewards.js`, `cosmetics.js`, `meta-upgrades.js`, `animations.js`.
+
+---
+
+## Adding an enemy or a boss: `roster-config.js`
+
+`roster-config.js` is the designer-facing catalogue. A new species is a row in
+`ENEMY_ARCHETYPES`; a new modular boss is a row in `COMPOSITE_BOSSES` with a
+`parts` list. Neither needs a change in `src/core/`.
+
+- **Behaviour** is a key (`swarm`, `kiting`, `rammer`, `sine`) into the state
+  machines in `src/core/enemy-system.js`; the numbers each one reads live in
+  that row's `behaviorParams`. Retuning a behaviour is a data edit. Inventing a
+  fifth *kind* of movement is a handler in `enemy-system.js` plus a value in
+  `BEHAVIORS` — `validateRosterConfig()` fails if those two drift apart.
+- **A boss is a chassis plus parts.** Each part has its own hull, gun, wreck
+  sprite and local offset, and the chassis is invulnerable while the parts named
+  in `chassis.armoredBy` are standing. Phases arm weapons by id and trigger on
+  HP fraction, parts destroyed, or elapsed time.
+- **Offsets are chassis-local pixels** and rotate with the hull.
+  `src/core/composite-boss.js` transforms them for hit detection and
+  `src/render/composite-boss-renderer.js` builds its Pixi container tree from
+  the same values, so the sprite and the hitbox cannot disagree.
+- **Run the validator.** `tests/roster-config.test.js` calls
+  `validateRosterConfig()`, which reports every unknown behaviour, bullet type,
+  weapon type, dangling phase weapon and malformed part in one pass. A typo
+  fails a test naming the row rather than producing an enemy that stands still.
+
+`enemies.js` is the older shipped roster and still drives the legacy species
+through the behaviour switch in `src/core/simulation.js`. Both paths are live;
+species migrate one at a time, and save data keyed on the old ids keeps working.
 
 ---
 

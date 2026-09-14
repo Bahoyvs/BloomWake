@@ -26,7 +26,7 @@ export const META_UPGRADES = {
   [META_UPGRADE_IDS.START_HP]: {
     id: META_UPGRADE_IDS.START_HP,
     name: 'Reinforced Hull',
-    description: 'Seviye başına +10 başlangıç canı.',
+    description: '+10 starting HP per level.',
     baseCost: 50,
     costGrowth: 1.4,
     maxLevel: 5,
@@ -36,7 +36,7 @@ export const META_UPGRADES = {
   [META_UPGRADE_IDS.PICKUP_RADIUS]: {
     id: META_UPGRADE_IDS.PICKUP_RADIUS,
     name: 'Tractor Field',
-    description: 'Seviye başına +12px toplama yarıçapı.',
+    description: '+12px pickup radius per level.',
     baseCost: 40,
     costGrowth: 1.4,
     maxLevel: 5,
@@ -52,7 +52,7 @@ export const META_UPGRADES = {
   [META_UPGRADE_IDS.START_SPEED]: {
     id: META_UPGRADE_IDS.START_SPEED,
     name: 'Thruster Tune',
-    description: 'Seviye başına +%4 hareket hızı.',
+    description: '+4% move speed per level.',
     baseCost: 80,
     costGrowth: 1.5,
     maxLevel: 3,
@@ -62,7 +62,7 @@ export const META_UPGRADES = {
   [META_UPGRADE_IDS.FOURTH_CARD_SLOT]: {
     id: META_UPGRADE_IDS.FOURTH_CARD_SLOT,
     name: 'Fourth Slot',
-    description: 'Seviye atlama seçiminde 4. kart açılır.',
+    description: 'Unlocks a 4th card choice on level-up.',
     baseCost: 2000,
     costGrowth: 1,
     maxLevel: 1,

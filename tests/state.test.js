@@ -127,17 +127,26 @@ describe('Backward compatibility with a Phase 4 save', () => {
   });
 
   it('round-trips a fully-populated save unchanged', () => {
+    // "Fully populated" means every field of the CURRENT schema. A new field
+    // belongs here the moment it is added — a save that predates it is the
+    // Phase 4 fixture above, and gaining a default for it is the migration
+    // working, not a round-trip failure.
     const full = {
       version: 1,
       petals: 1234,
       metaUpgrades: { startHp: 3, pickupRadius: 2, startSpeed: 1, fourthCardSlot: true },
       cosmetics: { owned: ['default', 'dew-tint', 'prestij-skin'], equipped: 'dew-tint' },
+      activeSkillId: 'phase_shift',
       pity: { runsSinceRareOrBetter: 4 },
       dailyBloom: { lastClaimedAt: 1700000000000 },
       stats: { bestWaveReached: 11, totalRuns: 40 },
     };
 
     expect(serializeState(loadState(full))).toEqual(full);
+  });
+
+  it('gives a save that predates active skills the default one', () => {
+    expect(loadState(phase4Save()).activeSkillId).toBe('afterburner');
   });
 });
 

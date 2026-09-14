@@ -18,6 +18,7 @@
  */
 
 import { COSMETIC_IDS } from '../data/cosmetics.js';
+import { DEFAULT_ACTIVE_SKILL_ID, getActiveSkillById } from '../data/active-skills.js';
 
 /**
  * Bump only on a BREAKING change — a field whose type or meaning changes, or
@@ -47,6 +48,11 @@ export function createDefaultState() {
       owned: [COSMETIC_IDS.DEFAULT],
       equipped: COSMETIC_IDS.DEFAULT,
     },
+    /**
+     * The active skill carried into the next run. A loadout choice, so it
+     * persists like the equipped cosmetic rather than resetting each run.
+     */
+    activeSkillId: DEFAULT_ACTIVE_SKILL_ID,
     pity: {
       runsSinceRareOrBetter: 0,
     },
@@ -147,6 +153,12 @@ export function sanitizeState(state) {
   clean.cosmetics.owned = uniqueOwned;
   if (!uniqueOwned.includes(clean.cosmetics.equipped)) {
     clean.cosmetics.equipped = COSMETIC_IDS.DEFAULT;
+  }
+
+  // An id from a newer build, or a hand-edited save, costs the player their
+  // choice of skill rather than leaving the system pointing at a missing row.
+  if (!getActiveSkillById(clean.activeSkillId)) {
+    clean.activeSkillId = DEFAULT_ACTIVE_SKILL_ID;
   }
 
   clean.pity.runsSinceRareOrBetter = Math.max(

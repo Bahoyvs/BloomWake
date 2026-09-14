@@ -15,12 +15,11 @@
  * mapping is written out below on each card, so the connection is one grep away.
  *
  * NAMES vs DESCRIPTIONS
- * `name` carries the weapon's designation as specified in the theme brief, in
- * English — these are hardware codenames and read as such. `description` is the
- * player-facing flavour and is in Turkish, matching the rest of the game's UI
- * copy. Rarity and behaviour values stay English identifiers: they are keys
- * (CSS class suffixes, dispatch labels), not prose. The UI layer owns their
- * translation — see RARITY_LABEL in src/ui/hud.js.
+ * `name`, `type` and `description` are all player-facing and all English: they
+ * render in the in-run draft, and the HUD is English throughout even though the
+ * meta screens are Turkish. Rarity and behaviour values are English too, but
+ * for a different reason — they are keys (CSS class suffixes, dispatch labels),
+ * not prose. Nothing downstream translates any of this.
  */
 
 export const CARD_RARITIES = {
@@ -32,14 +31,14 @@ export const CARD_RARITIES = {
 
 /** Player-facing category labels. Display only — nothing dispatches on these. */
 export const CARD_TYPES = {
-  PROJECTILE: 'Mermi',
-  BEAM: 'Huzme',
-  CHAIN_LIGHTNING: 'Elektrik Arkı',
-  ORBIT: 'Yörünge',
-  AOE: 'Alan',
-  SHIELD: 'Kalkan',
-  PASSIVE: 'Pasif',
-  CONTROL: 'Kontrol',
+  PROJECTILE: 'Kinetic',
+  BEAM: 'Beam',
+  CHAIN_LIGHTNING: 'Arc',
+  ORBIT: 'Orbital',
+  AOE: 'Area',
+  SHIELD: 'Shield',
+  PASSIVE: 'Passive',
+  CONTROL: 'Control',
 };
 
 /**
@@ -83,7 +82,7 @@ export const CARDS = [
     type: CARD_TYPES.PROJECTILE,
     behavior: CARD_BEHAVIORS.HOMING_VOLLEY,
     rarity: CARD_RARITIES.COMMON,
-    description: 'En yakın hedefe seri mavi lazer iğneleri atar; seviye ile mermi sayısı ve delme artar.',
+    description: 'Fires rapid blue laser needles at the nearest target; levels add bolts and piercing.',
     maxLevel: 5,
     /**
      * `pierce` is how many EXTRA enemies a needle passes through after its
@@ -112,7 +111,7 @@ export const CARDS = [
     type: CARD_TYPES.CHAIN_LIGHTNING,
     behavior: CARD_BEHAVIORS.BEAM,
     rarity: CARD_RARITIES.COMMON,
-    description: 'En yakın düşmana otomatik elektrik arkı fırlatır; hedefler arasında zincirleme seker.',
+    description: 'Throws an automatic arc at the nearest hostile; it chains between targets.',
     maxLevel: 5,
     levels: [
       { level: 1, damage: 22, cooldown: 2.2, range: 280, bounces: 1, bounceRadius: 160, shockSlow: 0, shockDuration: 0 },
@@ -129,7 +128,7 @@ export const CARDS = [
     type: CARD_TYPES.ORBIT,
     behavior: CARD_BEHAVIORS.ORBIT,
     rarity: CARD_RARITIES.COMMON,
-    description: 'Çevrende dönen 2-6 mekanik savunma uydusu; temas eden kovan birimlerini biçer.',
+    description: 'Two to six defence satellites orbit the hull, shredding any hive unit they touch.',
     maxLevel: 5,
     // Step B: weakest card in the set (1.5% of build output at L5). Damage and
     // orbit radius both raised — a wider orbit sweeps a larger annulus, which is
@@ -149,7 +148,7 @@ export const CARDS = [
     type: CARD_TYPES.PROJECTILE,
     behavior: CARD_BEHAVIORS.RADIAL_BURST,
     rarity: CARD_RARITIES.UNCOMMON,
-    description: '360 derece radyal saçılan kinetik şarapnel patlaması; yakın mesafe temizleyicisi.',
+    description: 'A 360-degree kinetic shrapnel burst; a close-quarters clearing tool.',
     maxLevel: 5,
     levels: [
       { level: 1, damage: 15, count: 6, cooldown: 4.0 },
@@ -179,7 +178,7 @@ export const CARDS = [
     type: CARD_TYPES.PROJECTILE,
     behavior: CARD_BEHAVIORS.HOMING_MISSILE,
     rarity: CARD_RARITIES.UNCOMMON,
-    description: 'Havaya fırlayıp iz bırakan güdümlü mikro füzeler; en yüksek canlı hedefe kilitlenir.',
+    description: 'Guided micro-missiles that arc up trailing smoke; they lock the highest-HP target.',
     maxLevel: 5,
     targeting: 'highest_hp',
     levels: [
@@ -197,7 +196,7 @@ export const CARDS = [
     type: CARD_TYPES.SHIELD,
     behavior: CARD_BEHAVIORS.SHIELD,
     rarity: CARD_RARITIES.RARE,
-    description: 'Gemiyi saran keskin altıgen bariyer; hazır olduğunda gelen bir darbeyi tamamen iptal eder.',
+    description: 'A hard hexagonal barrier around the ship; while charged it cancels one incoming hit outright.',
     maxLevel: 5,
     /**
      * A CHARGE, NOT AN HP POOL.
@@ -229,7 +228,7 @@ export const CARDS = [
     type: CARD_TYPES.PASSIVE,
     behavior: CARD_BEHAVIORS.WINGMAN,
     rarity: CARD_RARITIES.COMMON,
-    description: 'Arkanda V formasyonunda uçan taretli destek dronu; ayrıca hız ve hasar verir.',
+    description: 'A turreted support drone flying your wing in V formation; it also adds speed and damage.',
     maxLevel: 5,
     /**
      * Was a pure stat passive. It is now an actual escort: one drone at L1, two
@@ -258,7 +257,7 @@ export const CARDS = [
     type: CARD_TYPES.CONTROL,
     behavior: CARD_BEHAVIORS.AOE_KNOCKBACK,
     rarity: CARD_RARITIES.RARE,
-    description: 'Genişleyen neon halka dalgası; düşmanları geri iter ve 1.2 saniye dondurur.',
+    description: 'An expanding neon ring wave; it knocks hostiles back and freezes them for 1.2 seconds.',
     maxLevel: 5,
     /**
      * Knockback AND a stun (CARD_MODEL.EMP_STUN_SEC) as of the control pass.

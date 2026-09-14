@@ -15,6 +15,16 @@ const MOVE_KEYS = {
   ArrowRight: [1, 0],
 };
 
+/**
+ * Active-skill keys.
+ *
+ * Space doubles as confirm. The two never fight because their guards are
+ * mutually exclusive at the call site: confirm only acts from IDLE/GAME_OVER/
+ * VICTORY, the skill only fires while RUNNING. Binding Shift as well gives the
+ * player a key they can hold a thumb near without leaving the movement keys.
+ */
+const SKILL_KEYS = new Set(['Space', 'ShiftLeft', 'ShiftRight']);
+
 /** Draft picks. A 4th slot exists for the Phase 5 meta-upgrade. */
 const SLOT_KEYS = {
   Digit1: 0,
@@ -27,6 +37,7 @@ export class KeyboardInput {
   /**
    * @param {Object} [handlers]
    * @param {() => void} [handlers.onConfirm] - Enter/Space: start or restart
+   * @param {() => void} [handlers.onSkill] - Space/Shift: fire the active skill
    * @param {() => void} [handlers.onPause] - Escape/P
    * @param {(index: number) => void} [handlers.onSlot] - Digit keys 1-4, zero-based
    * @param {EventTarget} [target]
@@ -44,8 +55,22 @@ export class KeyboardInput {
         event.preventDefault();
         return;
       }
+      /*
+       * Edge-triggered, not level-triggered: `event.repeat` is already filtered
+       * at the top of this handler, so holding the key casts exactly once. A
+       * held Shift must not machine-gun the skill system with rejected casts.
+       */
+      if (SKILL_KEYS.has(event.code)) {
+        this.handlers.onSkill?.();
+        // Space is also confirm. Both handlers run and each decides for itself
+        // whether the current game state is one it acts on.
+      }
       if (event.code === 'Enter' || event.code === 'Space') {
         this.handlers.onConfirm?.();
+        event.preventDefault();
+        return;
+      }
+      if (SKILL_KEYS.has(event.code)) {
         event.preventDefault();
         return;
       }

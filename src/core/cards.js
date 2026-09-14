@@ -694,7 +694,27 @@ export class CardSystem {
    * Tick every owned card.
    * @param {number} dt
    */
+  /**
+   * Advance every owned card.
+   *
+   * OVERCHARGE CORE SCALES THE CLOCK, NOT THE STATS.
+   * Handlers all measure their own recovery by subtracting `dt` from a
+   * cooldown, so handing them a stretched `dt` doubles every weapon's rate
+   * without a single handler knowing the skill exists — and without a
+   * `fireRateMultiplier` having to be threaded through nine stat rows that
+   * would each need to remember to apply it.
+   *
+   * It does also spin the Aegis Satellites faster and shorten the Tesla arc's
+   * flash, because those read the same clock. That is the intended reading of
+   * "all automatic weapons": the satellites ARE a weapon, and a reactor dumped
+   * into the guns spinning the blades harder is the behaviour a player would
+   * predict. Nothing that persists past the run is on this clock.
+   *
+   * @param {number} dt
+   */
   update(dt) {
+    dt *= this.sim.activeSkills?.fireRateMultiplier ?? 1;
+
     for (const [cardId] of this.sim.state.activeCards) {
       const card = getCardById(cardId);
       const stats = this.getStats(cardId);

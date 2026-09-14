@@ -25,7 +25,7 @@ export const COSMETICS = {
   [COSMETIC_IDS.DEFAULT]: {
     id: COSMETIC_IDS.DEFAULT,
     name: 'Void Drifter',
-    description: 'Standart filo livresi.',
+    description: 'Standard fleet livery.',
     cost: 0,
     purchasable: true,
     /** Matches HERO_TINT, so equipping the default changes nothing. */
@@ -35,7 +35,7 @@ export const COSMETICS = {
   [COSMETIC_IDS.DEW_TINT]: {
     id: COSMETIC_IDS.DEW_TINT,
     name: 'Ion Wash',
-    description: 'Motor taşmasının gövdeye vurduğu soluk iyon parıltısı.',
+    description: 'A pale ion shimmer where the drive plume licks the hull.',
     cost: 150,
     purchasable: true,
     tint: '#8fd8ff',
@@ -44,7 +44,7 @@ export const COSMETICS = {
   [COSMETIC_IDS.DEEP_WATER]: {
     id: COSMETIC_IDS.DEEP_WATER,
     name: 'Deep Field',
-    description: 'Uzun menzil keşif boyası; içeriden aydınlanır.',
+    description: 'Long-range recon paint; lit from within.',
     cost: 1200,
     purchasable: true,
     tint: '#b9e8ff',
@@ -53,7 +53,7 @@ export const COSMETICS = {
   [COSMETIC_IDS.PRESTIJ_SKIN]: {
     id: COSMETIC_IDS.PRESTIJ_SKIN,
     name: 'Nova Prestige',
-    description: 'Yalnızca efsanevi kurtarma kapsülünden çıkar.',
+    description: 'Legendary salvage capsule drop only.',
     cost: 0,
     /** Drop-only: never appears in the shop and cannot be bought. */
     purchasable: false,
