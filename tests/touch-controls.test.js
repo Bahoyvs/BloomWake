@@ -144,15 +144,34 @@ describe('computeJoystickVector', () => {
 });
 
 describe('isTouchDevice', () => {
-  it('detects the two ways a browser reports touch', () => {
+  const media = (matches) => ({ matchMedia: () => ({ matches }) });
+
+  it('detects the three ways a browser reports touch', () => {
     expect(isTouchDevice({ ontouchstart: null, navigator: {} })).toBe(true);
     expect(isTouchDevice({ navigator: { maxTouchPoints: 5 } })).toBe(true);
+    // The coarse-pointer probe is the one that carries DevTools device mode and
+    // the Android WebViews that report maxTouchPoints: 0.
+    expect(isTouchDevice({ navigator: { maxTouchPoints: 0 }, ...media(true) })).toBe(true);
   });
 
   it('is false for a plain mouse-only window', () => {
-    expect(isTouchDevice({ navigator: { maxTouchPoints: 0 } })).toBe(false);
+    expect(isTouchDevice({ navigator: { maxTouchPoints: 0 }, ...media(false) })).toBe(false);
     expect(isTouchDevice({ navigator: {} })).toBe(false);
     expect(isTouchDevice(null)).toBe(false);
+  });
+
+  it('survives a window with no matchMedia, or one that throws', () => {
+    // Detection runs during boot; an exception here takes the whole game down
+    // rather than costing a joystick.
+    expect(isTouchDevice({ navigator: {} })).toBe(false);
+    expect(
+      isTouchDevice({
+        navigator: {},
+        matchMedia() {
+          throw new Error('unsupported query');
+        },
+      })
+    ).toBe(false);
   });
 });
 

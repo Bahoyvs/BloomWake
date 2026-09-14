@@ -127,6 +127,25 @@
    * not survive; this clears 5:1.
    */
   --hud-label: #a9bccd;
+
+  /*
+   * HUD DENSITY TOKENS.
+   *
+   * The handful of dimensions that have to move TOGETHER when the HUD is
+   * compacted for a short viewport. A telemetry bay that shrinks while its
+   * readout does not just clips the number, so the pair is driven from one
+   * place and the landscape block at the foot of this file retunes them once.
+   *
+   * Deliberately NOT a token for every measurement in the file. Most of the
+   * HUD's numbers are one-offs answering to their own art — the 16px
+   * border-image slices, the tab's clip-path — and wrapping those in variables
+   * would add indirection without ever letting anything co-vary.
+   */
+  --hud-bay-h: 50px;
+  --hud-bar-h: 20px;
+  --hud-font-micro: 8px;
+  --hud-font-readout: 17px;
+  --hud-font-name: 10px;
 }
 
 .hud {
@@ -199,7 +218,7 @@
   align-items: center;
   justify-content: center;
   gap: 2px;
-  height: 50px;
+  height: var(--hud-bay-h);
   padding: 6px 8px;
   box-sizing: border-box;
   min-width: 0;
@@ -216,12 +235,12 @@
   inset: 0;
   z-index: -1;
   border: 16px solid transparent;
-  border-image: url('/assets/ui/console_plate.png') 16 fill stretch;
+  border-image: url('../../public/assets/ui/console_plate.png') 16 fill stretch;
   filter: var(--hud-steel) drop-shadow(0 6px 14px rgba(0, 0, 0, 0.7));
 }
 
 .tbay__label {
-  font-size: 8px;
+  font-size: var(--hud-font-micro);
   font-weight: 600;
   line-height: 1;
   letter-spacing: 0.16em;
@@ -231,7 +250,7 @@
 }
 
 .tbay__readout {
-  font-size: 17px;
+  font-size: var(--hud-font-readout);
   font-weight: 700;
   line-height: 1;
   letter-spacing: 0.03em;
@@ -337,7 +356,7 @@
 }
 
 .tally__label {
-  font-size: 8px;
+  font-size: var(--hud-font-micro);
   font-weight: 600;
   line-height: 1;
   letter-spacing: 0.16em;
@@ -386,7 +405,7 @@
   inset: 0;
   z-index: -1;
   border: 16px solid transparent;
-  border-image: url('/assets/ui/console_bay.png') 16 fill stretch;
+  border-image: url('../../public/assets/ui/console_bay.png') 16 fill stretch;
   filter: var(--hud-steel) drop-shadow(0 4px 10px rgba(0, 0, 0, 0.6));
 }
 
@@ -419,7 +438,7 @@
 
 .chip__name {
   font-family: var(--font-display);
-  font-size: 10px;
+  font-size: var(--hud-font-name);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -513,13 +532,13 @@
   inset: 0;
   z-index: -1;
   border: 16px solid transparent;
-  border-image: url('/assets/ui/console_plate.png') 16 fill stretch;
+  border-image: url('../../public/assets/ui/console_plate.png') 16 fill stretch;
   filter: var(--hud-steel) drop-shadow(0 8px 20px rgba(0, 0, 0, 0.75));
 }
 
 .tube {
   position: relative;
-  height: 20px;
+  height: var(--hud-bar-h);
   background: var(--hud-recess);
   border-radius: 3px;
   box-shadow:
@@ -1159,7 +1178,7 @@
   inset: 0;
   z-index: -1;
   border: 16px solid transparent;
-  border-image: url('/assets/ui/console_plate.png') 16 fill stretch;
+  border-image: url('../../public/assets/ui/console_plate.png') 16 fill stretch;
   /* Lit, not gunmetal: the run is paused behind this, so it is allowed to be
      the brightest thing on screen. */
   filter: brightness(1.2) drop-shadow(0 18px 34px rgba(0, 0, 0, 0.8));
@@ -1219,7 +1238,7 @@
   inset: 0;
   z-index: -1;
   border: 16px solid transparent;
-  border-image: url('/assets/ui/console_bay.png') 16 fill stretch;
+  border-image: url('../../public/assets/ui/console_bay.png') 16 fill stretch;
 }
 
 /* The rarity rim: a colour band across the plate's top edge. */
@@ -1622,4 +1641,198 @@ body.touch-mode .socket__key {
  */
 body.touch-mode .tbay--pause {
   min-width: 48px;
+}
+
+/* ==========================================================================
+ * Short landscape — compacting the HUD off the playfield
+ * ==========================================================================
+ *
+ * A phone held sideways gives the arena ~390px of height. At desktop density
+ * the instrument strip claims the top 60px, the hull deck the bottom 75, the
+ * boss track another 40 when it is up, and the loadout rail runs 188px into the
+ * left of the field — together comfortably over a third of the screen, and the
+ * third the player is trying to dodge through.
+ *
+ * So the HUD gets denser, not smaller in every direction: the readouts keep
+ * their weight and their contrast, while the chassis, the padding and the dead
+ * space between them come down. The one thing that does NOT shrink is anything
+ * the player has to hit — the pause key trades visible size for an invisible
+ * 48px target rather than giving up either.
+ *
+ * Keyed on height plus orientation, so a tablet with the same width but three
+ * times the height keeps the roomy layout.
+ */
+@media (max-height: 520px) and (orientation: landscape) {
+  .hud {
+    --hud-bay-h: 34px;
+    --hud-bar-h: 14px;
+    --hud-font-micro: 7px;
+    --hud-font-readout: 13px;
+    --hud-font-name: 9px;
+  }
+
+  /* ---- Telemetry band ---- */
+
+  .hud__telemetry {
+    top: 4px;
+    /* Same five tracks, all narrower. Still FIXED (see the base rule): a
+       readout that can resize its own track re-introduces the mid-fight jitter
+       the grid exists to prevent, and a cramped band shows it more, not less. */
+    grid-template-columns: repeat(3, 76px) 108px 40px;
+    gap: 5px;
+  }
+
+  .tbay {
+    padding: 4px 6px;
+  }
+
+  .tbay__tube {
+    height: 3px;
+  }
+
+  .tally b {
+    font-size: 11px;
+  }
+
+  .tally {
+    gap: 6px;
+  }
+
+  /*
+   * The pause key: 40x34 of visible plate, 48x48 of target.
+   *
+   * The bay is `overflow: hidden` so its plate corners stay square-cut, which
+   * would also clip an oversized hit area — hence the explicit `visible` here.
+   * The ::after is transparent and purely a hit surface; it overhangs the tally
+   * bay beside it, which is harmless because every non-button element in the
+   * HUD is `pointer-events: none` (see index.html) and cannot compete for the
+   * press.
+   */
+  .tbay--pause {
+    overflow: visible;
+  }
+
+  .tbay--pause::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 48px;
+    height: 48px;
+    transform: translate(-50%, -50%);
+  }
+
+  /* ---- Loadout rail ---- */
+
+  .hud__loadout {
+    top: 42px;
+    left: max(8px, env(safe-area-inset-left, 0px));
+    width: min(150px, 22vw);
+    gap: 3px;
+    /* The rail and the hull deck no longer share any column at this width, so
+       the cap is only about reaching the bottom of the screen. */
+    max-height: calc(100vh - 96px);
+    max-height: calc(100dvh - 96px);
+  }
+
+  .chip {
+    gap: 5px;
+    padding: 3px 6px 4px;
+  }
+
+  /* A micro-chip. The three letters are the whole point of the badge — it is
+     read as a colour first and a code second — so the box tightens around them
+     rather than the type dropping below legibility. */
+  .chip__badge {
+    width: 18px;
+    padding: 2px 0;
+    font-size: 7px;
+    letter-spacing: 0;
+  }
+
+  .chip__stack {
+    gap: 2px;
+  }
+
+  .hud__cell {
+    width: 7px;
+    height: 4px;
+  }
+
+  .hud__meter {
+    gap: 1px;
+    padding: 1px;
+  }
+
+  /* ---- Hull deck ---- */
+
+  /*
+   * The red "HULL INTEGRITY" tab is dropped, and nothing is lost with it.
+   *
+   * It is a title above a bar that already reads "84 / 100 HP" in hull orange —
+   * the one readout on the deck that is never ambiguous. The tab cost ~16px of
+   * the deck's height to restate it, which at this viewport is most of a
+   * health bar.
+   */
+  .deck__tab {
+    display: none;
+  }
+
+  .hud__hull-deck {
+    width: min(360px, 48vw);
+    bottom: max(6px, env(safe-area-inset-bottom, 0px));
+  }
+
+  .deck__body {
+    gap: 3px;
+    padding: 5px 7px 6px;
+  }
+
+  .tube--shield {
+    height: 9px;
+  }
+
+  .tube__text {
+    font-size: 9px;
+    letter-spacing: 0.1em;
+  }
+
+  .tube--shield .tube__text {
+    font-size: 7px;
+    letter-spacing: 0.12em;
+  }
+
+  /* ---- Boss track ---- */
+
+  /* Follows the band up; the base rule's 14px of air above it is preserved
+     against the band's new 4px + 34px bottom edge. */
+  .hud__boss {
+    top: 42px;
+    padding: 5px 10px;
+    gap: 3px;
+  }
+
+  /* ---- Skill socket ---- */
+
+  /*
+   * 60px, down from 76 — and this is the floor, not a target to keep cutting.
+   * The platform guideline is 48px and this is the dodge button: it is pressed
+   * under pressure, without being looked at, by a thumb that is already
+   * steering with the other hand.
+   *
+   * Both selectors are spelled out because the touch-mode rule earlier in this
+   * file is `body.touch-mode .socket` at (0,2,1) and a bare `.socket` here
+   * would lose to it on specificity regardless of source order.
+   */
+  .socket,
+  body.touch-mode .socket {
+    width: 60px;
+    height: 60px;
+  }
+
+  .hud__skill-slot,
+  body.touch-mode .hud__skill-slot {
+    right: max(16px, env(safe-area-inset-right, 0px));
+    bottom: max(16px, env(safe-area-inset-bottom, 0px));
+  }
 }

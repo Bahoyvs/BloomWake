@@ -98,9 +98,19 @@ export class SettingsModal {
     this.layer.innerHTML = `
       <div class="settings__scrim" data-settings="scrim"></div>
 
+      <!--
+        Three docked parts: a pinned tab, a scrolling middle, a pinned footer.
+
+        The tab and the actions sit OUTSIDE the scroller on purpose. Before this
+        the whole plate body scrolled, which meant the only two things a player
+        needs unconditionally — the title telling them where they are, and the
+        Close button getting them out — were the first and last things to leave
+        the screen on a short viewport.
+      -->
       <div class="console console--settings" data-settings="console">
         <div class="console__tab console__tab--blue">[ SYSTEM CONFIGURATION ]</div>
         <div class="console__body settings__body">
+          <div class="settings__scroll" data-settings="scroll">
 
           <h3 class="meta__section-label">Audio</h3>
           <div class="settings__group">
@@ -135,14 +145,18 @@ export class SettingsModal {
             ${TOGGLE_ROWS.map((row) => switchRow(row)).join('')}
           </div>
 
-          <div class="settings__actions">
-            <button class="meta__btn meta__btn--primary" data-settings="close">Close</button>
-            <button class="meta__btn" data-settings="reset">Restore Defaults</button>
           </div>
 
-          <p class="settings__note" data-settings="note" hidden>
-            Storage is unavailable, so these settings last only for this session.
-          </p>
+          <div class="settings__footer">
+            <div class="settings__actions">
+              <button class="meta__btn meta__btn--primary" data-settings="close">Close</button>
+              <button class="meta__btn" data-settings="reset">Restore Defaults</button>
+            </div>
+
+            <p class="settings__note" data-settings="note" hidden>
+              Storage is unavailable, so these settings last only for this session.
+            </p>
+          </div>
         </div>
       </div>
     `;

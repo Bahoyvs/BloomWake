@@ -76,7 +76,23 @@ export const JOYSTICK_ZONE_RATIO = 0.55;
  */
 export function isTouchDevice(win = globalThis) {
   if (!win) return false;
-  return 'ontouchstart' in win || (win.navigator?.maxTouchPoints ?? 0) > 0;
+  if ('ontouchstart' in win) return true;
+  if ((win.navigator?.maxTouchPoints ?? 0) > 0) return true;
+  /*
+   * The third probe catches what the first two miss. `ontouchstart` is absent
+   * on a pointer-events-only browser, and `maxTouchPoints` reads 0 in several
+   * Android WebViews and in DevTools device emulation — which is where this
+   * gets tested. A coarse pointer means the primary input is a finger however
+   * the other two answered.
+   *
+   * Guarded because `matchMedia` is absent under Node and in older WebViews,
+   * and a detection helper that throws takes the whole boot down with it.
+   */
+  try {
+    return win.matchMedia?.('(pointer: coarse)').matches === true;
+  } catch {
+    return false;
+  }
 }
 
 /**

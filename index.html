@@ -48,7 +48,6 @@
       -webkit-user-select: none;
       -moz-user-select: none;
       -ms-user-select: none;
-      touch-action: none;
       /* Kills the grey tap highlight iOS paints over every tapped element. */
       -webkit-tap-highlight-color: transparent;
       /* The long-press "Copy / Share" callout, which survives user-select on
@@ -77,6 +76,26 @@
       top: 0;
       left: 0;
       overscroll-behavior: none;
+      /*
+       * `manipulation`, NOT `none`, and the distinction is the whole reason the
+       * menus would not scroll.
+       *
+       * `touch-action` is not inherited, but the browser resolves a gesture by
+       * intersecting the property from the touched element all the way up to
+       * the scroller that would handle it. An ancestor set to `none` therefore
+       * vetoes panning inside every descendant — including a nested
+       * `overflow-y: auto` list that is doing everything else right. That veto
+       * used to sit on `*`, which is why the Hangar, the Depot, the debrief and
+       * the settings panel were all frozen under a thumb while scrolling fine
+       * with a mouse wheel.
+       *
+       * `manipulation` still suppresses the double-tap-zoom delay, and the
+       * gestures `none` was really there for are already gone: pinch-zoom to the
+       * viewport meta, pull-to-refresh to `position: fixed` plus
+       * `overscroll-behavior` right above. The canvas re-asserts `none` for
+       * itself, which is the one place a stray pan genuinely costs a run.
+       */
+      touch-action: manipulation;
       background-color: #05070f;
       font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
       color: #e6feff;
@@ -101,10 +120,19 @@
       align-items: center;
     }
 
+    /*
+     * The arena claims every gesture over it.
+     *
+     * This is where `touch-action: none` belongs and the only place it does:
+     * the canvas is what the joystick listens on, and a drag there is steering,
+     * never a scroll. Scoping it here instead of to `*` is what lets the menus
+     * above the canvas pan under a thumb again.
+     */
     #game-canvas {
       width: 100%;
       height: 100%;
       display: block;
+      touch-action: none;
       background: linear-gradient(180deg, #0a1024, #02030a);
     }
 
@@ -133,6 +161,44 @@
     }
 
     #ui-layer * {
+      pointer-events: auto;
+    }
+
+    /*
+     * ...except the HUD, which is a READOUT and must stay transparent to the
+     * pointer. THIS IS LOAD-BEARING FOR THE TOUCH JOYSTICK.
+     *
+     * The blanket rule above exists so a button inside a `pointer-events: none`
+     * layer is still clickable. But `#ui-layer *` is an id-plus-universal
+     * selector at specificity (1,0,0), and it therefore OUTRANKS the
+     * `pointer-events: none` that hud.css declares on `.hud` at (0,1,0). `.hud`
+     * is `inset: 0`, is never display:none, and covers the whole screen — so it
+     * was silently promoted to `auto` and swallowed every press in the arena
+     * before it could reach the canvas the joystick listens on. Its children
+     * did the same locally, and `.hud__loadout` is a left-edge rail sitting
+     * exactly where the steering thumb lands.
+     *
+     * That cost nothing while the game was keyboard-only, which is why it went
+     * unnoticed for so long: the canvas had no listeners to starve. The moment
+     * the stick started listening there, it was dead on arrival on every
+     * device.
+     *
+     * So the HUD subtree is returned to `none` wholesale and only its real
+     * controls opt back in. Listing the controls is what keeps this honest: a
+     * new readout added to the HUD is inert by default and cannot silently
+     * re-break steering, while a new <button> works without touching this rule.
+     */
+    #ui-layer .hud,
+    #ui-layer .hud *,
+    #ui-layer .meta {
+      pointer-events: none;
+    }
+
+    #ui-layer .hud button,
+    #ui-layer .hud input,
+    #ui-layer .hud select,
+    #ui-layer .hud a[href],
+    #ui-layer .hud [role="button"] {
       pointer-events: auto;
     }
 

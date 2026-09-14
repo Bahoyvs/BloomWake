@@ -20,6 +20,7 @@ import { qrcode } from 'vite-plugin-qrcode';
  * unambiguous about which copy is live.
  */
 export default defineConfig({
+  base: './',
   root: '.',
   publicDir: 'public',
   build: {

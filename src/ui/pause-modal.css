@@ -29,6 +29,11 @@
   justify-content: center;
   padding: 16px;
   overflow-y: auto;
+  /* See meta-ui.css: `*` no longer blanket-blocks touch, so every scroller
+     opts back in explicitly. */
+  touch-action: pan-y;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
   font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
   color: var(--console-ink);
 }

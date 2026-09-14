@@ -7,7 +7,7 @@
  * half lives in src/render/pixi-loader.js.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
@@ -294,5 +294,76 @@ describe('Tinting', () => {
 
   it('tints the hero sprite from the cosmetic palette', () => {
     expect(cosmeticTint({ tint: '#bcd8ff' })).toBe(0xbcd8ff);
+  });
+});
+
+/* ------------------------------------------------------------------------ */
+/* Deployment-path contract                                                  */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * No source file may reference an asset by an absolute `/assets/...` URL.
+ *
+ * WHY THIS IS A TEST AND NOT A CONVENTION
+ * The build sets `base: './'` because the portal serves the game from a deep
+ * subpath, never from a domain root. Under that base an absolute `/assets/x.png`
+ * resolves against the ORIGIN — `https://portal/assets/x.png` — which is not
+ * where the game was deployed, so it 404s. Vite cannot warn about this: it
+ * deliberately leaves absolute URLs alone, and `public/` files are not rewritten
+ * at all, so the build stays green and the art simply fails to arrive.
+ *
+ * It is also invisible in development, where the game IS served from the root
+ * and every absolute path happens to work. That combination — silent locally,
+ * broken only on the portal, no build warning — is what let it ship twice: once
+ * in eight `border-image` rules, and once as a single interpolated slash in the
+ * draft card's badge.
+ *
+ * Relative paths (`assets/ui/x.png`) resolve against the document and are
+ * correct under any base, which is the form ASSET_ROOT already uses.
+ */
+describe('asset URLs survive a non-root deployment', () => {
+  const SRC = resolve(process.cwd(), 'src');
+
+  /** Every .js and .css file under src/, recursively. */
+  function sourceFiles(dir) {
+    const out = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = resolve(dir, entry.name);
+      if (entry.isDirectory()) out.push(...sourceFiles(full));
+      else if (/\.(js|css)$/.test(entry.name)) out.push(full);
+    }
+    return out;
+  }
+
+  /*
+   * Two patterns, because the two real regressions did not look alike.
+   *
+   * The CSS one was literal: `url('/assets/ui/console_plate.png')`. The hud.js
+   * one was a single slash in front of an interpolation —
+   * `url('/${RARITY_BADGE[rarity]}')` — where the word "assets" never appears
+   * in the source at all and only shows up once the template runs. A guard
+   * matching only the literal form passes straight over the bug it was written
+   * for, so the leading-slash-then-interpolation shape is matched on its own.
+   */
+  const ABSOLUTE_PATTERNS = [
+    /['"(]\/assets\//,
+    /['"(]\/\$\{/,
+  ];
+
+  it('never references /assets/ absolutely, literally or by interpolation', () => {
+    const offenders = sourceFiles(SRC)
+      .filter((file) => {
+        const text = readFileSync(file, 'utf8');
+        return ABSOLUTE_PATTERNS.some((pattern) => pattern.test(text));
+      })
+      .map((file) => file.slice(SRC.length + 1).split('\\').join('/'));
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('declares its asset roots relatively', () => {
+    for (const root of Object.values(ASSET_ROOT)) {
+      expect(root.startsWith('/')).toBe(false);
+    }
   });
 });

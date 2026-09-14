@@ -27,6 +27,12 @@ import { getCardById, CARD_TYPES } from '../data/cards.js';
 /**
  * Rarity badge plates, per the theme brief: blue / green / yellow / red.
  * Sourced from UI_ASSETS so the manifest stays the one place art paths live.
+ *
+ * These paths are RELATIVE (`assets/ui/...`) and must be used as-is. The draft
+ * card used to interpolate them behind a leading slash, which turned them
+ * absolute and 404'd every badge the moment the game was served from anything
+ * but a domain root — which is exactly what the portal does, and why the build
+ * now sets `base: './'`. Nothing in this file may reintroduce that slash.
  */
 const RARITY_BADGE = {
   Common: UI_ASSETS.BADGE_COMMON,
@@ -361,7 +367,7 @@ export class Hud {
 
         return `
         <button class="hud__card hud__card--${rarity}" data-card="${offer.id}" type="button">
-          <span class="hud__card-chip" style="background-image:url('/${RARITY_BADGE[offer.rarity]}')">${offer.rarity}</span>
+          <span class="hud__card-chip" style="background-image:url('${RARITY_BADGE[offer.rarity]}')">${offer.rarity}</span>
           <kbd class="hud__card-key">${index + 1}</kbd>
           <span class="hud__card-name">${offer.name}</span>
           <span class="hud__card-meta">${offer.type}</span>

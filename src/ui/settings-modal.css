@@ -22,14 +22,28 @@
  * crate modal does over the debrief.
  */
 
+/*
+ * `align-items: flex-start`, not `center` — this is what stopped the tab being
+ * sliced off the top of the screen.
+ *
+ * A centred flex container whose child is taller than itself spills the
+ * overflow out of BOTH ends, and the half above the start edge cannot be
+ * scrolled to. The panel was taller than the viewport (see `.console--settings`
+ * for why), so centring it pushed `[ SYSTEM CONFIGURATION ]` off the ceiling
+ * with no way to reach it. The child's `auto` block margins centre it exactly
+ * the same way while it fits, and collapse to zero when it does not.
+ */
 .settings {
   position: absolute;
   inset: 0;
   z-index: 60;
   display: none;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   padding: 16px;
+  overflow-y: auto;
+  touch-action: pan-y;
+  overscroll-behavior-y: contain;
   font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
   color: var(--console-ink);
 }
@@ -51,19 +65,115 @@
   backdrop-filter: blur(3px);
 }
 
+/*
+ * The cap goes HERE, on the whole plate, not on the body.
+ *
+ * It used to sit on `.settings__body` alone, which left the title tab outside
+ * everything being measured — so the plate's real height was `88vh` PLUS the
+ * tab PLUS the overlay's padding, which is taller than the viewport by
+ * construction. The panel overflowed, and the centred overlay put that overflow
+ * through the ceiling.
+ *
+ * `min-height: 0` is not optional: this is a flex item, and flex items default
+ * to `min-height: auto`, which refuses to shrink below their content. Without
+ * it `max-height` is quietly ignored and nothing scrolls.
+ */
 .console--settings {
   position: relative;
   z-index: 1;
+  display: flex;
+  flex-direction: column;
   width: min(520px, 94vw);
+  max-height: min(90vh, 640px);
+  min-height: 0;
+}
+
+/*
+ * The plate interior: a fixed footer docked under a scrolling middle.
+ *
+ * `overflow: hidden` keeps the chassis itself still — the 9-sliced plate is
+ * painted on this element's ::before, and letting it scroll would drag the
+ * riveted border away from its own corners.
+ */
+/* The tab is the pinned header. `flex-shrink: 0` because flex items shrink
+   proportionally by default, and a compressed title tab crops its own text
+   rather than reflowing — it is `white-space: nowrap`. */
+.console--settings > .console__tab {
+  flex-shrink: 0;
 }
 
 .settings__body {
   gap: 10px;
   align-items: stretch;
-  /* A phone in landscape has barely 300px of height; the panel scrolls rather
-     than pushing Close off the bottom of the screen. */
-  max-height: min(88vh, 720px);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/*
+ * The one scroller in the modal.
+ *
+ * `pan-y` re-grants the thumb gesture that the global `touch-action` reset used
+ * to veto (see index.html), and `contain` keeps a flick that hits the end of
+ * the list from chaining out into the page behind the game.
+ */
+.settings__scroll {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  min-height: 0;
   overflow-y: auto;
+  touch-action: pan-y;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  /* Room for the scrollbar rail so the longest row's text does not run under
+     it; the gutter is only claimed when the list actually overflows. */
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: #4a5265 rgba(15, 18, 25, 0.6);
+}
+
+/*
+ * An industrial rail rather than the OS scrollbar, which renders as a wide
+ * light-grey Windows bar straight through the middle of a gunmetal console.
+ * `scrollbar-width`/`-color` above cover Firefox; these cover the rest.
+ */
+.settings__scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.settings__scroll::-webkit-scrollbar-track {
+  background: rgba(15, 18, 25, 0.6);
+  border-radius: 3px;
+}
+
+.settings__scroll::-webkit-scrollbar-thumb {
+  background: #4a5265;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.settings__scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--neon-cyan, #00e5ff);
+}
+
+/*
+ * The docked footer. `flex-shrink: 0` is what keeps Close on screen: without
+ * it the footer is the first thing a cramped column compresses, and the button
+ * the player needs in order to leave is the one that disappears.
+ *
+ * The hairline separates it from the scrolling list above, so a half-scrolled
+ * row reads as continuing UNDER the footer rather than as ending at it.
+ */
+.settings__footer {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  flex-shrink: 0;
+  padding-top: 10px;
+  border-top: 1px solid rgba(16, 24, 42, 0.22);
 }
 
 /* The section labels come from meta-ui.css; these only fix their rhythm here. */
@@ -407,12 +517,13 @@
 /* Footer                                                              */
 /* ------------------------------------------------------------------ */
 
+/* No top margin: the footer owns the spacing above these now, and stacking
+   both put 24px between the list and the buttons on the shortest screens. */
 .settings__actions {
   display: flex;
   justify-content: center;
   gap: 10px;
   width: 100%;
-  margin-top: 14px;
 }
 
 .settings__actions .meta__btn {
