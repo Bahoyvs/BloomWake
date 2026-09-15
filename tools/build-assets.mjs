@@ -11,7 +11,20 @@
  *   assets/spaceship_shooter/   -> public/assets/ships/raider.{png,json}
  *   assets/spaceship_expansion/ -> public/assets/ships/armada.{png,json}
  *   assets/spaceship_UI/        -> public/assets/ui/*.png
- *   (generated)                 -> public/assets/ui/bg_void.png
+ *
+ * THIS SCRIPT NO LONGER GENERATES bg_void.png. It used to bake one, via a
+ * `makeVoidTile()` that wrote cyan/magenta sine-wave "nebula" lobes into a
+ * seamless 512x512 tile plus 900 stars. That file was the actual, persistent
+ * source of a "repeating blue/purple cellular pattern" bug reported against
+ * the game's background across several unrelated rework passes — the
+ * runtime backdrop (src/render/background.js) was rewritten from scratch
+ * more than once in that time, and none of it mattered, because
+ * `Background` preferred this baked PNG over its own procedural texture
+ * whenever the PNG loaded successfully, which — being a real committed file
+ * — was always. See src/core/assets.js's ASSET_KEYS comment for the full
+ * account. Do not re-add a call that writes `ui/bg_void.png`: nothing
+ * consumes that path any more, and doing so would silently resurrect the
+ * exact bug this note exists to prevent.
  *
  * Only `public/assets/` is served and shipped; `assets/` is source material.
  *
@@ -233,74 +246,14 @@ function buildUi() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Generated starfield backdrop                                        */
-/* ------------------------------------------------------------------ */
-
-/**
- * Seamless deep-space tile: the `background` palette colour, a faint nebula
- * wash in hero cyan and swarm magenta, and scattered stars.
- *
- * Generated rather than sourced because none of the Kenney packs ship a
- * tileable backdrop, and a tile that does not wrap shows a visible seam the
- * moment the camera pans.
- *
- * @param {number} [size]
- * @returns {Buffer}
+/*
+ * There used to be a "Generated starfield backdrop" section here: a
+ * `makeVoidTile()` that baked cyan/magenta sine-wave nebula lobes plus 900
+ * stars into public/assets/ui/bg_void.png. See the module header for why it
+ * is gone and why it must not come back. `encodePng`/`crc32` above are
+ * general-purpose and kept — they were never the bug, only the content that
+ * used to flow through them.
  */
-function makeVoidTile(size = 512) {
-  const rgba = new Uint8Array(size * size * 4);
-
-  // Deterministic PRNG: the tile must be identical on every machine, or the
-  // committed asset churns on every rebuild.
-  let seed = 0x9e3779b9;
-  const rand = () => {
-    seed = (seed * 1664525 + 1013904223) >>> 0;
-    return seed / 0x100000000;
-  };
-
-  // Base + nebula. Both lobes use sin/cos at integer frequencies so the field
-  // wraps exactly at the tile edge.
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const u = (x / size) * Math.PI * 2;
-      const v = (y / size) * Math.PI * 2;
-      const cyan = Math.max(0, Math.sin(u) * Math.cos(v * 2) * 0.5 + 0.25);
-      const magenta = Math.max(0, Math.sin(u * 3 + 1.7) * Math.cos(v) * 0.4 + 0.15);
-
-      const i = (y * size + x) * 4;
-      rgba[i] = Math.min(255, 0x05 + magenta * 26);
-      rgba[i + 1] = Math.min(255, 0x07 + cyan * 20);
-      rgba[i + 2] = Math.min(255, 0x0f + cyan * 34 + magenta * 22);
-      rgba[i + 3] = 255;
-    }
-  }
-
-  // Stars. Drawn as a 1px core plus a dimmer cross so they survive downscaling
-  // instead of aliasing away.
-  const plot = (x, y, level) => {
-    const i = ((((y % size) + size) % size) * size + (((x % size) + size) % size)) * 4;
-    rgba[i] = Math.max(rgba[i], level);
-    rgba[i + 1] = Math.max(rgba[i + 1], level);
-    rgba[i + 2] = Math.max(rgba[i + 2], Math.min(255, level + 12));
-  };
-
-  for (let n = 0; n < 900; n++) {
-    const x = Math.floor(rand() * size);
-    const y = Math.floor(rand() * size);
-    const level = 60 + Math.floor(rand() * 190);
-    plot(x, y, level);
-    if (level > 190) {
-      const halo = Math.floor(level * 0.35);
-      plot(x + 1, y, halo);
-      plot(x - 1, y, halo);
-      plot(x, y + 1, halo);
-      plot(x, y - 1, halo);
-    }
-  }
-
-  return encodePng(size, size, rgba);
-}
-
 /* ------------------------------------------------------------------ */
 
 /**
@@ -329,10 +282,7 @@ const armada = buildSheet(
 
 const ui = buildUi();
 
-mkdirSync(resolve(OUT, 'ui'), { recursive: true });
-writeFileSync(resolve(OUT, 'ui', 'bg_void.png'), makeVoidTile());
-
 console.log(
   `[assets] ships/raider.json ${raider} frames, ships/armada.json ${armada} frames, ` +
-    `ui/ ${ui} plates + bg_void.png`
+    `ui/ ${ui} plates`
 );

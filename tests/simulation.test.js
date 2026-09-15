@@ -588,6 +588,20 @@ describe('Simulation — Phase 1 core survival loop', () => {
             const dy = threat.y - player.y;
             const dist = Math.hypot(dx, dy);
 
+            /*
+             * The kite band is a STABLE ORBIT, and that is the point of it:
+             * the bot circles at a fixed radius and the relative bearing to
+             * its target stops changing. It is therefore the harshest possible
+             * test of weapon geometry, because a shot that misses once misses
+             * identically forever — no wobble to bail it out.
+             *
+             * It genuinely stalled here while the Phase Repeater fanned its
+             * salvo around the aim line: at count 2 the pair straddled a
+             * centred target past ~155px, so a single survivor inside this
+             * band was unkillable and the wave never ended. Parallel wing
+             * tracks (PROJECTILE_CFG.HARDPOINT_OFFSET) removed that, and this
+             * band is left exactly as it was so it keeps proving it.
+             */
             const minDist = threat.isBoss ? 240 : 180;
             const maxDist = threat.isBoss ? 400 : 360;
 
@@ -618,6 +632,116 @@ describe('Simulation — Phase 1 core survival loop', () => {
       expect(sim.state.kills).toBeGreaterThan(50);
       expect(sim.state.player.level).toBeGreaterThan(1);
     });
+  });
+});
+
+describe('Salvo geometry against a frozen bearing (regression)', () => {
+  /*
+   * The stalemate this suite exists to prevent, isolated from wave pacing.
+   *
+   * A lone enemy held at a fixed range and bearing is the worst case for any
+   * aimed weapon: there is no relative motion to wobble a near-miss into a
+   * hit, so a geometry that misses by a pixel misses for the rest of the run.
+   * The old angular fan failed here past ~155px; these ranges bracket the band
+   * the acceptance bot kites at.
+   */
+  /**
+   * Time to kill one pinned target, or Infinity if it survives 30s.
+   *
+   * `level` defaults to 3 — the first Phase Repeater level with count 2, and
+   * therefore the first with a dead zone under the old fan. Running this at the
+   * card's starting level 1 would prove nothing: a single bolt goes straight
+   * down the aim line and has always hit.
+   *
+   * @param {number} range - Distance the target is held at, px
+   * @param {number} [bearing] - Bearing the target is held on, radians
+   * @param {number} [level] - Phase Repeater level
+   * @returns {number} Seconds to the kill, or Infinity
+   */
+  function killTime(range, bearing = 0, level = 3) {
+    const sim = makeSim();
+    sim.enemies.length = 0;
+    sim.spawner.active = false;
+    sim.state.activeCards.set('dewdrop_barrage', level);
+    sim.cards.onCardChanged('dewdrop_barrage');
+
+    const player = sim.state.player;
+    const enemy = sim.spawnEnemy(ENEMY_TYPES.TARLING);
+    enemy.hp = 40;
+    enemy.maxHp = 40;
+
+    for (let step = 0; step < 60 * 30; step++) {
+      if (!enemy.alive) return step / 60;
+
+      // Re-pin the target every frame so the bearing is held EXACTLY rather
+      // than approximately. Letting it drift even slightly would let a near
+      // miss wobble into a hit and hide the very defect this guards.
+      enemy.x = player.x + Math.cos(bearing) * range;
+      enemy.y = player.y + Math.sin(bearing) * range;
+      enemy.vx = 0;
+      enemy.vy = 0;
+
+      sim.update(STEP, { x: 0, y: 0 });
+    }
+    return Infinity;
+  }
+
+  it('kills a stationary target held anywhere in the kite band', () => {
+    // Every multi-bolt level, at every range the old fan straddled.
+    for (const level of [3, 4, 5]) {
+      for (const range of [180, 220, 260, 300, 420]) {
+        expect(killTime(range, 0, level), `L${level} stationary at ${range}px`).toBeLessThan(30);
+      }
+    }
+  });
+
+  it('kills it on every bearing, not just along +X', () => {
+    // The perpendicular hardpoint vector is n = (-sin, cos). Firing along +X
+    // gives n = (0, 1) whichever way that is derived, so an axis-aligned test
+    // passes even with the components swapped or the sign flipped. These
+    // bearings are what actually exercise the vector maths.
+    for (let i = 0; i < 8; i++) {
+      const bearing = (i / 8) * Math.PI * 2;
+      expect(killTime(240, bearing), `bearing ${i}/8`).toBeLessThan(30);
+    }
+  });
+
+  it('is not expected to hit a target crossing faster than the bolt can lead', () => {
+    /*
+     * The boundary of the fix, asserted so it is not mistaken for a bug later.
+     *
+     * The Phase Repeater aims at where the target IS, never where it will be —
+     * a deliberate design choice recorded in FRENZY_CFG's notes. At 240px a
+     * bolt takes ~0.4s to arrive, so a target sweeping its bearing at 1 rad/s
+     * has moved ~90px by then: far outside any hitbox, and nothing to do with
+     * salvo geometry. Parallel tracks fixed the dead zone; they do not and
+     * cannot substitute for target leading.
+     */
+    const sim = makeSim();
+    sim.enemies.length = 0;
+    sim.spawner.active = false;
+
+    const player = sim.state.player;
+    const enemy = sim.spawnEnemy(ENEMY_TYPES.TARLING);
+    enemy.hp = 40;
+    enemy.maxHp = 40;
+
+    sim.state.activeCards.set('dewdrop_barrage', 3);
+    sim.cards.onCardChanged('dewdrop_barrage');
+
+    let angle = 0;
+    let hit = false;
+    for (let step = 0; step < 60 * 10 && !hit; step++) {
+      angle += 1.0 * STEP;
+      enemy.x = player.x + Math.cos(angle) * 240;
+      enemy.y = player.y + Math.sin(angle) * 240;
+      enemy.vx = 0;
+      enemy.vy = 0;
+      sim.update(STEP, { x: 0, y: 0 });
+      hit = enemy.hp < enemy.maxHp;
+    }
+
+    expect(hit).toBe(false);
   });
 });
 

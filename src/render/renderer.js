@@ -52,8 +52,17 @@ import {
   trailIntensity,
   wakeDue,
 } from './state-fx.js';
-import { Background } from './background.js';
-import { PALETTE, THEME } from './theme.js';
+import { Background, VOID_BASE, tryLoadNebulaImage } from './background.js';
+import { Camera } from './camera.js';
+/*
+ * The render layer asks the input layer one question and only one: is this
+ * session driven by a finger? It needs the answer because the mobile field of
+ * view is a CAMERA decision, and re-deriving "is this a touch device" here
+ * would leave two definitions of that in the codebase that can disagree — the
+ * exact failure main.js already avoids by not deriving it from CSS.
+ */
+import { isTouchDevice } from '../input/touch-controls.js';
+import { THEME } from './theme.js';
 import {
   makeSprite,
   scaleForRadius,
@@ -85,6 +94,28 @@ import { CompositeBossRenderer } from './composite-boss-renderer.js';
 
 const TRAIL_SAMPLES = 14;
 const GRID_SIZE = 140;
+
+/**
+ * The perimeter energy barrier. See Renderer.drawBarrier for what each mark is
+ * for; these are the numbers, in world units except where noted.
+ *
+ * Widths are generous because they are world-space and the camera is zoomed
+ * OUT: a 3px line, which read fine at the old 1:1 scale, is a pixel and a half
+ * on a mobile viewport — i.e. a shimmering dotted line rather than a barrier.
+ */
+const BARRIER = {
+  /** Radians per second of the containment-field pulse (~0.13 Hz). */
+  PULSE_RATE: 0.8,
+  LINE_WIDTH: 5,
+  LINE_ALPHA: 0.85,
+  HAZE_WIDTH: 26,
+  HAZE_ALPHA: 0.1,
+  INSET: 9,
+  /** Corner bracket arm length, and the gap left at the corner itself. */
+  RIVET_ARM: 96,
+  RIVET_GAP: 14,
+  RIVET_WIDTH: 4,
+};
 
 /**
  * Hull visual diameter as a multiple of the player's collision diameter.
@@ -160,7 +191,15 @@ export class Renderer {
     this.getCosmetic = options.getCosmetic ?? (() => null);
 
     this.time = 0;
-    this.camera = { x: 0, y: 0 };
+    /**
+     * The tactical camera — position, zoom and the screen/world transform.
+     *
+     * `isTouch` is asked once at construction rather than read per frame: the
+     * answer cannot change within a session, and the wider mobile field of view
+     * has to be settled before the first frame is drawn or the opening wave
+     * arrives at the wrong scale.
+     */
+    this.camera = new Camera({ isTouch: options.isTouch ?? isTouchDevice() });
     this.trail = [];
     /** enemy.id -> { sprite, baseScale, key } */
     this.enemyViews = new Map();
@@ -178,6 +217,13 @@ export class Renderer {
     this.tierA = animation?.tierA ?? null;
     this.swarmCycles = animation?.swarm ?? null;
     this.slice = animation?.sheets ? createSlicer(animation.sheets) : null;
+
+    /**
+     * Drop-in nebula background texture, from `Renderer.create()`'s
+     * `tryLoadNebulaImage()` probe. Null the overwhelming majority of the
+     * time, in which case `Background` builds its own procedural canvas.
+     */
+    this.nebulaImage = options.nebulaImage ?? null;
 
     /**
      * ONE transform reused for every enemy in the frame. Allocating per enemy
@@ -245,6 +291,9 @@ export class Renderer {
     this.buildStage();
     this.bindEvents();
     this.resize();
+    // The very first frame is a run start too, and it is the one most likely to
+    // be watched: without this the game opens on the camera sliding off (0, 0).
+    this.camera.snap(this.sim.state.player);
     window.addEventListener('resize', () => this.resize());
   }
 
@@ -265,19 +314,41 @@ export class Renderer {
       console.info(formatMissingSheetReport(animation.missing));
     }
 
+    /*
+     * Best-effort drop-in nebula image, awaited here rather than inside
+     * `Background` so the constructor stays fully synchronous — every test
+     * that builds a Renderer or a Background directly is unaffected, and the
+     * asset itself does not exist in this repository (see
+     * background.js#tryLoadNebulaImage for why it is deliberately outside the
+     * ASSET_MANIFEST pipeline). Resolves to null almost always; that is the
+     * expected case, not a failure.
+     */
+    let nebulaImage = options.nebulaImage;
+    if (nebulaImage === undefined) {
+      nebulaImage = await tryLoadNebulaImage();
+    }
+
     const app = new Application();
     await app.init({
       canvas,
       width: window.innerWidth,
       height: window.innerHeight,
-      backgroundColor: PALETTE.background,
+      /*
+       * The clear colour must match Background's VOID_BASE, not PALETTE's
+       * generic backdrop stop. The backdrop paints its own opaque void rect
+       * over the viewport every frame, so the two only ever meet in the one
+       * frame between a window resize and the backdrop's own resize catching
+       * up — and a mismatch there flashes a band of a different black down the
+       * edge of the screen. Same value, one source of truth.
+       */
+      backgroundColor: VOID_BASE,
       antialias: true,
       resolution: Math.min(window.devicePixelRatio || 1, 2),
       autoDensity: true,
       // The game drives its own fixed-step loop; Pixi should not also tick.
       autoStart: false,
     });
-    return new Renderer(app, simulation, { ...options, animation });
+    return new Renderer(app, simulation, { ...options, animation, nebulaImage });
   }
 
   /**
@@ -348,15 +419,28 @@ export class Renderer {
   }
 
   buildBackground() {
+    /*
+     * No `voidTile` option any more. It used to pass ASSET_KEYS.BG_VOID
+     * straight through to the starfield layer, which is how a real shipped
+     * bg_void.png silently overrode every tuned procedural starfield: `voidTile
+     * ?? makeStarfieldTexture()` always prefers a real asset over the
+     * fallback, and that PNG was legacy nebula-cloud art with the exact
+     * blue/purple blobs repeatedly reported as a tiling bug in code that had
+     * long since stopped drawing them. See assets.js's ASSET_KEYS comment for
+     * the full account.
+     */
     this.backgroundSystem = new Background(this.app, {
-      voidTile: this.assets.get(ASSET_KEYS.BG_VOID),
+      nebulaImage: this.nebulaImage,
     });
     this.backgroundLayer.addChild(this.backgroundSystem.container);
   }
 
   buildArena() {
+    /** The static tactical floor: never redrawn after boot. */
     this.arenaGfx = new Graphics();
-    this.layers.arena.addChild(this.arenaGfx);
+    /** The energy barrier: redrawn per frame because it pulses. */
+    this.barrierGfx = new Graphics();
+    this.layers.arena.addChild(this.arenaGfx, this.barrierGfx);
     this.drawArena();
   }
 
@@ -605,6 +689,10 @@ export class Renderer {
     this.particles.clear();
     this.shake.reset();
     this.trail.length = 0;
+    // Put the camera ON the ship rather than letting it lerp in from wherever
+    // the last run ended. A run that opens on a half-second camera slide hides
+    // the first wave behind a move the player did not make.
+    this.camera.snap(this.sim.state.player, this.sim.playerVx ?? 0, this.sim.playerVy ?? 0);
     for (const id of [...this.enemyViews.keys()]) this.releaseEnemyView(id);
     for (const view of this.dyingViews) this.parkSprite(view);
     this.dyingViews.length = 0;
@@ -618,9 +706,25 @@ export class Renderer {
     const width = window.innerWidth;
     const height = window.innerHeight;
     this.app.renderer.resize(width, height);
+    this.camera.resize(width, height);
+
     if (this.backgroundSystem) {
-      this.backgroundSystem.resize(width, height);
+      this.backgroundSystem.resize(width, height, this.camera.zoom);
     }
+
+    /*
+     * Tell the spawner how much arena is on screen, so it can push arrivals
+     * past the frame edge rather than into it.
+     *
+     * Pushed on RESIZE rather than every frame because that is the only thing
+     * that moves it: the zoom is a pure function of the viewport, so the
+     * visible extent is constant between resizes. This is also the only line
+     * where the renderer writes to the simulation, and it is a one-way
+     * viewport hint with a null-safe default on the far side — the spawner
+     * still works, on its fixed ring, if this never arrives.
+     */
+    const extent = this.camera.halfExtent;
+    this.sim?.spawner?.setViewExtent?.(extent.x, extent.y);
   }
 
   get viewWidth() {
@@ -716,7 +820,7 @@ export class Renderer {
     this.time += dt;
     this.particles.update(dt);
     this.shake.update(dt);
-    this.updateCamera();
+    this.updateCamera(dt);
     this.trackPlayerFacing();
     this.recordTrail();
 
@@ -739,31 +843,62 @@ export class Renderer {
     this.drawTrail();
     this.drawPlayer(dt);
     this.drawShield();
+    this.drawBarrier();
     this.scrollBackdrop(dt);
 
-    // Camera + shake as one transform on the world container.
-    this.world.x = -this.camera.x + this.shake.offsetX;
-    this.world.y = -this.camera.y + this.shake.offsetY;
+    /*
+     * Camera, zoom and shake as ONE transform on the world container.
+     *
+     * The order matters and is not commutative: the container is scaled by the
+     * zoom, so the camera offset has to be expressed in the same post-scale
+     * screen pixels (`-camera.x * zoom`). The shake offset is already in screen
+     * pixels and is added after, which is what keeps a hit feeling like the
+     * same kick whether the player is on a phone or a monitor — an unscaled
+     * shake would be nearly invisible at the mobile zoom.
+     */
+    this.world.scale.set(this.camera.zoom);
+    this.world.x = -this.camera.x * this.camera.zoom + this.shake.offsetX;
+    this.world.y = -this.camera.y * this.camera.zoom + this.shake.offsetY;
     this.world.rotation = this.shake.rotation;
 
     this.app.render();
   }
 
-  updateCamera() {
-    const player = this.sim.state.player;
-
-    this.camera.x =
-      this.viewWidth >= WORLD.WIDTH
-        ? (WORLD.WIDTH - this.viewWidth) / 2
-        : clamp(player.x - this.viewWidth / 2, 0, WORLD.WIDTH - this.viewWidth);
-
-    this.camera.y =
-      this.viewHeight >= WORLD.HEIGHT
-        ? (WORLD.HEIGHT - this.viewHeight) / 2
-        : clamp(player.y - this.viewHeight / 2, 0, WORLD.HEIGHT - this.viewHeight);
+  /**
+   * @param {number} [dt] - Frame time in seconds
+   */
+  updateCamera(dt = 1 / 60) {
+    this.camera.update(dt, this.sim.state.player, this.sim.playerVx ?? 0, this.sim.playerVy ?? 0);
   }
 
-  /** Parallax the backdrop & caustics, and update background visual system. */
+  /**
+   * Screen pixel -> world unit, honouring the live zoom.
+   *
+   * Exposed on the renderer as well as on the camera because the camera is the
+   * renderer's private business as far as the rest of the game is concerned:
+   * anything that needs to turn a tap into an aim point (skill targeting, a
+   * future reticle) should ask the renderer rather than reach through it.
+   *
+   * @param {number} screenX
+   * @param {number} screenY
+   * @returns {{x: number, y: number}}
+   */
+  screenToWorld(screenX, screenY) {
+    return this.camera.screenToWorld(screenX, screenY);
+  }
+
+  /**
+   * World unit -> screen pixel. The exact inverse of screenToWorld.
+   *
+   * @param {number} worldX
+   * @param {number} worldY
+   * @returns {{x: number, y: number}}
+   */
+  worldToScreen(worldX, worldY) {
+    return this.camera.worldToScreen(worldX, worldY);
+  }
+
+  /** Advance the background visual system's parallax for this frame. */
   scrollBackdrop(dt = 1 / 60) {
     if (this.backgroundSystem) {
       this.backgroundSystem.update(
@@ -771,7 +906,8 @@ export class Renderer {
         this.camera.x,
         this.camera.y,
         this.viewWidth,
-        this.viewHeight
+        this.viewHeight,
+        this.camera.zoom
       );
     }
   }
@@ -1425,6 +1561,19 @@ export class Renderer {
   /* Vector VFX (no authored art)                                        */
   /* ------------------------------------------------------------------ */
 
+  /**
+   * The world-space tactical floor.
+   *
+   * Drawn ONCE, at boot. The grid does not animate and the arena does not
+   * resize, so redrawing 60 lines a frame would be 60 lines a frame of pure
+   * waste — and on the 4GB Chromebook the backdrop is budgeted for, the
+   * tessellation of a Graphics this wide is not free.
+   *
+   * Its alpha came down from 0.5 when the parallax backdrop landed. There are
+   * now two grids: this one, nailed to the world, and the background's, drifting
+   * at 0.15 parallax. Two grids at equal weight read as moire; at 0.28 this one
+   * is clearly the floor and the other clearly the distance.
+   */
   drawArena() {
     const g = this.arenaGfx;
     g.clear();
@@ -1435,12 +1584,83 @@ export class Renderer {
     for (let y = 0; y <= WORLD.HEIGHT; y += GRID_SIZE) {
       g.moveTo(0, y).lineTo(WORLD.WIDTH, y);
     }
-    g.stroke({ color: PIXI_TINT.grid, width: 1, alpha: 0.5 });
+    g.stroke({ color: PIXI_TINT.grid, width: 1, alpha: 0.28 });
+  }
 
-    g.rect(0, 0, WORLD.WIDTH, WORLD.HEIGHT);
-    g.stroke({ color: PIXI_TINT.border, width: 3 });
-    g.rect(4, 4, WORLD.WIDTH - 8, WORLD.HEIGHT - 8);
-    g.stroke({ color: PIXI_TINT.heroRim, width: 1, alpha: 0.18 });
+  /**
+   * The perimeter energy barrier.
+   *
+   * WHY THE EDGE NEEDS TO ANNOUNCE ITSELF. The arena is 35% bigger and the
+   * camera now shows less of it in proportion, so the boundary arrives without
+   * warning — and the boundary is a hard clamp, not a wall the ship bumps into.
+   * A player sliding to a stop against an invisible limit reads it as the
+   * controls dropping input. The barrier exists so that when the ship stops,
+   * the reason is on screen.
+   *
+   * Three marks, each doing a different job:
+   *   - a bright inner line and a wide dim outer one, which together read as a
+   *     field with thickness rather than a stroked rectangle;
+   *   - CORNER RIVETS, drawn as open brackets. The corner is the one place the
+   *     player can be clamped on both axes at once, and the only place the edge
+   *     is visible from two directions, so it gets the loudest mark;
+   *   - a slow pulse on the whole thing. Motion is what separates "the edge of
+   *     the arena" from "a line someone drew on the floor".
+   *
+   * Drawn per frame, but it is four rectangles and eight short brackets — a
+   * fixed, tiny cost that does not grow with the arena or the swarm. The phase
+   * comes from `this.time` rather than an accumulated delta, so the pulse
+   * cannot drift out of step with the rest of the frame clock.
+   */
+  drawBarrier() {
+    const g = this.barrierGfx;
+    g.clear();
+
+    // 0.8 Hz: slow enough to read as a field humming rather than a UI blink.
+    const pulse = 0.5 + 0.5 * Math.sin(this.time * BARRIER.PULSE_RATE);
+    const w = WORLD.WIDTH;
+    const h = WORLD.HEIGHT;
+
+    // Outer haze — wide, dim, and drawn OUTSIDE the play area so it never sits
+    // between the player and an enemy they are trying to read.
+    g.rect(-BARRIER.HAZE_WIDTH / 2, -BARRIER.HAZE_WIDTH / 2, w + BARRIER.HAZE_WIDTH, h + BARRIER.HAZE_WIDTH);
+    g.stroke({
+      color: PIXI_TINT.heroRim,
+      width: BARRIER.HAZE_WIDTH,
+      alpha: BARRIER.HAZE_ALPHA * (0.6 + 0.4 * pulse),
+    });
+
+    // The barrier proper.
+    g.rect(0, 0, w, h);
+    g.stroke({
+      color: PIXI_TINT.heroRim,
+      width: BARRIER.LINE_WIDTH,
+      alpha: BARRIER.LINE_ALPHA * (0.7 + 0.3 * pulse),
+    });
+
+    // Inner containment line, a touch inside, to give the field depth.
+    g.rect(BARRIER.INSET, BARRIER.INSET, w - BARRIER.INSET * 2, h - BARRIER.INSET * 2);
+    g.stroke({ color: PIXI_TINT.border, width: 1, alpha: 0.35 });
+
+    // Corner rivets: open brackets that leave the corner itself clear, so the
+    // mark frames the corner instead of filling it.
+    const arm = BARRIER.RIVET_ARM;
+    const corners = [
+      [0, 0, 1, 1],
+      [w, 0, -1, 1],
+      [0, h, 1, -1],
+      [w, h, -1, -1],
+    ];
+    for (const [cx, cy, sx, sy] of corners) {
+      g.moveTo(cx + sx * BARRIER.RIVET_GAP, cy);
+      g.lineTo(cx + sx * arm, cy);
+      g.moveTo(cx, cy + sy * BARRIER.RIVET_GAP);
+      g.lineTo(cx, cy + sy * arm);
+    }
+    g.stroke({
+      color: PIXI_TINT.heroRim,
+      width: BARRIER.RIVET_WIDTH,
+      alpha: 0.35 + 0.45 * pulse,
+    });
   }
 
   /**

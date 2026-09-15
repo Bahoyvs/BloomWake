@@ -68,12 +68,39 @@ const HANDLERS = {
       const count = stats.count ?? 1;
       const damage = sys.damageOf(stats.damage);
 
+      /*
+       * TWIN PARALLEL STREAMS — wing hardpoints, one shared aim vector.
+       *
+       * `u` is the forward unit vector and `n` its left-hand perpendicular.
+       * Bolts are displaced along `n` to sit on the wingtips and then all fly
+       * along `u`, so their tracks never converge or diverge. See the geometry
+       * argument on PROJECTILE_CFG.HARDPOINT_OFFSET for why this replaced the
+       * angular fan and why the offset is smaller than the drawn wingspan.
+       */
+      const ux = Math.cos(baseAngle);
+      const uy = Math.sin(baseAngle);
+      const nx = -uy;
+      const ny = ux;
+
       for (let i = 0; i < count; i++) {
-        // Centre the salvo on the target: -n/2 .. +n/2 spread.
-        const angle = baseAngle + (i - (count - 1) / 2) * PROJECTILE_CFG.SPREAD_RAD;
+        /*
+         * Hardpoint position across the wing span, in [-1, 1].
+         *
+         * A single bolt sits on the nose. Two sit on the wingtips. Three or
+         * more spread evenly between the tips, which always puts one on the
+         * centreline at odd counts and, at even counts above two, puts the
+         * inner pair close enough to it that nothing can pass between them.
+         */
+        const lateral = count === 1 ? 0 : (i / (count - 1)) * 2 - 1;
+        const offset = lateral * PROJECTILE_CFG.HARDPOINT_OFFSET;
+
+        // Parallel below three bolts; a slight outward fan above it.
+        const angle =
+          count >= 3 ? baseAngle + lateral * PROJECTILE_CFG.SALVO_SPLAY_RAD : baseAngle;
+
         sys.sim.spawnProjectile({
-          x: player.x,
-          y: player.y,
+          x: player.x + nx * offset,
+          y: player.y + ny * offset,
           vx: Math.cos(angle) * speed,
           vy: Math.sin(angle) * speed,
           damage,

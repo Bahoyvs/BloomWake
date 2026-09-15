@@ -87,15 +87,12 @@ export function installPlaceholders(store) {
  */
 export function makePlaceholderTexture(key) {
   const canvas = document.createElement('canvas');
-  const size = key === ASSET_KEYS.BG_VOID ? 256 : 128;
+  const size = 128;
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d');
 
   switch (key) {
-    case ASSET_KEYS.BG_VOID:
-      drawVoidTile(ctx, size);
-      break;
     case ASSET_KEYS.DRIFTER:
       drawDrifterPlaceholder(ctx, size);
       break;
@@ -144,15 +141,6 @@ export function makePlaceholderTexture(key) {
   }
 
   return Texture.from(canvas);
-}
-
-/** Two-stop void gradient, dark enough to stand in for the real backdrop. */
-function drawVoidTile(ctx, size) {
-  const gradient = ctx.createLinearGradient(0, 0, 0, size);
-  gradient.addColorStop(0, THEME.background.top);
-  gradient.addColorStop(1, THEME.background.bottom);
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, size, size);
 }
 
 /**

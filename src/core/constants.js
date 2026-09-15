@@ -12,10 +12,21 @@ export const UNIT_PX = 32;
  * Bounded arena. A closed arena (rather than an infinite field) is deliberate:
  * the Dewling outruns every Phase 1 enemy, so an open world would let a player
  * kite forever and never engage the loop.
+ *
+ * EXPANDED BY 35% (2400x1600 -> 3240x2160) when the camera learned to zoom out.
+ * The two changes are one change: a wider field of view shows more arena, and
+ * at the old dimensions a mobile landscape viewport could see the better part
+ * of the playfield at once — which turns a kiting arena into a single room and
+ * leaves nowhere for the swarm to come FROM. The extra 35% restores the ratio
+ * of arena to viewport the movement and spawn pacing were tuned against.
+ *
+ * Nothing else needs touching: every clamp in the simulation, the skills and
+ * the spawner is already written against these two numbers rather than against
+ * literals, so the perimeter moves and the boundary behaviour comes with it.
  */
 export const WORLD = {
-  WIDTH: 2400,
-  HEIGHT: 1600,
+  WIDTH: 3240,
+  HEIGHT: 2160,
 };
 
 export const PLAYER_CFG = {
@@ -98,9 +109,49 @@ export const SPAWN_CFG = {
    * Enemies appear on a ring around the Dewling, outside any viewport.
    * MAX_RADIUS must stay below half of the smaller world dimension so the
    * spawner's edge mirroring always lands inside the arena.
+   *
+   * Scaled with the 35% arena expansion (620/780 -> 840/1040). The ring is the
+   * FLOOR on spawn distance, not the whole rule: once the renderer reports the
+   * camera's world-space extents the spawner pushes each arrival out past the
+   * frame edge as well — see VIEW_MARGIN and WaveSpawner.spawnPosition.
    */
-  MIN_RADIUS: 620,
-  MAX_RADIUS: 780,
+  MIN_RADIUS: 840,
+  MAX_RADIUS: 1040,
+  /**
+   * How far outside the visible frame an enemy must appear, in world units.
+   *
+   * The complaint this fixes is pop-in: at the old fixed ring a wide viewport
+   * put the left and right arcs of the ring ON SCREEN, so enemies materialised
+   * in plain sight instead of arriving out of the dark. 125 is mid-band of the
+   * 100-150 design window — far enough that nothing appears inside the frame
+   * even mid-turn, close enough that the swarm still reaches the player at the
+   * pace the wave pacing assumes.
+   */
+  VIEW_MARGIN: 125,
+  /**
+   * THE EDGE-MIRRORING INVARIANT, as a circular bound.
+   *
+   * spawnPosition reflects an out-of-bounds offset back across the player
+   * rather than clamping it, which preserves the spawn distance exactly. The
+   * reflection is only guaranteed to land inside the arena while each OFFSET
+   * COMPONENT is at most half its own dimension: |dx| <= WIDTH/2 and
+   * |dy| <= HEIGHT/2. (Proof: px + dx > WIDTH forces dx > WIDTH - px, so if
+   * px < WIDTH/2 then dx > WIDTH/2 — excluded. Therefore px >= WIDTH/2 and the
+   * mirrored px - dx >= 0.)
+   *
+   * That is an ELLIPSE, and WaveSpawner.safeRadius enforces it per heading.
+   * This constant is the largest circle inscribed in it — the bound that holds
+   * along every heading at once, which is what MIN_RADIUS and MAX_RADIUS, being
+   * heading-independent, have to respect.
+   *
+   * The distinction is not pedantry: capping at this circle instead of the
+   * ellipse was the first attempt, and it clamped horizontal spawns on a wide
+   * viewport back INSIDE the frame — reintroducing the exact pop-in the view
+   * margin exists to remove, on the widest screens only.
+   */
+  get MAX_SAFE_RADIUS() {
+    return Math.min(WORLD.WIDTH, WORLD.HEIGHT) / 2;
+  },
   /** Fraction of the wave spent filling up to the concurrent enemy cap. */
   FILL_FRACTION: 0.4,
   MIN_INTERVAL: 0.1,
@@ -117,8 +168,57 @@ export const PROJECTILE_CFG = {
   RADIUS: 5,
   /** Auto-attack acquisition range in px. */
   TARGET_RANGE: 520,
-  /** Angular spread between multi-shot projectiles (radians). */
-  SPREAD_RAD: 0.22,
+  /**
+   * Lateral distance from the ship's centreline to a wing hardpoint, in px.
+   *
+   * ---------------------------------------------------------------------
+   * WHY SALVOS ARE PARALLEL TRACKS AND NOT AN ANGULAR FAN
+   * ---------------------------------------------------------------------
+   * This replaces SPREAD_RAD, which fanned a salvo out at +/- spread/2 around
+   * the aim line. That geometry had a BLIND ANNULUS: with an even `count` no
+   * bolt travelled down the aim line at all, and the lateral gap between the
+   * straddling pair grew with distance (`range * sin(spread / 2)`). Past about
+   *
+   *     (enemy radius + PROJECTILE_CFG.RADIUS) / sin(spread / 2)
+   *
+   * — roughly 155px against a 12px-radius Tarling — a target sitting dead
+   * centre in the crosshairs could not be hit at all. Worse, the miss was
+   * DETERMINISTIC: freeze the relative geometry and the same shot misses by
+   * the same margin forever, which is how a kiting bot held a wave open
+   * indefinitely (see the mop-up note in tests/simulation.test.js).
+   *
+   * Parallel tracks remove the failure mode rather than shrinking it. Both
+   * bolts fly along the true aim vector, offset sideways to the wingtips, so
+   * the gap between them is CONSTANT at 2 * HARDPOINT_OFFSET at every range.
+   *
+   * ---------------------------------------------------------------------
+   * WHY 11 AND NOT THE VISUAL WINGSPAN
+   * ---------------------------------------------------------------------
+   * The hull is drawn ~73px across (PLAYER_CFG.RADIUS * 2 * HERO_FIT), so the
+   * visible wingtips are near +/-30. Firing from there would re-open the dead
+   * zone at a fixed 60px width — worse than the fan, because it would never
+   * close at any range. The binding constraint is not what the art looks like,
+   * it is the SMALLEST target the pair must not straddle:
+   *
+   *     HARDPOINT_OFFSET <= min(enemy radius) + PROJECTILE_CFG.RADIUS
+   *
+   * The Dart Ravager is the roster's smallest at radius 9, giving a ceiling of
+   * 14; 11 sits under it with 3px of margin. tests/weapons.test.js asserts this
+   * against the live roster, so adding a smaller enemy fails CI instead of
+   * quietly reintroducing the hole.
+   */
+  HARDPOINT_OFFSET: 11,
+
+  /**
+   * Outward splay applied to the OUTER bolts of a 3-or-more salvo, radians.
+   *
+   * Zero for a one- or two-bolt salvo, on purpose: the two-bolt case is the one
+   * the parallel geometry exists to fix, and any divergence there starts the
+   * gap growing with range again. From three bolts up there is always a centre
+   * bolt on the aim line, so a slight fan widens the net against a swarm
+   * without anything being able to slip between them.
+   */
+  SALVO_SPLAY_RAD: 0.04,
 };
 
 /**

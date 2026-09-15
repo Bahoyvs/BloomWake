@@ -84,8 +84,28 @@ export const ASSET_KEYS = {
   DREADNOUGHT_BEAM: 'dreadnought_beam',
   DREADNOUGHT_TURRET: 'dreadnought_turret',
   DREADNOUGHT_REACTOR: 'dreadnought_reactor',
-  // Environment
-  BG_VOID: 'bg_void',
+  /*
+   * NO ENVIRONMENT KEY HERE, DELIBERATELY. This used to hold BG_VOID, a
+   * shipped bg_void.png the starfield's TilingSprite preferred over its own
+   * procedural texture (`voidTile ?? makeStarfieldTexture()` in
+   * background.js). That file was legacy nebula-cloud art — soft purple and
+   * blue blobs baked into a 512x512 PNG — left over from before this
+   * background became procedural, and it silently won that fallback every
+   * time: every rework of makeStarfieldTexture() across several sessions was
+   * correct in isolation and never once reached the screen, because a real
+   * asset always beats a `??` fallback. It was the actual "repeating
+   * blue/purple cellular pattern" this game's background reports kept
+   * describing, unrelated to the caustics shader, the nebula tiling, or
+   * anything else that got tuned instead over multiple passes.
+   *
+   * Removed rather than fixed-in-place: the background is procedural by
+   * design now (see background.js's own header), and re-introducing a
+   * drop-in image for the STARFIELD specifically should go through the same
+   * deliberate, reviewed bridge the nebula uses (`tryLoadNebulaImage` in
+   * background.js) — never back through this manifest, where "the file
+   * happens to exist" silently overrides tuned procedural art with no review
+   * step in between.
+   */
 };
 
 /**
@@ -187,8 +207,6 @@ export const ASSET_MANIFEST = [
   { key: ASSET_KEYS.DREADNOUGHT_BEAM, url: ASSET_SHEETS.ARMADA, frame: 'spaceStation_001', critical: true },
   { key: ASSET_KEYS.DREADNOUGHT_TURRET, url: ASSET_SHEETS.ARMADA, frame: 'spaceBuilding_012', critical: true },
   { key: ASSET_KEYS.DREADNOUGHT_REACTOR, url: ASSET_SHEETS.ARMADA, frame: 'spaceBuilding_007', critical: true },
-
-  { key: ASSET_KEYS.BG_VOID, url: `${ASSET_ROOT.UI}bg_void.png` },
 ];
 
 /**

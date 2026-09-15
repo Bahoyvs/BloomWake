@@ -208,9 +208,11 @@ describe('AssetStore preload', () => {
   it('keeps the assets that did load when others fail', async () => {
     const store = new AssetStore();
 
-    const result = await store.load(partialLoader([ASSET_KEYS.PHANTOM_STALKER, ASSET_KEYS.BG_VOID]));
+    const result = await store.load(partialLoader([ASSET_KEYS.PHANTOM_STALKER, ASSET_KEYS.SHIELD]));
 
-    expect(result.missing).toEqual([ASSET_KEYS.PHANTOM_STALKER, ASSET_KEYS.BG_VOID]);
+    // `missing` follows MANIFEST order, not input order — SHIELD is declared
+    // ahead of PHANTOM_STALKER in ASSET_MANIFEST.
+    expect(result.missing).toEqual([ASSET_KEYS.SHIELD, ASSET_KEYS.PHANTOM_STALKER]);
     expect(store.has(ASSET_KEYS.DRIFTER)).toBe(true);
     expect(store.has(ASSET_KEYS.PHANTOM_STALKER)).toBe(false);
   });
