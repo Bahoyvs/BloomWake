@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm test)",
+      "Bash(npm run test:watch)",
+      "Bash(npm run build)",
+      "Bash(npm run dev)",
+      "Bash(npm run assets)",
+      "Bash(npm run preview)",
+      "Bash(node tests/balance-sim.js)",
+      "Bash(node tests/juice-bench.js*)",
+      "Bash(node tests/economy-calibration.js)",
+      "Bash(git status)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git branch*)"
+    ]
+  }
+}
