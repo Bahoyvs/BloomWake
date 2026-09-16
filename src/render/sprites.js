@@ -252,6 +252,12 @@ export const PIXI_TINT = {
   danger: hexToPixi(THEME.danger.telegraph),
   hazard: hexToPixi(THEME.danger.hazard),
   hazardRim: hexToPixi(THEME.danger.hazardRim),
+  /** Enraged Hive Cruiser: burning wake and thruster corona. */
+  afterburner: hexToPixi(THEME.danger.afterburner),
+  afterburnerRim: hexToPixi(THEME.danger.afterburnerRim),
+  /** Enraged Chitin Spire: gravity well lensing and shockwave rings. */
+  singularity: hexToPixi(THEME.danger.singularity),
+  singularityRim: hexToPixi(THEME.danger.singularityRim),
   /** Bio-acid, for the telegraph's inner ring. */
   acid: hexToPixi(THEME.bio.acid),
   /** Swarm carapace black — the enemy health-bar track. */

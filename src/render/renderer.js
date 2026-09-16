@@ -648,6 +648,14 @@ export class Renderer {
     });
 
     bus.on('boss:spawned', () => this.shake.add(TRAUMA.BOSS_SPAWN));
+    // Same trauma as a spawn, because it is the same kind of moment: a thing
+    // the player now has to take seriously has just arrived on the field. The
+    // fact that it is the hull they were already shooting is the surprise.
+    bus.on('boss:enraged', () => this.shake.add(TRAUMA.BOSS_SPAWN));
+    // A committed charge, not the telegraph — the kick lands when the hull
+    // launches. Shaking during the wind-up would blur the one beam the player
+    // needs to read.
+    bus.on('boss:charge', () => this.shake.add(TRAUMA.BOSS_SPAWN * 0.6));
 
     bus.on('boss:telegraph_erupt', (data) => {
       const x = data?.x ?? this.sim.state.player.x;
@@ -827,7 +835,7 @@ export class Renderer {
     this.recordTrail();
 
     this.syncEnemies(dt);
-    this.syncCompositeBosses();
+    this.syncCompositeBosses(dt);
     this.syncProjectiles();
     this.syncOrbs();
 
@@ -1124,13 +1132,20 @@ export class Renderer {
    * enemy sprite pool: it is not one texture key but a chassis-plus-parts
    * tree, and the pool's "one sprite per texture key" contract has nowhere to
    * put that.
+   *
+   * `dt` is forwarded because an enraged chassis animates on its own clock —
+   * thruster flicker, breach sparks, contracting well specks. Those cannot ride
+   * the simulation's state the way a turret's aim angle does, since none of
+   * them is a fact the simulation has any reason to hold.
+   *
+   * @param {number} [dt] - Frame time in seconds
    */
-  syncCompositeBosses() {
+  syncCompositeBosses(dt = 1 / 60) {
     const seen = new Set();
     for (const boss of this.sim.compositeBosses) {
       if (!boss.alive) continue;
       seen.add(boss.id);
-      this.compositeBossRenderer.sync(boss.getRenderState());
+      this.compositeBossRenderer.sync(boss.getRenderState(), dt);
     }
     // A boss that died or was cleared (arena wipe) without going through a
     // one-frame "not alive" state still needs its tree torn down.
@@ -1749,6 +1764,17 @@ export class Renderer {
     }
   }
 
+  /**
+   * Every lingering ground hazard, spore bloom and afterburner wake alike.
+   *
+   * One pass over one list, because the simulation keeps them in one list (see
+   * spawnHazard) — they are the same object to the player: floor that hurts.
+   * `kind` splits only the COLOUR and the pulse rate, which is exactly the
+   * amount they are allowed to differ by. A wake that shared the spore bloom's
+   * magenta would tell the player a Bio-Goliath had been through, and a wake
+   * drawn as its own entity in its own pass would be one more place to forget
+   * the fade-out.
+   */
   drawHazards() {
     const g = this.hazardGfx;
     g.clear();
@@ -1756,10 +1782,23 @@ export class Renderer {
     for (const pool of this.sim.sporePools) {
       if (!pool.alive) continue;
       const fade = Math.min(1, pool.life / 1.0);
+      const burning = pool.kind === 'afterburner';
+      const fill = burning ? PIXI_TINT.afterburner : PIXI_TINT.hazard;
+      const rim = burning ? PIXI_TINT.afterburnerRim : PIXI_TINT.hazardRim;
+      // Flame guts churn; spore bloom breathes. Same shape, different tempo.
+      const rate = burning ? 11 : 2;
+      const swell = burning ? 0.12 : 0.04;
+
       g.circle(pool.x, pool.y, pool.radius);
-      g.fill({ color: PIXI_TINT.hazard, alpha: 0.3 * fade });
-      g.circle(pool.x, pool.y, pool.radius * (0.55 + Math.sin(this.time * 2) * 0.04));
-      g.stroke({ color: PIXI_TINT.hazardRim, width: 1.5, alpha: 0.5 * fade });
+      g.fill({ color: fill, alpha: (burning ? 0.34 : 0.3) * fade });
+      g.circle(pool.x, pool.y, pool.radius * (0.55 + Math.sin(this.time * rate + pool.id) * swell));
+      g.stroke({ color: rim, width: burning ? 2 : 1.5, alpha: 0.5 * fade });
+      if (burning) {
+        // A hot core, so a fresh patch reads as still burning and an old one as
+        // embers — the fade alone is too subtle at 2.2s to dodge off.
+        g.circle(pool.x, pool.y, pool.radius * 0.3);
+        g.fill({ color: rim, alpha: 0.45 * fade });
+      }
     }
   }
 

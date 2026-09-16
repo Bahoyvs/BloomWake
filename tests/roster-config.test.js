@@ -4,13 +4,17 @@ import {
   BULLET_TYPES,
   COMPOSITE_BOSSES,
   ENEMY_ARCHETYPES,
+  ENRAGE_TRIGGERS,
   PHASE_TRIGGERS,
   WEAPON_TYPES,
   getArchetype,
   getArchetypesForWave,
   getBossTemplate,
+  getChassisWeapons,
+  getEnrageConfig,
   getTemplateTotalHp,
   getTemplateWeapons,
+  gravityWellForce,
   pickArchetypeForWave,
   pickBossTemplate,
   validateRosterConfig,
@@ -221,6 +225,387 @@ describe('roster-config — the validator actually catches things', () => {
     for (const template of Object.values(COMPOSITE_BOSSES)) {
       expect(template.phases[0].trigger.type).toBe(PHASE_TRIGGERS.INITIAL);
     }
+  });
+});
+
+describe('roster-config — no boss is allowed to go quiet', () => {
+  /**
+   * THE REGRESSION THIS SUITE EXISTS FOR.
+   *
+   * `chassis.armoredBy` is what makes a modular boss's parts worth shooting,
+   * and its cost lands at the end of the fight: every gun belongs to a PART, so
+   * the frame the player strips the armour is the frame the boss stops being
+   * able to answer. What was left was two to three thousand HP of inert scenery.
+   *
+   * Every assertion below is a way of saying the same thing — a chassis the
+   * player can shoot is a chassis that can shoot back.
+   */
+  it('gives every armoured chassis something to do once its armour is gone', () => {
+    for (const [key, template] of Object.entries(COMPOSITE_BOSSES)) {
+      const armor = template.chassis.armoredBy ?? [];
+      if (armor.length === 0) continue;
+
+      const enrage = getEnrageConfig(template);
+      expect(enrage, `${key} has armour but no enrage`).toBeTruthy();
+
+      const threats =
+        (template.chassis.innateWeapons ?? []).length +
+        (enrage.chargeAttack ? 1 : 0) +
+        (enrage.gravityWell ? 1 : 0) +
+        (enrage.ventMinions ? 1 : 0) +
+        (enrage.shockwaveInterval > 0 ? 1 : 0);
+      // Two, not one: a boss whose entire enrage is one attack on one cooldown
+      // is a boss with one answer, and the player finds it in ten seconds.
+      expect(threats, `${key} enrages with too few ways to hurt the player`).toBeGreaterThanOrEqual(
+        2
+      );
+    }
+  });
+
+  it('leaves the chassis HP the armour was protecting worth fighting through', () => {
+    // The whole problem was the SIZE of the post-armour bar. If a chassis holds
+    // less than a third of the boss's HP the enrage barely matters; the numbers
+    // here are the reason it does.
+    for (const [key, template] of Object.entries(COMPOSITE_BOSSES)) {
+      if ((template.chassis.armoredBy ?? []).length === 0) continue;
+      const share = template.chassis.hp / getTemplateTotalHp(template);
+      expect(share, `${key} chassis share`).toBeGreaterThan(0.3);
+    }
+  });
+
+  it('names a trigger that the boss state machine actually implements', () => {
+    const known = new Set(Object.values(ENRAGE_TRIGGERS));
+    for (const [key, template] of Object.entries(COMPOSITE_BOSSES)) {
+      const enrage = getEnrageConfig(template);
+      if (!enrage) continue;
+      expect(known.has(enrage.trigger), `${key}: ${enrage.trigger}`).toBe(true);
+    }
+  });
+
+  it('makes the enrage a threat increase rather than a reskin', () => {
+    for (const [key, template] of Object.entries(COMPOSITE_BOSSES)) {
+      const enrage = getEnrageConfig(template);
+      if (!enrage) continue;
+      // Contact damage must go UP: the hull is the weapon now.
+      expect(enrage.contactDamage, `${key} contact`).toBeGreaterThan(
+        template.chassis.contactDamage ?? 0
+      );
+      // And a chassis that moves at all must move faster than it drifted, or
+      // the player simply walks away from the enrage.
+      if (enrage.speed > 0) {
+        expect(enrage.speed, `${key} speed`).toBeGreaterThan(template.chassis.speed ?? 0);
+      }
+    }
+  });
+
+  it('keeps innate weapon ids out of the phase-armed namespace', () => {
+    /*
+     * A phase list is the boss's armed guns WHILE ITS PARTS LIVE. An innate
+     * weapon exists for after that, so a phase that could arm one would make
+     * the enrage reachable without the enrage — and validateRosterConfig would
+     * have no way to tell a typo from a design.
+     */
+    for (const [key, template] of Object.entries(COMPOSITE_BOSSES)) {
+      const partWeapons = new Set(getTemplateWeapons(template).keys());
+      const innate = getChassisWeapons(template);
+      for (const weaponId of innate.keys()) {
+        expect(partWeapons.has(weaponId), `${key}: ${weaponId} collides with a part gun`).toBe(
+          false
+        );
+        for (const phase of template.phases ?? []) {
+          expect(phase.weapons ?? [], `${key}.${phase.id}`).not.toContain(weaponId);
+        }
+      }
+    }
+  });
+
+  it('carries the Hive Cruiser enrage numbers verbatim', () => {
+    const enrage = getEnrageConfig(getBossTemplate('hive_cruiser'));
+    expect(enrage.trigger).toBe(ENRAGE_TRIGGERS.ALL_PARTS_DESTROYED);
+    expect(enrage.speed).toBe(135);
+    expect(enrage.spin).toBe(0.45);
+    expect(enrage.contactDamage).toBe(45);
+    expect(enrage.chargeAttack).toMatchObject({
+      cooldown: 5.5,
+      telegraphDuration: 1.2,
+      chargeSpeed: 380,
+      chargeDuration: 1.4,
+    });
+    expect(enrage.ventMinions).toMatchObject({
+      cooldown: 6.0,
+      archetypeId: 'larva_swarm',
+      count: 4,
+    });
+    expect(enrage.ventMinions.spreadAngle).toBeCloseTo(Math.PI * 2, 10);
+  });
+
+  it('carries the Chitin Spire enrage numbers verbatim', () => {
+    const enrage = getEnrageConfig(getBossTemplate('spire_station'));
+    expect(enrage.trigger).toBe(ENRAGE_TRIGGERS.ALL_PARTS_DESTROYED);
+    expect(enrage.gravityWell).toMatchObject({
+      radius: 450,
+      pullForce: 110,
+      inwardSpiral: true,
+    });
+    expect(enrage.shockwaveInterval).toBe(4.0);
+    // The spire stays bolted down — it is the arena feature, and giving it
+    // engines on the last phase would make it a second Hive Cruiser.
+    expect(enrage.speed).toBe(0);
+    expect(enrage.chargeAttack).toBeUndefined();
+  });
+
+  it('authors the afterburner wake as a trail hazard with no bullet type', () => {
+    const wake = getChassisWeapons(getBossTemplate('hive_cruiser')).get('afterburner_wake');
+    expect(wake.type).toBe(WEAPON_TYPES.TRAIL_HAZARD);
+    expect(wake).toMatchObject({ damage: 12, duration: 2.2, interval: 0.15 });
+    expect(wake.radius).toBeGreaterThan(0);
+    // A hazard fires no rounds, so demanding a bulletType would force the
+    // designer to name one at random.
+    expect(wake.bulletType).toBeUndefined();
+
+    // Dropped often enough to be a continuous lane, not a dotted line: at
+    // chargeSpeed the gap between patches must be under a patch diameter.
+    const charge = getEnrageConfig(getBossTemplate('hive_cruiser')).chargeAttack;
+    expect(charge.chargeSpeed * wake.interval).toBeLessThan(wake.radius * 2);
+  });
+
+  it('authors the singularity pulse as a learnable ring, not a random one', () => {
+    const pulse = getChassisWeapons(getBossTemplate('spire_station')).get('singularity_pulse');
+    expect(pulse.type).toBe(WEAPON_TYPES.RADIAL_BURST);
+    expect(pulse).toMatchObject({
+      bulletType: 'siege_shell',
+      fireInterval: 2.2,
+      speed: 210,
+      damage: 20,
+      count: 14,
+      spiralOffset: 0.2,
+    });
+    /*
+     * The gap must WALK, not jump past itself. A spiralOffset at or above the
+     * ring's own angular spacing would land each burst's gap on the previous
+     * burst's bullet lane, and the sweep the player is meant to read would
+     * alias into noise.
+     */
+    expect(pulse.spiralOffset).toBeLessThan((Math.PI * 2) / pulse.count);
+  });
+
+  it('keeps the gravity well fightable against a starting Drifter', () => {
+    /*
+     * THE LINE BETWEEN A CURRENT AND A CUTSCENE.
+     *
+     * A pull that met or beat the player's own speed would take the controls
+     * away: at the centre of the well they could hold "away" and still be
+     * dragged in. `pullForce` therefore has to stay under a BASE Drifter's top
+     * speed, with no cards and no skills.
+     *
+     * The authored 110 against a base 153.6 px/s is tight — at the very centre
+     * a starting ship makes only ~44 px/s of headway outward, and the well
+     * eats about 72% of their throttle. That is the intended shape (the price
+     * of the ground the player has to reach), but it is close enough to the
+     * ceiling that this assertion is the one to look at first if the Spire ever
+     * reads as unfair. Anything at or above playerSpeed is not a tuning
+     * question, it is a bug.
+     */
+    const well = getEnrageConfig(getBossTemplate('spire_station')).gravityWell;
+    const playerSpeed = DEFAULT_PLAYER_STATS.moveSpeed * UNIT_PX;
+    expect(well.pullForce).toBeLessThan(playerSpeed);
+    // And the pull at the rim of the well is zero, so entering it is always a
+    // choice made at walking pace rather than a snatch.
+    expect(gravityWellForce(well.radius, well.radius, well.pullForce)).toBe(0);
+  });
+
+  it('gives the shockwave a ring the player can dash through', () => {
+    const enrage = getEnrageConfig(getBossTemplate('spire_station'));
+    const wave = enrage.shockwave;
+    // A BAND, not a growing disc: the ground behind it is safe again, which is
+    // what makes "dash through it toward the core" the answer rather than "run".
+    expect(wave.thickness).toBeGreaterThan(0);
+    expect(wave.thickness).toBeLessThan(wave.maxRadius / 4);
+    // And it has to clear the arena before the next one is due, or the player is
+    // never standing on clean ground.
+    expect(wave.maxRadius / wave.speed).toBeLessThan(enrage.shockwaveInterval);
+    // Reaching past the well it is fired from, so there is no safe annulus
+    // inside the pull where the rings never arrive.
+    expect(wave.maxRadius).toBeGreaterThan(enrage.gravityWell.radius);
+  });
+
+  it('gives the charge cycle more downtime than commitment', () => {
+    const charge = getEnrageConfig(getBossTemplate('hive_cruiser')).chargeAttack;
+    // The telegraph has to be long enough to read and act on — the Dart
+    // Ravager's own lock is the yardstick this is measured against.
+    expect(charge.telegraphDuration).toBeGreaterThanOrEqual(0.8);
+    // And the dangerous part of the cycle has to be the minority of it.
+    const dangerous = charge.chargeDuration;
+    const cycle =
+      charge.cooldown + charge.telegraphDuration + charge.chargeDuration + charge.recoveryDuration;
+    expect(dangerous / cycle).toBeLessThan(0.25);
+  });
+
+  it('vents a minion the spawner can actually resolve', () => {
+    for (const template of Object.values(COMPOSITE_BOSSES)) {
+      const vent = getEnrageConfig(template)?.ventMinions;
+      if (!vent) continue;
+      // An ENEMY_ARCHETYPES key, not a sprite key. 'enemy_larva' is the larva's
+      // ARTWORK; 'larva_swarm' is the species, and only the species spawns.
+      expect(ENEMY_ARCHETYPES[vent.archetypeId], vent.archetypeId).toBeTruthy();
+      // Vented clear of the hull, or a larva spawns inside the boss.
+      expect(vent.spawnRadius ?? 0).toBeGreaterThan(template.chassis.radius);
+    }
+  });
+
+  it('computes the gravity well falloff as a pure function of the authored row', () => {
+    const well = getEnrageConfig(getBossTemplate('spire_station')).gravityWell;
+
+    expect(gravityWellForce(0, well.radius, well.pullForce)).toBe(well.pullForce);
+    expect(gravityWellForce(well.radius, well.radius, well.pullForce)).toBe(0);
+    expect(gravityWellForce(well.radius * 2, well.radius, well.pullForce)).toBe(0);
+    // Linear in between, so a designer can predict the pull at any range by
+    // reading two numbers.
+    expect(gravityWellForce(well.radius * 0.25, well.radius, well.pullForce)).toBeCloseTo(
+      well.pullForce * 0.75,
+      6
+    );
+    // Degenerate rows return 0 rather than NaN or Infinity — a well with no
+    // radius must be inert, not a division by zero in the middle of a fight.
+    expect(gravityWellForce(10, 0, 100)).toBe(0);
+    expect(gravityWellForce(10, 100, 0)).toBe(0);
+    expect(gravityWellForce(-5, 100, 50)).toBe(50);
+  });
+
+  it('returns an empty map for a chassis with no innate weapons', () => {
+    const bare = { chassis: {} };
+    expect(getChassisWeapons(bare).size).toBe(0);
+    expect(getChassisWeapons(null).size).toBe(0);
+    expect(getEnrageConfig(null)).toBe(null);
+    expect(getEnrageConfig(bare)).toBe(null);
+  });
+});
+
+describe('roster-config — the validator catches a broken enrage', () => {
+  /**
+   * These run the REAL validateRosterConfig against a broken row spliced into
+   * the live catalogue and taken straight back out, because a validator
+   * asserted against a hand-rolled stand-in is a test of the stand-in. The
+   * finally block is load-bearing: a leaked key would fail every other suite in
+   * the file and the failure would point anywhere but here.
+   */
+  function withBrokenBoss(mutate) {
+    const base = getBossTemplate('hive_cruiser');
+    const broken = {
+      ...base,
+      id: 'test_broken',
+      chassis: { ...base.chassis, enrage: { ...base.chassis.enrage } },
+    };
+    mutate(broken);
+    COMPOSITE_BOSSES.test_broken = broken;
+    try {
+      return validateRosterConfig().filter((p) => p.includes('test_broken'));
+    } finally {
+      delete COMPOSITE_BOSSES.test_broken;
+    }
+  }
+
+  it('starts from a clean catalogue, so every complaint below is the mutation', () => {
+    expect(validateRosterConfig()).toEqual([]);
+    expect(withBrokenBoss(() => {})).toEqual([]);
+    // And the splice really did come back out.
+    expect(COMPOSITE_BOSSES.test_broken).toBeUndefined();
+  });
+
+  it('flags an unknown enrage trigger', () => {
+    const problems = withBrokenBoss((b) => {
+      b.chassis.enrage.trigger = 'WHEN_ANGRY';
+    });
+    expect(problems.join('\n')).toMatch(/unknown enrage trigger "WHEN_ANGRY"/);
+  });
+
+  it('flags an enrage that gives the chassis nothing to do', () => {
+    // The exact bug the whole feature exists to prevent: a hull that wakes up
+    // angry and then stands there is worse than one that stayed inert, because
+    // now it LOOKS like it should be dangerous.
+    const problems = withBrokenBoss((b) => {
+      b.chassis.innateWeapons = [];
+      delete b.chassis.enrage.chargeAttack;
+      delete b.chassis.enrage.ventMinions;
+      delete b.chassis.enrage.gravityWell;
+      delete b.chassis.enrage.shockwaveInterval;
+    });
+    expect(problems.join('\n')).toMatch(/no innate weapon, charge, well or vent/);
+  });
+
+  it('flags a charge that is no faster than the drift it interrupts', () => {
+    const problems = withBrokenBoss((b) => {
+      b.chassis.enrage.chargeAttack = { ...b.chassis.enrage.chargeAttack, chargeSpeed: 100 };
+    });
+    // Otherwise the 1.2s telegraph warns the player about nothing.
+    expect(problems.join('\n')).toMatch(/chargeSpeed must exceed the enraged speed/);
+  });
+
+  it('flags a charge with no telegraph', () => {
+    const problems = withBrokenBoss((b) => {
+      b.chassis.enrage.chargeAttack = { ...b.chassis.enrage.chargeAttack, telegraphDuration: 0 };
+    });
+    expect(problems.join('\n')).toMatch(/telegraphDuration must be > 0/);
+  });
+
+  it('flags a vent pointed at an archetype that does not exist', () => {
+    const problems = withBrokenBoss((b) => {
+      // The mistake a designer actually makes: reaching for the sprite key.
+      b.chassis.enrage.ventMinions = { ...b.chassis.enrage.ventMinions, archetypeId: 'enemy_larva' };
+    });
+    expect(problems.join('\n')).toMatch(/unknown archetypeId "enemy_larva"/);
+  });
+
+  it('flags a trail hazard with no interval, duration, damage or radius', () => {
+    const problems = withBrokenBoss((b) => {
+      b.chassis.innateWeapons = [{ id: 'bad_wake', type: WEAPON_TYPES.TRAIL_HAZARD }];
+    });
+    const text = problems.join('\n');
+    expect(text).toMatch(/trail_hazard needs interval > 0/);
+    expect(text).toMatch(/trail_hazard needs duration > 0/);
+    expect(text).toMatch(/trail_hazard needs damage > 0/);
+    expect(text).toMatch(/trail_hazard needs radius > 0/);
+  });
+
+  it('flags an innate weapon whose id collides with a part gun', () => {
+    const problems = withBrokenBoss((b) => {
+      b.chassis.innateWeapons = [
+        { ...b.chassis.innateWeapons[0], id: 'port_gun' },
+      ];
+    });
+    // `boss:weapon_fire` carries one weaponId and the renderer keys muzzle
+    // flashes off it, so two weapons by one name paint one in the wrong place.
+    expect(problems.join('\n')).toMatch(/duplicate weapon id "port_gun"/);
+  });
+
+  it('flags a phase that tries to arm an innate weapon', () => {
+    const problems = withBrokenBoss((b) => {
+      b.phases = b.phases.map((phase, i) =>
+        i === 0 ? { ...phase, weapons: [...phase.weapons, 'afterburner_wake'] } : phase
+      );
+    });
+    expect(problems.join('\n')).toMatch(/arms innate weapon "afterburner_wake"/);
+  });
+
+  it('flags a well with no radius or no pull', () => {
+    expect(
+      withBrokenBoss((b) => {
+        b.chassis.enrage.gravityWell = { radius: 0, pullForce: 110 };
+      }).join('\n')
+    ).toMatch(/gravityWell: radius must be > 0/);
+    expect(
+      withBrokenBoss((b) => {
+        b.chassis.enrage.gravityWell = { radius: 450, pullForce: 0 };
+      }).join('\n')
+    ).toMatch(/gravityWell: pullForce must be > 0/);
+  });
+
+  it('flags a shockwave ring with no cadence to fire on', () => {
+    const problems = withBrokenBoss((b) => {
+      b.chassis.enrage.shockwave = { speed: 340, maxRadius: 560, thickness: 46, damage: 28 };
+      delete b.chassis.enrage.shockwaveInterval;
+    });
+    expect(problems.join('\n')).toMatch(/shockwave needs a shockwaveInterval/);
   });
 });
 

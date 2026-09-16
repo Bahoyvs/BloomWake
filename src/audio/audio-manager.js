@@ -388,6 +388,22 @@ export class AudioManager {
     on('boss:deflected', () => this.playDeflect());
     on('boss:part_destroyed', () => this.playPartDestroyed());
     on('boss:phase', () => this.playPhaseShiftWarning());
+    /*
+     * An enraged chassis IS a phase escalation, so it borrows that cue rather
+     * than getting a synth of its own. What matters is that the loudest
+     * transition in a composite boss fight makes a noise at all: the armour
+     * coming off used to be silent, which is how a boss waking up read as the
+     * boss breaking.
+     */
+    on('boss:enraged', () => this.playPhaseShiftWarning());
+    /*
+     * Bound to the same alert as a Dart Ravager's lock, and for the same
+     * reason: they are the same event — something has picked a line through the
+     * player and is about to fly it. One sound, so the player only ever has to
+     * learn it once.
+     */
+    on('boss:charge_telegraph', () => this.playLockOnAlert());
+    on('boss:shockwave_warn', () => this.playLockOnAlert());
     on('enemy:lock_on', () => this.playLockOnAlert());
 
     /* --- The arena floor -------------------------------------------- */

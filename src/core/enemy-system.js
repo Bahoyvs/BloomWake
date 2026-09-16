@@ -301,8 +301,10 @@ export const BEHAVIOR_HANDLERS = {
  * first time one of them was fixed.
  *
  * @param {Object} weapon - Row from an archetype's `attack` or a part's `weapon`
- * @param {{x: number, y: number, aimX: number, aimY: number}} origin - Muzzle
- *   position and a unit aim vector
+ * @param {{x: number, y: number, aimX: number, aimY: number,
+ *   angleOffset?: number}} origin - Muzzle position and a unit aim vector.
+ *   `angleOffset` overrides a radial burst's random gap roll with a caller-
+ *   supplied angle; see the note in the RADIAL_BURST branch.
  * @param {Object} ctx - { fire(spec), rng() }
  * @returns {number} Rounds fired
  */
@@ -343,8 +345,20 @@ export function fireWeapon(weapon, origin, ctx) {
        * Rolled each burst rather than fixed. A ring that always leaves its gap
        * at the same angle teaches the player one safe bearing and then stops
        * being an attack.
+       *
+       * UNLESS the caller supplies `origin.angleOffset`, in which case the gap
+       * is wherever the caller says. That is for the ring a player sees a
+       * dozen times rather than twice — the Chitin Spire's singularity pulse
+       * walks its gap round the circle by a fixed step per burst (see
+       * `spiralOffset` in the roster), because at that repetition count a
+       * random gap stops reading as "find the gap" and starts reading as
+       * noise. The choice belongs to the caller and not to this function,
+       * since only the caller knows how many bursts the player will live
+       * through.
        */
-      const offset = (ctx.rng ? ctx.rng() : Math.random()) * Math.PI * 2;
+      const offset = Number.isFinite(origin.angleOffset)
+        ? origin.angleOffset
+        : (ctx.rng ? ctx.rng() : Math.random()) * Math.PI * 2;
       for (let i = 0; i < count; i++) shoot(offset + (i / count) * Math.PI * 2);
       return count;
     }

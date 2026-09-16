@@ -198,6 +198,28 @@ export const THEME = {
     /** Lingering acid pools left by a Bio-Goliath. */
     hazard: '#d055a6',
     hazardRim: '#ff6ec7',
+    /**
+     * The Hive Cruiser's afterburner wake, once its armour is off.
+     *
+     * Burning FUEL, not biology, so it is deliberately the only hot orange on
+     * the field and shares its hue with the siege shell rather than with the
+     * spore pools it lands in the same list as. A wake painted `hazard`
+     * magenta would read as more hive bloom, and the player would learn the
+     * wrong lesson about what just drove past them.
+     */
+    afterburner: '#ff8a3d',
+    afterburnerRim: '#ffd08a',
+    /**
+     * The Chitin Spire's gravity well and its shockwave rings.
+     *
+     * Violet, not the cyan a collapsing singularity wants to be: cyan is the
+     * Drifter's own hull light, and a 450px field painted in the hero's colour
+     * would swallow the ship inside it. Violet is the far side of the wheel
+     * from both the hero's cyan and the Swarm's magenta, so the well reads as
+     * a third thing — physics rather than a creature.
+     */
+    singularity: '#a24dff',
+    singularityRim: '#dcb0ff',
   },
 
   /* --- Background: deep space, two dark stops plus a faint nebula. --- */

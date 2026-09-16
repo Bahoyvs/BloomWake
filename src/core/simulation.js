@@ -32,7 +32,13 @@ import {
   PHASE1,
 } from './constants.js';
 import { clamp, distanceSq, mulberry32, normalize, randomRange, removeDead } from './math.js';
-import { getEnemyHpMultiplier, getEnemySpeedMultiplier, isBossWave, getBossHp } from './wave.js';
+import {
+  WAVE_CONSTANTS,
+  getEnemyHpMultiplier,
+  getEnemySpeedMultiplier,
+  isBossWave,
+  getBossHp,
+} from './wave.js';
 import {
   ENEMIES,
   ENEMY_TYPES,
@@ -189,6 +195,20 @@ export class Simulation {
       rng: () => this.rng(),
       fire: (spec) => this.spawnEnemyBullet(spec),
       emit: (type, payload) => this.bus.emit(type, payload),
+      /*
+       * THE FOUR ENRAGED-CHASSIS HOOKS.
+       *
+       * A CompositeBoss whose armour has come off drops burning wake, vents
+       * larvae, drags the Drifter toward its core and rings it with
+       * shockwaves — none of which it can do by itself, because it owns no
+       * pool, no spawner and no handle on the player. Each one arrives here as
+       * a request and is resolved by the system that already owns that thing,
+       * which is why the boss stays testable with four collecting stubs.
+       */
+      hazard: (spec) => this.spawnHazard(spec),
+      spawn: (spec) => this.spawnVentedMinion(spec),
+      impulse: (dvx, dvy) => this.applyPlayerImpulse(dvx, dvy),
+      hurt: (amount) => this.damagePlayer(amount),
     };
 
     this.cards = new CardSystem(this);
@@ -512,6 +532,36 @@ export class Simulation {
     player.y = nextY;
 
     if (this.invulnTimer > 0) this.invulnTimer -= dt;
+  }
+
+  /**
+   * Add an outside force to the Drifter's momentum.
+   *
+   * VELOCITY, NOT POSITION. The Chitin Spire's gravity well calls this every
+   * frame it has the player in reach, and writing straight to `player.x` would
+   * be taking the controls away — the ship would slide regardless of what the
+   * player did with the stick. Going in through the same `playerVx`/`playerVy`
+   * the thrust and the drag both act on means the pull is something the player
+   * flies AGAINST: hold a heading and you make headway, let go and the current
+   * takes you.
+   *
+   * `dvx`/`dvy` are already multiplied by dt by the caller, because the caller
+   * is the one that knows whether its force was per-second or an instantaneous
+   * kick.
+   *
+   * Runs AFTER updatePlayer in the frame order (see update()), so the impulse
+   * shows up in the next frame's integration. That one frame of latency is the
+   * price of not having the boss overwrite a position the player just clamped
+   * against a wall, and at 60Hz it is 1/60th of a 110 px/s current: under two
+   * pixels.
+   *
+   * @param {number} dvx - px/s, already dt-scaled
+   * @param {number} dvy
+   */
+  applyPlayerImpulse(dvx, dvy) {
+    if (!Number.isFinite(dvx) || !Number.isFinite(dvy)) return;
+    this.playerVx += dvx;
+    this.playerVy += dvy;
   }
 
   /**
@@ -928,6 +978,33 @@ export class Simulation {
   }
 
   /**
+   * Honour a boss's vent request, or decline it.
+   *
+   * THE ARENA BUDGET IS NOT THE BOSS'S BUSINESS. An enraged Hive Cruiser vents
+   * four larvae every six seconds for as long as it lives, and it has no idea
+   * how long that will be — a player who stalls the fight (kiting a 2,800 HP
+   * hull with a slow build, or simply going to make a coffee) would otherwise
+   * accumulate minions with no ceiling, past the point the enemy pool was sized
+   * for and past the point the frame budget survives.
+   *
+   * Declining is silent and the boss does not care: its vent cooldown has
+   * already reset, so it tries again next cycle, and the moment the player
+   * clears some chaff the vents resume. A cap enforced inside the boss would
+   * have put the wave engine's enemy budget into a data file about turrets.
+   *
+   * @param {Object} spec - { archetypeId, x, y } from CompositeBoss.updateVenting
+   * @returns {Object|null} The spawned enemy, or null if the arena is full
+   */
+  spawnVentedMinion(spec) {
+    let live = 0;
+    for (let i = 0; i < this.enemies.length; i++) {
+      if (this.enemies[i].alive) live++;
+    }
+    if (live >= WAVE_CONSTANTS.MAX_ACTIVE_ENEMIES) return null;
+    return this.spawnArchetype(spec.archetypeId, { x: spec.x, y: spec.y });
+  }
+
+  /**
    * Whichever boss is currently up, in one shape the HUD can read without
    * caring which system spawned it.
    *
@@ -1020,6 +1097,19 @@ export class Simulation {
     for (const boss of this.compositeBosses) {
       if (!boss.alive) continue;
       boss.update(dt, ctx);
+
+      /*
+       * A drifting chassis could never leave the arena — it only ever moves
+       * toward a player who is inside it. An ENRAGED one can: the Hive Cruiser
+       * commits to a locked vector at 380 px/s for 1.4s and covers 530px
+       * whether or not the player is still on the far end of it, so a charge
+       * taken near a wall would carry the boss out of the world and out of
+       * reach of every weapon the player has. Clamped here rather than inside
+       * the boss because the arena is the simulation's fact, not the boss's.
+       */
+      boss.x = clamp(boss.x, boss.radius, WORLD.WIDTH - boss.radius);
+      boss.y = clamp(boss.y, boss.radius, WORLD.HEIGHT - boss.radius);
+      boss.syncParts();
 
       if (this.invulnTimer > 0) continue;
       const hit = boss.hitTest(player.x, player.y, PLAYER_CFG.RADIUS);
@@ -1620,7 +1710,45 @@ export class Simulation {
       maxLife: 4.0,
       damagePerSec: 6,
       alive: true,
+      kind: 'spore',
     });
+  }
+
+  /**
+   * A lingering ground hazard with its own numbers.
+   *
+   * The parametric twin of spawnSporePool, and it lands in the SAME list on
+   * purpose: an afterburner wake and a spore pool are the same object as far as
+   * the player is concerned (a patch of floor that hurts while you stand in it),
+   * so they get one resolver in updateSporePools and one draw pass in
+   * drawHazards. A second list would be a second chance to forget the contact
+   * check.
+   *
+   * `kind` is carried through to the renderer, which is the one place the two
+   * are allowed to differ — a flame trail that looked like spore bloom would
+   * tell the player the wrong thing about what made it.
+   *
+   * @param {Object} spec - { x, y, radius, life, damagePerSec, kind?,
+   *   sourceId?, weaponId? }
+   * @returns {Object} The hazard record
+   */
+  spawnHazard(spec) {
+    const life = spec.life ?? 2;
+    const hazard = {
+      id: this.nextEntityId++,
+      x: spec.x,
+      y: spec.y,
+      radius: spec.radius ?? 35,
+      life,
+      maxLife: life,
+      damagePerSec: spec.damagePerSec ?? 0,
+      alive: true,
+      kind: spec.kind ?? 'spore',
+      sourceId: spec.sourceId ?? null,
+      weaponId: spec.weaponId ?? null,
+    };
+    this.sporePools.push(hazard);
+    return hazard;
   }
 
   updateSporePools(dt) {

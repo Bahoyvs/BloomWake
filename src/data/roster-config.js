@@ -92,6 +92,54 @@ export const WEAPON_TYPES = {
   SPREAD_VOLLEY: 'spread_volley',
   /** `count` rounds evenly around the full circle, at a random roll offset. */
   RADIAL_BURST: 'radial_burst',
+  /**
+   * Fires no rounds at all: it drops a lingering damage patch at the muzzle
+   * position and leaves it in WORLD space.
+   *
+   * It is a weapon rather than a movement side-effect because it has a clock,
+   * a damage number and an owner id like everything else that hurts the
+   * player, and because a boss with two trail weapons at different cadences
+   * should be a data edit. `interval` (not `fireInterval`) is the drop period,
+   * `duration` how long a patch lives, and `damage` is damage PER SECOND of
+   * standing in it — the same contract the spore pools already use, so the one
+   * hazard resolver in the simulation serves both.
+   */
+  TRAIL_HAZARD: 'trail_hazard',
+};
+
+/**
+ * How a chassis wakes up once its armour is gone.
+ *
+ * ---------------------------------------------------------------------------
+ * THE PROBLEM THIS SOLVES
+ * ---------------------------------------------------------------------------
+ * `chassis.armoredBy` makes the modules load-bearing: the hull takes nothing
+ * while a named part stands. The cost of that rule is the endgame it creates.
+ * Every gun on a composite boss belongs to a PART, so the moment the player
+ * finishes stripping the armour they are left shooting 1,900-3,200 hp of inert
+ * scenery that cannot answer. The hardest-fought minute of the fight is
+ * followed by its dullest.
+ *
+ * `chassis.enrage` is the answer: the hull keeps the HP it has left and starts
+ * fighting with weapons of its OWN. The turrets were the boss's reach; the
+ * chassis is the boss's body, and a body with nothing left to hide behind
+ * charges.
+ *
+ * Nothing here resets HP. Enrage is a state the boss enters on top of the
+ * damage it has already taken — a threshold that healed the boss would make
+ * stripping the armour a mistake.
+ */
+export const ENRAGE_TRIGGERS = {
+  /**
+   * Armed once the armour is stripped: every part named in `chassis.armoredBy`
+   * is wrecked, or (for a chassis with no named armour) every part is.
+   *
+   * Deliberately the SAME moment the chassis becomes shootable, not one part
+   * later. The frame the player earns the right to damage the hull is the frame
+   * the hull earns the right to fight back, so the trade is legible: the reward
+   * for stripping the armour is a target, and the price is a live boss.
+   */
+  ALL_PARTS_DESTROYED: 'ALL_PARTS_DESTROYED',
 };
 
 /**
@@ -434,6 +482,83 @@ export const COMPOSITE_BOSSES = {
       contactDamage: 30,
       /** Chassis is invulnerable while either flank turret still stands. */
       armoredBy: ['turret_port', 'turret_starboard'],
+      /**
+       * THE WOUNDED PREDATOR.
+       *
+       * A cruiser whose guns are gone still has engines and a bow. Stripped of
+       * its turrets it stops trying to hold the player at range and starts
+       * trying to run them down: quadruple drift speed, a telegraphed ramming
+       * run on a 5.5s beat, burning fuel dumped in its wake, and larvae vented
+       * out of the breached hull because the thing was a carrier all along.
+       *
+       * The pieces are chosen so that none of them is answered by the same
+       * input. The charge is answered by reading the telegraph and moving
+       * across it; the wake is answered by not following it home; the larvae
+       * are answered by clearing them before the next charge. A player who
+       * only dodges drowns in chaff, and one who only farms chaff gets rammed.
+       */
+      innateWeapons: [
+        {
+          id: 'afterburner_wake',
+          type: WEAPON_TYPES.TRAIL_HAZARD,
+          /** Damage per second of standing in a patch, not on touch. */
+          damage: 12,
+          /** Seconds a patch lingers in world space after it is dropped. */
+          duration: 2.2,
+          /** Drop period. At 380 px/s that is a patch every 57px of charge. */
+          interval: 0.15,
+          radius: 38,
+        },
+      ],
+      enrage: {
+        trigger: ENRAGE_TRIGGERS.ALL_PARTS_DESTROYED,
+        /**
+         * ABSOLUTE, not a multiplier on `speed` above, and not passed through
+         * the phase's speedScale or a wrecked part's chassisSpeedScale. The
+         * whole point of the reactor's 0.6 speed penalty was to make the hull
+         * easier to out-run while the turrets were still shooting; keeping it
+         * after the enrage would mean the player's own progress had defused
+         * the thing the enrage exists to create. 135 is the statline, read as
+         * written.
+         */
+        speed: 135,
+        spin: 0.45,
+        /** Ramming hurts: 30 -> 45 for touching an engine running this hot. */
+        contactDamage: 45,
+        chargeAttack: {
+          cooldown: 5.5,
+          /**
+           * The lock is taken at the START of this window and never re-aimed,
+           * exactly as the Dart Ravager's is (see stepRammer). 1.2s of a beam
+           * pointing where the boss WILL go is a telegraph; 1.2s of a beam
+           * tracking where the player currently is is an unavoidable hit
+           * wearing a telegraph's clothes.
+           */
+          telegraphDuration: 1.2,
+          chargeSpeed: 380,
+          chargeDuration: 1.4,
+          /**
+           * The other half of the deal. A dodged charge leaves the cruiser
+           * coasting and harmless while it bleeds off 380 px/s, so reading the
+           * telegraph pays twice: once by not being hit, once by the free
+           * damage window that follows.
+           */
+          recoveryDuration: 0.9,
+        },
+        ventMinions: {
+          cooldown: 6.0,
+          /**
+           * ENEMY_ARCHETYPES key, not a sprite key. The larva is the right
+           * chaff here precisely because it is the wave-1 enemy: the player
+           * already knows exactly what it costs to ignore one.
+           */
+          archetypeId: 'larva_swarm',
+          count: 4,
+          spreadAngle: Math.PI * 2,
+          /** Vented clear of the hull so a larva never spawns inside it. */
+          spawnRadius: 96,
+        },
+      },
     },
     parts: [
       {
@@ -567,6 +692,92 @@ export const COMPOSITE_BOSSES = {
       spin: 0.22,
       contactDamage: 35,
       armoredBy: ['pylon_a', 'pylon_b', 'pylon_c'],
+      /**
+       * THE GRAVITATIONAL COLLAPSE.
+       *
+       * The Spire cannot chase — it is the arena feature, and giving it engines
+       * on the last phase would make it a second Cruiser. So it does the
+       * opposite of chasing: it stops letting the player leave.
+       *
+       * Everything below inverts the fight the pylons were teaching. For three
+       * pylon-lengths of the encounter the correct play was to circle at
+       * standoff range and pick a pylon; now standoff range is where the pull
+       * is strongest against the player's own throttle, the safe bearing is
+       * gone (the ring covers every angle), and the shockwave punishes standing
+       * anywhere at all. The player has to close, because the pull is weakest
+       * where the core is, and the core is also the 45-damage thing they are
+       * trying to shoot.
+       */
+      innateWeapons: [
+        {
+          id: 'singularity_pulse',
+          type: WEAPON_TYPES.RADIAL_BURST,
+          bulletType: 'siege_shell',
+          fireInterval: 2.2,
+          speed: 210,
+          damage: 20,
+          count: 14,
+          /**
+           * The ring's gap advances by this many radians every burst instead of
+           * being rolled at random the way a part-mounted radial burst is.
+           *
+           * A random gap is right for a turret the player only sees a few
+           * bursts from: it stops them learning one safe bearing. This ring is
+           * the last thirty seconds of the fight and the player will see a
+           * dozen bursts, so a random gap reads as noise. A gap that walks
+           * round the circle at a fixed rate is learnable — the player can see
+           * where the next one will be — which is what makes a bullet wall
+           * something to solve rather than something to survive.
+           */
+          spiralOffset: 0.2,
+        },
+      ],
+      enrage: {
+        trigger: ENRAGE_TRIGGERS.ALL_PARTS_DESTROYED,
+        /** Still bolted to the floor. Only the spin changes. */
+        speed: 0,
+        spin: 0.9,
+        contactDamage: 45,
+        gravityWell: {
+          radius: 450,
+          /**
+           * px/s of inward velocity added at the centre, falling linearly to
+           * zero at `radius`. Under a base Drifter (~260 px/s) 110 is a
+           * current, not a tractor beam: it bends every line the player tries
+           * to fly and makes retreating cost about 40% of their throttle, but
+           * it never takes control away. A pull that exceeded player speed
+           * would be a cutscene.
+           */
+          pullForce: 110,
+          /**
+           * Adds a tangential component, so the pull curves the player into an
+           * orbit rather than dragging them down a straight line into the
+           * core. A straight-line pull is fought by holding one key; a spiral
+           * has to actually be flown out of.
+           */
+          inwardSpiral: true,
+        },
+        /**
+         * Seconds between shockwaves. Called out here rather than inside
+         * `shockwave` because the CADENCE is the thing the player learns and
+         * the designer retunes; the ring's own physics below it is set once.
+         */
+        shockwaveInterval: 4.0,
+        shockwave: {
+          /** Warning ring drawn at full radius before the wave is released. */
+          warnDuration: 0.8,
+          /** Expansion rate. 340 px/s outruns a walking Drifter, not a dashing one. */
+          speed: 340,
+          maxRadius: 560,
+          /**
+           * Band thickness. The wave is a RING, not a growing disc: inside it
+           * is safe again once it has passed, which is what makes "dash
+           * through it toward the core" the intended answer rather than "run".
+           */
+          thickness: 46,
+          damage: 28,
+        },
+      },
     },
     parts: [
       /**
@@ -794,6 +1005,64 @@ export function getTemplateWeapons(template) {
 }
 
 /**
+ * A chassis's own weapons — the ones that fire on the enrage rather than off a
+ * part, keyed by weapon id the same way getTemplateWeapons keys the parts'.
+ *
+ * Separate function rather than a flag on getTemplateWeapons because the two
+ * answer different questions. getTemplateWeapons answers "what can a phase
+ * arm?", and the answer must never include an innate weapon: a phase list
+ * describes the boss while its parts live, and the innate guns exist precisely
+ * for when they do not.
+ *
+ * @param {Object} template
+ * @returns {Map<string, Object>}
+ */
+export function getChassisWeapons(template) {
+  const out = new Map();
+  for (const weapon of template?.chassis?.innateWeapons ?? []) {
+    if (weapon?.id) out.set(weapon.id, weapon);
+  }
+  return out;
+}
+
+/**
+ * @param {Object} template
+ * @returns {Object|null} The chassis enrage block, or null for a boss that
+ *   goes quiet when its armour comes off
+ */
+export function getEnrageConfig(template) {
+  return template?.chassis?.enrage ?? null;
+}
+
+/**
+ * Inward pull, px/s, at a given distance from a gravity well's centre.
+ *
+ * Lives here rather than in the boss because it is the whole of the well's
+ * DESIGN: linear falloff from `pullForce` at the core to exactly zero at the
+ * rim, and zero everywhere beyond. Two properties matter and both are easier
+ * to see in four lines than in a state machine —
+ *
+ *   - it is CONTINUOUS at the rim, so a player skimming the edge is not
+ *     snatched by a force that appears at full strength the moment they cross
+ *     an invisible line;
+ *   - it is STRONGEST where the boss is, so running away is cheap and the
+ *     expensive place to be is exactly the place the player has to reach to
+ *     win. The well does not chase them; it charges them rent on the ground
+ *     they need.
+ *
+ * @param {number} distance - px from the well's centre
+ * @param {number} radius - px, the well's reach
+ * @param {number} pullForce - px/s at the centre
+ * @returns {number} px/s of inward pull; 0 at or beyond `radius`
+ */
+export function gravityWellForce(distance, radius, pullForce) {
+  if (!(radius > 0) || !(pullForce > 0)) return 0;
+  if (!(distance < radius)) return 0;
+  const d = Math.max(0, distance);
+  return pullForce * (1 - d / radius);
+}
+
+/**
  * Check the whole catalogue for the mistakes a data edit actually makes.
  *
  * Run from tests/roster-config.test.js, so a designer who mistypes a behaviour
@@ -809,11 +1078,26 @@ export function validateRosterConfig() {
   const behaviors = new Set(Object.values(BEHAVIORS));
   const weaponTypes = new Set(Object.values(WEAPON_TYPES));
   const triggers = new Set(Object.values(PHASE_TRIGGERS));
+  const enrageTriggers = new Set(Object.values(ENRAGE_TRIGGERS));
 
   const checkAttack = (where, attack) => {
     if (!attack) return;
     if (!weaponTypes.has(attack.type)) {
       problems.push(`${where}: unknown weapon type "${attack.type}"`);
+    }
+    /*
+     * A trail hazard is checked against a different contract because it fires
+     * no rounds: no bullet type to resolve, `interval` instead of
+     * `fireInterval`, and a `duration` the patch lives for. Running it through
+     * the projectile checks would demand a bulletType it has no use for, and
+     * the only way a designer could satisfy that is by naming one at random.
+     */
+    if (attack.type === WEAPON_TYPES.TRAIL_HAZARD) {
+      if (!(attack.interval > 0)) problems.push(`${where}: trail_hazard needs interval > 0`);
+      if (!(attack.duration > 0)) problems.push(`${where}: trail_hazard needs duration > 0`);
+      if (!(attack.damage > 0)) problems.push(`${where}: trail_hazard needs damage > 0`);
+      if (!(attack.radius > 0)) problems.push(`${where}: trail_hazard needs radius > 0`);
+      return;
     }
     if (!BULLET_TYPES[attack.bulletType]) {
       problems.push(`${where}: unknown bulletType "${attack.bulletType}"`);
@@ -888,6 +1172,107 @@ export function validateRosterConfig() {
       }
     }
 
+    /*
+     * Innate weapons share the weapon-id namespace with the parts on purpose:
+     * `boss:weapon_fire` carries one weaponId and the renderer keys muzzle
+     * flashes off it, so two weapons answering to the same name would paint
+     * one of them in the wrong place. They are collected into their own set
+     * because a PHASE must not be able to arm one — a phase list is the boss's
+     * armed guns while its parts live, and an innate weapon fires on the
+     * enrage state instead.
+     */
+    const innateIds = new Set();
+    for (const weapon of template.chassis?.innateWeapons ?? []) {
+      const innateWhere = `${where}.chassis.innateWeapons.${weapon.id ?? 'unnamed'}`;
+      if (!weapon.id) problems.push(`${where}: an innate weapon is missing an id`);
+      if (weaponIds.has(weapon.id) || innateIds.has(weapon.id)) {
+        problems.push(`${where}: duplicate weapon id "${weapon.id}"`);
+      }
+      innateIds.add(weapon.id);
+      checkAttack(innateWhere, weapon);
+    }
+
+    const enrage = template.chassis?.enrage ?? null;
+    if (enrage) {
+      const enrageWhere = `${where}.chassis.enrage`;
+      if (!enrageTriggers.has(enrage.trigger)) {
+        problems.push(`${enrageWhere}: unknown enrage trigger "${enrage.trigger}"`);
+      }
+      if (!(enrage.speed >= 0)) problems.push(`${enrageWhere}: speed must be >= 0`);
+      if (!(enrage.contactDamage >= 0)) {
+        problems.push(`${enrageWhere}: contactDamage must be >= 0`);
+      }
+      /*
+       * An enrage with no weapon of its own is the exact bug this whole block
+       * exists to prevent, so it is a validator failure rather than a design
+       * choice: a chassis that wakes up angry and then does nothing is worse
+       * than one that stayed inert, because now it looks like it should be
+       * dangerous.
+       */
+      const hasThreat =
+        (template.chassis?.innateWeapons ?? []).length > 0 ||
+        Boolean(enrage.chargeAttack) ||
+        Boolean(enrage.gravityWell) ||
+        Boolean(enrage.ventMinions) ||
+        enrage.shockwaveInterval > 0;
+      if (!hasThreat) {
+        problems.push(`${enrageWhere}: enrages with no innate weapon, charge, well or vent`);
+      }
+
+      const charge = enrage.chargeAttack;
+      if (charge) {
+        if (!(charge.cooldown > 0)) {
+          problems.push(`${enrageWhere}.chargeAttack: cooldown must be > 0`);
+        }
+        if (!(charge.telegraphDuration > 0)) {
+          problems.push(`${enrageWhere}.chargeAttack: telegraphDuration must be > 0`);
+        }
+        if (!(charge.chargeDuration > 0)) {
+          problems.push(`${enrageWhere}.chargeAttack: chargeDuration must be > 0`);
+        }
+        // The charge has to actually be faster than the drift it interrupts,
+        // or the telegraph warns the player about nothing.
+        if (!(charge.chargeSpeed > (enrage.speed ?? 0))) {
+          problems.push(`${enrageWhere}.chargeAttack: chargeSpeed must exceed the enraged speed`);
+        }
+      }
+
+      const vent = enrage.ventMinions;
+      if (vent) {
+        if (!(vent.cooldown > 0)) problems.push(`${enrageWhere}.ventMinions: cooldown must be > 0`);
+        if (!(vent.count > 0)) problems.push(`${enrageWhere}.ventMinions: count must be > 0`);
+        if (!ENEMY_ARCHETYPES[vent.archetypeId]) {
+          problems.push(`${enrageWhere}.ventMinions: unknown archetypeId "${vent.archetypeId}"`);
+        }
+      }
+
+      const well = enrage.gravityWell;
+      if (well) {
+        if (!(well.radius > 0)) problems.push(`${enrageWhere}.gravityWell: radius must be > 0`);
+        if (!(well.pullForce > 0)) {
+          problems.push(`${enrageWhere}.gravityWell: pullForce must be > 0`);
+        }
+      }
+
+      if (enrage.shockwaveInterval !== undefined && !(enrage.shockwaveInterval > 0)) {
+        problems.push(`${enrageWhere}: shockwaveInterval must be > 0`);
+      }
+      const wave = enrage.shockwave;
+      if (wave) {
+        if (!(enrage.shockwaveInterval > 0)) {
+          problems.push(`${enrageWhere}: shockwave needs a shockwaveInterval`);
+        }
+        if (!(wave.speed > 0)) problems.push(`${enrageWhere}.shockwave: speed must be > 0`);
+        if (!(wave.maxRadius > 0)) {
+          problems.push(`${enrageWhere}.shockwave: maxRadius must be > 0`);
+        }
+        if (!(wave.thickness > 0)) {
+          problems.push(`${enrageWhere}.shockwave: thickness must be > 0`);
+        }
+        if (!(wave.damage > 0)) problems.push(`${enrageWhere}.shockwave: damage must be > 0`);
+      }
+    }
+
     const phases = template.phases ?? [];
     if (phases.length === 0) problems.push(`${where}: needs at least one phase`);
     if (phases[0] && phases[0].trigger?.type !== PHASE_TRIGGERS.INITIAL) {
@@ -899,7 +1284,11 @@ export function validateRosterConfig() {
         problems.push(`${phaseWhere}: unknown trigger type "${phase.trigger?.type}"`);
       }
       for (const weaponId of phase.weapons ?? []) {
-        if (!weaponIds.has(weaponId)) {
+        if (innateIds.has(weaponId)) {
+          problems.push(
+            `${phaseWhere}: arms innate weapon "${weaponId}" — those fire on enrage, not on a phase`
+          );
+        } else if (!weaponIds.has(weaponId)) {
           problems.push(`${phaseWhere}: arms unknown weapon "${weaponId}"`);
         }
       }

@@ -306,6 +306,18 @@ export class Hud {
       }
     });
 
+    /*
+     * The armour coming off is the one transition a composite boss fight
+     * cannot afford to leave unannounced. The player has just spent a minute
+     * dismantling the modules and is, reasonably, looking at the turret they
+     * killed rather than at the hull — so the fact that the hull is now
+     * shootable AND fighting back has to arrive as text, not only as a colour
+     * change on a sprite they are not watching.
+     */
+    bus.on('boss:enraged', () =>
+      this.showBanner('[ CORE BREACHED // CHASSIS ENRAGED ]', 2.4, TONE.CRITICAL)
+    );
+
     bus.on('boss:ray_telegraph', () =>
       this.showBanner('[ WARNING // DEATH RAY CHARGING ]', 1.4, TONE.CRITICAL)
     );
