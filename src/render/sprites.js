@@ -20,7 +20,7 @@
  */
 
 import { Sprite } from 'pixi.js';
-import { getEnemyTextureKey, ASSET_KEYS } from '../core/assets.js';
+import { getEnemyTextureKey, lookupEnemyTextureKey, ASSET_KEYS } from '../core/assets.js';
 import { THEME } from './theme.js';
 import {
   DAMAGE_TINT,
@@ -49,6 +49,7 @@ export const SPRITE_FIT = 1.15;
  * boss path; the swarm derives facing from real velocity in juice.js.
  */
 export const ENEMY_SPRITE_CONFIG = {
+  /* ---- Legacy roster (src/data/enemies.js). ---- */
   tarling: { fit: enemyFit('tarling') },
   ashfish: { fit: enemyFit('ashfish'), faceTravel: true },
   cracked_wisp: { fit: enemyFit('cracked_wisp'), faceTravel: true },
@@ -56,6 +57,22 @@ export const ENEMY_SPRITE_CONFIG = {
   smogmoth: { fit: enemyFit('smogmoth'), faceTravel: true },
   bio_goliath: { fit: enemyFit('bio_goliath'), faceTravel: true },
   rustwhale: { fit: enemyFit('rustwhale'), faceTravel: true },
+
+  /* ---- Roster config (src/data/roster-config.js). ----
+   *
+   * Same derivation, one row per archetype. Written out rather than left to
+   * the SPRITE_FIT default because that default is a flat 1.15 of the HITBOX,
+   * which throws away the designed footprint entirely: at 1.15 the Brood
+   * Bastion and the Xeno Larva render at 55px and 32px, a ratio of 1.7, where
+   * their authored sizes differ by 2.4x. Size is how threat reads before any
+   * detail resolves, so it cannot be a fallback.
+   */
+  larva_swarm: { fit: enemyFit('larva_swarm') },
+  brood_bastion: { fit: enemyFit('brood_bastion') },
+  spore_kiter: { fit: enemyFit('spore_kiter'), faceTravel: true },
+  spore_barrage: { fit: enemyFit('spore_barrage'), faceTravel: true },
+  dart_rammer: { fit: enemyFit('dart_rammer'), faceTravel: true },
+  mantis_weaver: { fit: enemyFit('mantis_weaver'), faceTravel: true },
 };
 
 /**
@@ -137,11 +154,42 @@ export function syncEnemySprite(view, entity, transform, t = null) {
 }
 
 /**
+ * Ids already reported as unbound. One line per id, not one per frame.
+ *
+ * Module-level rather than per-renderer: the warning is about the MANIFEST, so
+ * it is the same fact however many renderers exist, and a swarm of 200 enemies
+ * missing the same key would otherwise emit 200 lines a frame.
+ */
+const warnedTextureIds = new Set();
+
+/**
  * Texture key for an enemy type.
+ *
+ * Takes whatever id the caller has — an archetype's `spriteKey`, an archetype
+ * id, or a legacy `typeId` — and resolves it against the one binding table in
+ * src/core/assets.js.
+ *
+ * THE WARNING IS THE FEATURE. The fallback underneath (the chaff silhouette)
+ * has always existed and always will: an unbound id must never take the frame
+ * down. But it is visually indistinguishable from a correct binding, which is
+ * how the entire roster-config swarm spent its life on screen wearing the
+ * Larva's texture with no tint and nothing anywhere saying so. Now an id that
+ * resolves to nothing says so once, by name, and then gets out of the way.
+ *
  * @param {string} typeId
  * @returns {string}
  */
 export function enemyTextureKey(typeId) {
+  const key = lookupEnemyTextureKey(typeId);
+  if (key) return key;
+
+  if (typeId && !warnedTextureIds.has(typeId)) {
+    warnedTextureIds.add(typeId);
+    console.warn(
+      `[BloomWake] No texture bound for enemy "${typeId}" — falling back to the ` +
+        'chaff hull. Add a row to ENEMY_TEXTURE_KEY in src/core/assets.js.'
+    );
+  }
   return getEnemyTextureKey(typeId);
 }
 

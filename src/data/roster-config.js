@@ -63,7 +63,7 @@ export const BULLET_TYPES = {
   bio_plasma: {
     id: 'bio_plasma',
     name: 'Bio-Plasma',
-    spriteKey: 'bullet_bio_plasma',
+    spriteKey: 'laserRed03',
     /** Hive magenta. Matches THEME.bio.magenta so hostile fire reads as hive. */
     tint: 0xff2fb3,
     radius: 7,

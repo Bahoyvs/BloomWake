@@ -30,6 +30,8 @@ import { clamp } from '../core/math.js';
 import { assets as defaultAssets, ASSET_KEYS } from '../core/assets.js';
 import { CHARGE_STATE } from '../core/simulation.js';
 import { ENEMIES } from '../data/enemies.js';
+import { ENEMY_ARCHETYPES } from '../data/roster-config.js';
+import { RAMMER_STATE } from '../core/enemy-system.js';
 import { EVENTS } from '../core/event-bus.js';
 import {
   ANIM_STATES,
@@ -1010,7 +1012,22 @@ export class Renderer {
     let view = this.enemyViews.get(enemy.id);
     if (view) return view;
 
-    const key = enemyTextureKey(enemy.typeId);
+    /*
+     * spriteKey FIRST, typeId second.
+     *
+     * A roster-config enemy names its art in the roster's own vocabulary
+     * ('enemy_larva'), set on the entity by applyArchetype; its `typeId` is the
+     * ARCHETYPE id ('larva_swarm'), which is a simulation key that happens to
+     * also be bound in the manifest as a safety net. Looking only at typeId —
+     * which is what this did — meant every archetype missed and silently took
+     * the chaff fallback, which is why the live swarm was one untinted hull.
+     *
+     * `||`, not `??`: a pooled entity's spriteKey is the EMPTY STRING when it
+     * came from the legacy spawn path (see makeEnemy in simulation.js), and ''
+     * is not nullish. `??` would hand the empty string to the lookup, miss, and
+     * fall back — reintroducing the same bug for every legacy species.
+     */
+    const key = enemyTextureKey(enemy.spriteKey || enemy.typeId);
     const sprite = this.acquireSprite(key, Boolean(enemy.isBoss));
     const config = getEnemySpriteConfig(enemy.typeId);
     const parts = getDreadnoughtParts(sprite);
@@ -1684,21 +1701,46 @@ export class Renderer {
     g.clear();
 
     for (const enemy of this.sim.enemies) {
-      if (!enemy.alive || enemy.chargeState !== CHARGE_STATE.WINDUP) continue;
+      if (!enemy.alive) continue;
 
       const view = getEnemyView(enemy.typeId);
       const lock = view?.lockOn;
       if (!lock) continue;
 
+      /*
+       * TWO WIND-UPS, ONE WARNING.
+       *
+       * The legacy Dart Ravager winds up in `chargeState`; its roster-config
+       * twin winds up in `rammerState`, on its own timer and its own locked
+       * direction. They are the same telegraph to the player and must be drawn
+       * the same way — the archetype's 1.05s lock is documented in
+       * roster-config as a red line the player reads and steps out of, and
+       * until this branch existed it was drawn nowhere at all: the species
+       * dashed with no warning whatsoever, which is precisely the bug
+       * enemy-system's own header warns about.
+       *
+       * The heading comes from the same field the dash will fly along, so the
+       * line cannot point anywhere but where the enemy is actually going.
+       */
+      const charging = enemy.chargeState === CHARGE_STATE.WINDUP;
+      const telegraphing = enemy.rammerState === RAMMER_STATE.TELEGRAPH;
+      if (!charging && !telegraphing) continue;
+
+      const dirX = charging ? enemy.chargeDirX : enemy.lockDirX;
+      const dirY = charging ? enemy.chargeDirY : enemy.lockDirY;
+
       const reach = enemy.radius * 6;
       g.moveTo(enemy.x, enemy.y);
-      g.lineTo(enemy.x + enemy.chargeDirX * reach, enemy.y + enemy.chargeDirY * reach);
+      g.lineTo(enemy.x + dirX * reach, enemy.y + dirY * reach);
       g.stroke({ color: lock.tint, width: 1.5, alpha: 0.5 });
 
       // Rings collapse inward as the wind-up runs out, so the radius is a
       // clock the player can read without counting anything.
-      const def = ENEMIES[enemy.typeId];
-      const remaining = clamp(enemy.chargeTimer / (def?.chargeWindup || 1), 0, 1);
+      const windup = charging
+        ? ENEMIES[enemy.typeId]?.chargeWindup
+        : ENEMY_ARCHETYPES[enemy.typeId]?.behaviorParams?.telegraphSec;
+      const timer = charging ? enemy.chargeTimer : enemy.rammerTimer;
+      const remaining = clamp(timer / (windup || 1), 0, 1);
       for (let i = 0; i < lock.rings; i++) {
         const spread = 1 + i * 0.6;
         g.circle(enemy.x, enemy.y, enemy.radius * (1.4 + remaining * 2.2 * spread));

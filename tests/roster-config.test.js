@@ -26,6 +26,14 @@ import { Simulation } from '../src/core/simulation.js';
 import { DEFAULT_PLAYER_STATS } from '../src/core/game-state.js';
 import { UNIT_PX } from '../src/core/constants.js';
 import { mulberry32 } from '../src/core/math.js';
+import {
+  enemyDiameter,
+  enemyFit,
+  enemyTint,
+  getEnemyView,
+  NO_TINT,
+} from '../src/render/sprite-factory.js';
+import { MAX_ENEMY_LUMINANCE, relativeLuminance } from '../src/render/theme.js';
 
 /** Minimal live entity, standing in for a pooled enemy. */
 function makeEntity(archetypeId, x = 0, y = 0, rng = mulberry32(7)) {
@@ -554,5 +562,74 @@ describe('useRosterConfig — the wave engine spawns from roster-config', () => 
     // The boss wave itself spawns no roster-config chaff — arena isolation
     // applies to both catalogues equally.
     expect(sim.enemies).toHaveLength(0);
+  });
+});
+
+/* ------------------------------------------------------------------------ */
+/* Presentation                                                              */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Every archetype is PAINTED, not merely renderable.
+ *
+ * The bug these are written against: an archetype with no row in the render
+ * layer's view table still draws — it takes the neutral default, which is
+ * NO_TINT (white) at scale 1. So "it renders" and "it renders correctly" looked
+ * identical on screen and in the suite, and the whole live swarm shipped as one
+ * untinted hull at one uniform size, spinning on its facing angle.
+ */
+describe('roster-config — every archetype is painted', () => {
+  const archetypes = Object.values(ENEMY_ARCHETYPES);
+
+  it.each(archetypes.map((a) => [a.id]))('%s has a view row with a real tint', (id) => {
+    const view = getEnemyView(id);
+    expect(view.name, id).toBeDefined();
+    // The failure is exactly this value: white is what "no row" looks like.
+    expect(enemyTint(id), `${id} is untinted — it will render as white geometry`).not.toBe(
+      NO_TINT
+    );
+  });
+
+  it('keeps every carapace under the swarm luminance ceiling', () => {
+    /*
+     * The contract that keeps the Drifter findable in a 200-enemy swarm, and
+     * the reason the art brief's acid green (0x10ac84, 0.31) and blood red
+     * (0xff6b6b, 0.33) are not the values in the table: both are above 0.25.
+     * The hues survived; the brightness did not.
+     */
+    for (const archetype of archetypes) {
+      const hex = `#${enemyTint(archetype.id).toString(16).padStart(6, '0')}`;
+      expect(relativeLuminance(hex), archetype.id).toBeLessThanOrEqual(MAX_ENEMY_LUMINANCE);
+    }
+  });
+
+  it('sizes each archetype off its own radius, landing on the designed footprint', () => {
+    // fit is what the renderer multiplies the hitbox by. If it is not derived
+    // from THIS archetype's radius, the sprite and the collision circle drift.
+    for (const archetype of archetypes) {
+      expect(enemyFit(archetype.id) * archetype.radius * 2, archetype.id).toBeCloseTo(
+        enemyDiameter(archetype.id),
+        6
+      );
+    }
+  });
+
+  it('spreads the live wave across a readable size range', () => {
+    // Two pairs share a hull by design (Artillery/Scout, Bastion/Larva), so
+    // size is the ONLY thing separating them — it cannot be near-uniform.
+    const sizes = archetypes.map((a) => enemyDiameter(a.id));
+    expect(Math.max(...sizes) / Math.min(...sizes)).toBeGreaterThanOrEqual(2);
+    // And the pairs that share an outline must not share a footprint.
+    expect(enemyDiameter('brood_bastion')).toBeGreaterThan(enemyDiameter('larva_swarm'));
+    expect(enemyDiameter('spore_barrage')).toBeGreaterThan(enemyDiameter('spore_kiter'));
+  });
+
+  it('gives the Ravager a lock-on warning distinct from its own hull', () => {
+    // The telegraph is drawn for exactly the window the simulation holds the
+    // rammer in TELEGRAPH. A warning painted in the hull's own red would be
+    // invisible against the thing it is warning about.
+    const view = getEnemyView('dart_rammer');
+    expect(view.lockOn).toBeDefined();
+    expect(view.lockOn.tint).not.toBe(view.tint);
   });
 });

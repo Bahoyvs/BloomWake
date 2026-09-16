@@ -79,11 +79,48 @@ export const ASSET_KEYS = {
   BROOD_SPORE: 'brood_spore',
   PHANTOM_STALKER: 'phantom_stalker',
   BIO_GOLIATH: 'bio_goliath',
+  /*
+   * ROSTER-CONFIG HULLS.
+   *
+   * These keys are the roster's OWN sprite vocabulary (src/data/roster-config.js
+   * names art as 'enemy_larva', not as a texture key), carried through verbatim
+   * so a designer writing an archetype and the manifest binding it to a frame
+   * use the same word. That is what makes the binding checkable: a spriteKey
+   * with no row here is a test failure, not a silent fallback at runtime.
+   *
+   * WHY THEY ARE SEPARATE FROM THE SIX SWARM KEYS ABOVE. The two catalogues are
+   * live at the same time behind Simulation's `useRosterConfig` flag, and they
+   * do not share ids — an archetype's typeId is 'larva_swarm' where the legacy
+   * roster's is 'tarling'. Giving the archetypes their own keys means either
+   * catalogue can be re-skinned without disturbing the other.
+   *
+   * Four DISTINCT silhouettes, because the live roster's six archetypes read as
+   * four shapes at four sizes: the Artillery deliberately shares the Scout's
+   * body (same hull, heavier gun) and the Bastion the Larva's (same dumb swarm
+   * rule, several times the mass). Both are documented design in roster-config.
+   */
+  /** Xeno Larva / Brood Bastion — the smallest dart hull in the pack. */
+  ENEMY_LARVA: 'enemy_larva',
+  /** Spore Scout / Spore Artillery — broad-winged gun platform. */
+  ENEMY_SCOUT: 'enemy_scout',
+  /** Dart Ravager — angular striker, the hull that dashes. */
+  ENEMY_INTERCEPTOR: 'enemy_interceptor',
+  /** Mantis Strider — mandible hull that weaves in off the flank. */
+  ENEMY_STRIDER: 'enemy_strider',
   // The Dreadnought Station is a five-sprite composite.
   DREADNOUGHT_SPINE: 'dreadnought_spine',
   DREADNOUGHT_BEAM: 'dreadnought_beam',
   DREADNOUGHT_TURRET: 'dreadnought_turret',
   DREADNOUGHT_REACTOR: 'dreadnought_reactor',
+  /**
+   * Composite-boss weapon pod.
+   *
+   * Its own key rather than a second use of DREADNOUGHT_TURRET: the Spire
+   * Station carries three pylons and the Hive Cruiser two turrets, and with
+   * both bound to one frame the two bosses were the same object at different
+   * sizes. See BOSS_TEXTURE_KEY in src/render/composite-boss-renderer.js.
+   */
+  BOSS_PYLON: 'boss_pylon',
   /*
    * NO ENVIRONMENT KEY HERE, DELIBERATELY. This used to hold BG_VOID, a
    * shipped bg_void.png the starfield's TilingSprite preferred over its own
@@ -185,6 +222,30 @@ export const ASSET_MANIFEST = [
   { key: ASSET_KEYS.BIO_GOLIATH, url: ASSET_SHEETS.ARMADA, frame: 'spaceShips_009', critical: true },
 
   /*
+   * THE ROSTER-CONFIG HULLS.
+   *
+   * Same silhouette-first rule as the six above, and the same reason for
+   * sticking to the `enemyBlack*` colourway: those frames are near-neutral
+   * shaded hulls, so the carapace tint in sprite-factory.js owns their colour
+   * outright. A coloured frame cannot be tinted INTO another hue — a Pixi tint
+   * multiplies, so green over a blue hull is dark blue, not green — which is
+   * exactly why the pack's blue/green/red variants are not used here.
+   *
+   * Four frames, four outlines, and no overlap inside the live wave.
+   */
+  // Small dart hull. At 0.55x it is the smallest thing on the field, and the
+  // Brood Bastion wears the same outline at more than twice the size.
+  { key: ASSET_KEYS.ENEMY_LARVA, url: ASSET_SHEETS.RAIDER, frame: 'enemyBlack5', critical: true },
+  // Wide-bodied gun platform: the shape that stops and shoots rather than
+  // closing, shared by the Scout and the Artillery that hides behind it.
+  { key: ASSET_KEYS.ENEMY_SCOUT, url: ASSET_SHEETS.RAIDER, frame: 'enemyBlack1', critical: true },
+  // Angular striker for the Ravager. Read together with the lock-on line, the
+  // hard forward point is what says "this one is aimed at you".
+  { key: ASSET_KEYS.ENEMY_INTERCEPTOR, url: ASSET_SHEETS.RAIDER, frame: 'enemyBlack3', critical: true },
+  // Mandible hull for the Strider's weave.
+  { key: ASSET_KEYS.ENEMY_STRIDER, url: ASSET_SHEETS.RAIDER, frame: 'enemyBlack2', critical: true },
+
+  /*
    * The Dreadnought Station: a vertical keel, a WIDE horizontal cross-member,
    * two turret platforms at the beam tips, and a reactor at the hub.
    *
@@ -207,6 +268,12 @@ export const ASSET_MANIFEST = [
   { key: ASSET_KEYS.DREADNOUGHT_BEAM, url: ASSET_SHEETS.ARMADA, frame: 'spaceStation_001', critical: true },
   { key: ASSET_KEYS.DREADNOUGHT_TURRET, url: ASSET_SHEETS.ARMADA, frame: 'spaceBuilding_012', critical: true },
   { key: ASSET_KEYS.DREADNOUGHT_REACTOR, url: ASSET_SHEETS.ARMADA, frame: 'spaceBuilding_007', critical: true },
+  /*
+   * The composite bosses' weapon pod — a squat, blocky emplacement distinct
+   * from the Dreadnought's turret platform, so a Spire pylon and a Cruiser
+   * turret are two objects rather than one frame at two scales.
+   */
+  { key: ASSET_KEYS.BOSS_PYLON, url: ASSET_SHEETS.ARMADA, frame: 'spaceBuilding_003', critical: true },
 ];
 
 /**
@@ -235,6 +302,20 @@ export const UI_ASSETS = {
 };
 
 /**
+ * The hulls a roster-config archetype may name in its `spriteKey`.
+ *
+ * The membership test behind lookupEnemyTextureKey's identity resolution, and
+ * the reason an archetype cannot accidentally bind itself to the hero's frame
+ * or to a laser bolt by writing the wrong string.
+ */
+export const ARCHETYPE_HULL_KEYS = new Set([
+  ASSET_KEYS.ENEMY_LARVA,
+  ASSET_KEYS.ENEMY_SCOUT,
+  ASSET_KEYS.ENEMY_INTERCEPTOR,
+  ASSET_KEYS.ENEMY_STRIDER,
+]);
+
+/**
  * Enemy data-table id -> texture key.
  *
  * The ids are the original roster ids and stay that way — they are save-game
@@ -244,6 +325,7 @@ export const UI_ASSETS = {
  * one atlas frame, not a renderer change.
  */
 export const ENEMY_TEXTURE_KEY = {
+  /* ---- Legacy roster (src/data/enemies.js), keyed by typeId. ---- */
   tarling: ASSET_KEYS.XENO_LARVA,
   ashfish: ASSET_KEYS.MANTIS_STRIDER,
   cracked_wisp: ASSET_KEYS.DART_RAVAGER,
@@ -251,14 +333,68 @@ export const ENEMY_TEXTURE_KEY = {
   smogmoth: ASSET_KEYS.PHANTOM_STALKER,
   bio_goliath: ASSET_KEYS.BIO_GOLIATH,
   rustwhale: ASSET_KEYS.DREADNOUGHT_SPINE,
+
+  /* ------------------------------------------------------------------
+   * Roster config (src/data/roster-config.js), keyed by ARCHETYPE ID.
+   *
+   * The archetypes' own `spriteKey` values are NOT rows here, and deliberately
+   * not: the roster names its art with the manifest key itself ('enemy_larva'
+   * is both the roster's word and the texture key), so a spriteKey resolves by
+   * identity in lookupEnemyTextureKey rather than through a table of rows
+   * mapping each string to itself.
+   *
+   * This table stays one thing — ENEMY ID to texture — which is what its other
+   * consumer needs: the contrast audit (src/render/asset-audit.js) walks it
+   * calling enemyTint() on each key, and a sprite-key row has no species tint
+   * to look up, so every identity row would be audited as untinted white and
+   * reported as a palette violation on art that is in fact in band.
+   *
+   * These id rows are still the second leg of the renderer's lookup: an entity
+   * that arrives without a spriteKey — a pooled record recycled off the legacy
+   * path, a save-loaded id, a test fixture — resolves through its typeId to
+   * the same hull instead of falling through to the chaff silhouette.
+   * ------------------------------------------------------------------ */
+  larva_swarm: ASSET_KEYS.ENEMY_LARVA,
+  /** Same hull as the Larva at more than twice the size. Mass is the read. */
+  brood_bastion: ASSET_KEYS.ENEMY_LARVA,
+  spore_kiter: ASSET_KEYS.ENEMY_SCOUT,
+  /** Same hull as the Scout; the three-shot fan is what tells them apart. */
+  spore_barrage: ASSET_KEYS.ENEMY_SCOUT,
+  dart_rammer: ASSET_KEYS.ENEMY_INTERCEPTOR,
+  mantis_weaver: ASSET_KEYS.ENEMY_STRIDER,
 };
+
+/**
+ * Texture key for an id, or undefined when nothing is bound to it.
+ *
+ * THE UNDEFINED IS THE POINT. getEnemyTextureKey below substitutes the chaff
+ * silhouette for an unknown id, which keeps the game running but makes a
+ * missing binding look exactly like a correct one — the failure mode this
+ * whole map exists to prevent, and the one that put untinted placeholder hulls
+ * on the field for the entire roster-config swarm. The render side resolves
+ * through this instead, so it can tell "bound" from "defaulted" and say so
+ * once in the console.
+ *
+ * @param {string} id - Archetype spriteKey, archetype id, or legacy typeId
+ * @returns {string|undefined}
+ */
+export function lookupEnemyTextureKey(id) {
+  if (!id) return undefined;
+  const mapped = ENEMY_TEXTURE_KEY[id];
+  if (mapped) return mapped;
+  // A roster-config archetype names its hull with the manifest key itself, so
+  // a spriteKey resolves to itself. Gated on the hull set rather than on
+  // ASSET_KEYS at large: 'drifter' is a valid manifest key and must never be a
+  // valid answer to "which hull is this enemy".
+  return ARCHETYPE_HULL_KEYS.has(id) ? id : undefined;
+}
 
 /**
  * @param {string} typeId - Enemy id from src/data/enemies.js
  * @returns {string} Texture key, falling back to the Xeno Larva silhouette
  */
 export function getEnemyTextureKey(typeId) {
-  return ENEMY_TEXTURE_KEY[typeId] ?? ASSET_KEYS.XENO_LARVA;
+  return lookupEnemyTextureKey(typeId) ?? ASSET_KEYS.XENO_LARVA;
 }
 
 export class AssetStore {

@@ -122,17 +122,34 @@ function easeOutBack(p) {
  *
  * Uses real velocity rather than the vector to the Drifter, so a sine-wave
  * Ashfish banks into its curve and a zigzagging Smogmoth actually leans through
- * the turn. A stationary entity keeps rotation 0 instead of snapping to an
+ * the turn.
+ *
+ * A BRACED ENEMY POINTS WHERE IT LOCKED. The Dart Ravager's telegraph is a full
+ * stop — it stands still for a second with a warning line drawn along the
+ * vector it is about to fly — and velocity alone says nothing during that
+ * second, so the hull swung to a flat default angle at the exact moment the
+ * player is reading which way it is aimed. `lockDir` is the same vector the
+ * dash will use and the same one the warning line is drawn along, so the ship,
+ * the line and the lunge cannot disagree.
+ *
+ * Anything else stationary keeps rotation 0 rather than snapping to an
  * arbitrary angle.
  *
- * @param {Object} entity - Needs vx, vy
+ * @param {Object} entity - Needs vx, vy; lockDirX/lockDirY while braced
  * @param {Object} [out]
  * @returns {Object} out, with rotation set
  */
 export function facingRotation(entity, out = createTransform()) {
   const vx = entity.vx ?? 0;
   const vy = entity.vy ?? 0;
-  out.rotation = vx === 0 && vy === 0 ? 0 : Math.atan2(vy, vx);
+  if (vx !== 0 || vy !== 0) {
+    out.rotation = Math.atan2(vy, vx);
+    return out;
+  }
+
+  const lockX = entity.lockDirX ?? 0;
+  const lockY = entity.lockDirY ?? 0;
+  out.rotation = lockX === 0 && lockY === 0 ? 0 : Math.atan2(lockY, lockX);
   return out;
 }
 

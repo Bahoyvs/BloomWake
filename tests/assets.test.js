@@ -18,10 +18,14 @@ import {
   ASSET_SHEETS,
   UI_ASSETS,
   ENEMY_TEXTURE_KEY,
+  ARCHETYPE_HULL_KEYS,
   getEnemyTextureKey,
+  lookupEnemyTextureKey,
   assets,
 } from '../src/core/assets.js';
 import { ENEMIES } from '../src/data/enemies.js';
+import { COMPOSITE_BOSSES, ENEMY_ARCHETYPES } from '../src/data/roster-config.js';
+import { BOSS_TEXTURE_KEY } from '../src/render/composite-boss-renderer.js';
 import {
   scaleForRadius,
   SPRITE_FIT,
@@ -160,6 +164,109 @@ describe('Asset manifest', () => {
 
   it('falls back to the Xeno Larva texture for an unknown enemy id', () => {
     expect(getEnemyTextureKey('not_a_real_enemy')).toBe(ASSET_KEYS.XENO_LARVA);
+  });
+
+  it('reports an unbound id as unbound, rather than as the fallback', () => {
+    // The distinction the whole roster-config swarm went without. The fallback
+    // is indistinguishable from a correct binding ON SCREEN, so the binding
+    // check has to be available to the render side as a separate question.
+    expect(lookupEnemyTextureKey('not_a_real_enemy')).toBeUndefined();
+    expect(lookupEnemyTextureKey('')).toBeUndefined();
+    expect(lookupEnemyTextureKey(undefined)).toBeUndefined();
+  });
+});
+
+/* ------------------------------------------------------------------------ */
+/* Roster-config bindings                                                    */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Every archetype and every boss part reaches a real atlas frame.
+ *
+ * WHAT THESE REPLACE. src/data/roster-config.js is the live catalogue — the
+ * game runs with `useRosterConfig` on — and nothing bound its `spriteKey`
+ * vocabulary to the manifest at all. Every archetype missed its lookup, took
+ * the Xeno Larva's texture and the neutral white view row, and the entire
+ * swarm rendered as one untinted hull at one size. Every test in this file
+ * passed throughout: they all check the LEGACY roster, which was not what the
+ * game was spawning.
+ */
+describe('roster-config art bindings', () => {
+  const archetypes = Object.values(ENEMY_ARCHETYPES);
+  const manifestKeys = new Set(ASSET_MANIFEST.map((e) => e.key));
+
+  it.each(archetypes.map((a) => [a.id, a]))(
+    '%s resolves, by spriteKey AND by id, to the same manifest entry',
+    (id, archetype) => {
+      const bySprite = lookupEnemyTextureKey(archetype.spriteKey);
+      const byId = lookupEnemyTextureKey(id);
+
+      // Unbound, not defaulted: these must be real rows, not the fallback.
+      expect(bySprite, `${id}: spriteKey "${archetype.spriteKey}" is unbound`).toBeDefined();
+      expect(byId, `${id}: archetype id is unbound`).toBeDefined();
+      // The renderer prefers spriteKey and falls back to typeId, so an enemy
+      // that arrives with one, the other, or both must look the same either way.
+      expect(byId, id).toBe(bySprite);
+      expect(manifestKeys.has(bySprite), `${id} -> ${bySprite}`).toBe(true);
+    }
+  );
+
+  it('marks every archetype hull critical — the swarm is the game', () => {
+    const critical = new Set(ASSET_MANIFEST.filter((e) => e.critical).map((e) => e.key));
+    for (const archetype of archetypes) {
+      expect(critical.has(lookupEnemyTextureKey(archetype.spriteKey)), archetype.id).toBe(true);
+    }
+  });
+
+  it('only lets an archetype name an enemy hull', () => {
+    // An archetype writing `spriteKey: 'drifter'` must not quietly fly the
+    // player's own ship at the player.
+    for (const key of ARCHETYPE_HULL_KEYS) {
+      expect(manifestKeys.has(key), key).toBe(true);
+    }
+    expect(lookupEnemyTextureKey(ASSET_KEYS.DRIFTER)).toBeUndefined();
+    expect(lookupEnemyTextureKey(ASSET_KEYS.ION_BOLT)).toBeUndefined();
+  });
+
+  it('gives the live wave four distinct silhouettes', () => {
+    // Size separates the pairs that share a hull by design (Artillery/Scout,
+    // Bastion/Larva); four outlines is what the player triages on first.
+    const hulls = new Set(archetypes.map((a) => lookupEnemyTextureKey(a.spriteKey)));
+    expect(hulls.size).toBe(4);
+  });
+
+  it('binds every composite-boss chassis, part and wreck to a manifest entry', () => {
+    /*
+     * Walks the TEMPLATES rather than BOSS_TEXTURE_KEY's own keys, because the
+     * failure being guarded is a boss naming art nothing binds — which a table
+     * cannot detect by reading itself. An unmapped part falls back to a drawn
+     * fallback hull, so the boss still renders, and the missing frame is
+     * visible only as a module that looks like a grey box.
+     */
+    const spriteKeys = new Set();
+    for (const template of Object.values(COMPOSITE_BOSSES)) {
+      if (template.chassis?.spriteKey) spriteKeys.add(template.chassis.spriteKey);
+      for (const part of template.parts ?? []) {
+        if (part.spriteKey) spriteKeys.add(part.spriteKey);
+        if (part.wreckSpriteKey) spriteKeys.add(part.wreckSpriteKey);
+      }
+    }
+    expect(spriteKeys.size).toBeGreaterThan(0);
+
+    for (const spriteKey of spriteKeys) {
+      const key = BOSS_TEXTURE_KEY[spriteKey];
+      expect(key, `${spriteKey} is not in BOSS_TEXTURE_KEY`).toBeDefined();
+      expect(manifestKeys.has(key), `${spriteKey} -> ${key}`).toBe(true);
+    }
+  });
+
+  it('gives the two bosses different modules, not one frame at two sizes', () => {
+    expect(BOSS_TEXTURE_KEY.boss_pylon).not.toBe(BOSS_TEXTURE_KEY.boss_turret);
+    expect(BOSS_TEXTURE_KEY.boss_cruiser_hull).not.toBe(BOSS_TEXTURE_KEY.boss_spire_hull);
+    // A wreck keeps its live frame: the player has to recognise the gun they
+    // silenced, not meet a new part in its place.
+    expect(BOSS_TEXTURE_KEY.boss_pylon_wreck).toBe(BOSS_TEXTURE_KEY.boss_pylon);
+    expect(BOSS_TEXTURE_KEY.boss_turret_wreck).toBe(BOSS_TEXTURE_KEY.boss_turret);
   });
 });
 

@@ -43,13 +43,34 @@ import { COMPOSITE_BOSSES } from '../data/roster-config.js';
  * station rather than as nothing at all.
  */
 export const BOSS_TEXTURE_KEY = {
+  /*
+   * CHASSIS. Both are heavy station frames from the expansion atlas: a wide
+   * cross-member for the Cruiser, whose silhouette is horizontal, and the tall
+   * keel for the Spire, whose silhouette is vertical. Two bosses, two
+   * outlines, before a single part is bolted on.
+   */
   boss_cruiser_hull: ASSET_KEYS.DREADNOUGHT_BEAM,
   boss_spire_hull: ASSET_KEYS.DREADNOUGHT_SPINE,
+
+  /*
+   * MODULES. The turret and the pylon are DIFFERENT frames, which they were
+   * not: with both bound to the Dreadnought's turret platform, the Spire's
+   * three pylons and the Cruiser's two turrets were the same object at two
+   * sizes, and the only thing separating the two bosses was how many of it
+   * there were.
+   */
   boss_turret: ASSET_KEYS.DREADNOUGHT_TURRET,
-  boss_pylon: ASSET_KEYS.DREADNOUGHT_TURRET,
+  boss_pylon: ASSET_KEYS.BOSS_PYLON,
   boss_reactor: ASSET_KEYS.DREADNOUGHT_REACTOR,
+
+  /*
+   * WRECKS reuse the live frame on purpose. A destroyed module stays bolted to
+   * the hull, canted off its mount and drained to BOSS_VIEW.wreckTint — the
+   * player has to recognise it as the gun they just silenced, and a different
+   * silhouette in that slot reads as a NEW part rather than as a dead one.
+   */
   boss_turret_wreck: ASSET_KEYS.DREADNOUGHT_TURRET,
-  boss_pylon_wreck: ASSET_KEYS.DREADNOUGHT_TURRET,
+  boss_pylon_wreck: ASSET_KEYS.BOSS_PYLON,
   boss_reactor_wreck: ASSET_KEYS.DREADNOUGHT_REACTOR,
 };
 

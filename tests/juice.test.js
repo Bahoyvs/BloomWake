@@ -190,6 +190,18 @@ describe('individual transforms behave as specified', () => {
     expect(facingRotation({ vx: 0, vy: 0 }).rotation).toBe(0);
   });
 
+  it('points a braced rammer along its locked heading, not at a default angle', () => {
+    // The Ravager's telegraph is a full stop, so velocity says nothing for the
+    // second the player spends reading which way it is aimed. The hull must
+    // agree with the warning line drawn along the same vector.
+    const braced = { vx: 0, vy: 0, lockDirX: 0, lockDirY: -1 };
+    expect(facingRotation(braced).rotation).toBeCloseTo(-Math.PI / 2, 10);
+
+    // Velocity still wins the moment there is any: the dash overrides the lock.
+    const dashing = { vx: 1, vy: 0, lockDirX: 0, lockDirY: -1 };
+    expect(facingRotation(dashing).rotation).toBeCloseTo(0, 10);
+  });
+
   it('spawnGrow starts small and settles at full size', () => {
     const entity = makeEntity({ spawnTime: 10 });
 

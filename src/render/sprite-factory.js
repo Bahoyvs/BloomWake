@@ -51,6 +51,7 @@
 
 import { Container, Sprite } from 'pixi.js';
 import { ENEMIES } from '../data/enemies.js';
+import { ENEMY_ARCHETYPES } from '../data/roster-config.js';
 import { PALETTE, THEME } from './theme.js';
 
 /** Pixi tints multiply, so white = no tint. */
@@ -251,15 +252,135 @@ export const ENEMY_VIEW = {
   },
 };
 
+/**
+ * Per-archetype presentation for the roster-config catalogue.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS IS A SECOND TABLE AND NOT SIX MORE ROWS ABOVE
+ * ---------------------------------------------------------------------------
+ * ENEMY_VIEW is the shipped Chitin Swarm: six classes at six distinct sizes,
+ * and that "six" is a contract the theme suite asserts because it is what lets
+ * a player triage a mixed wave by silhouette alone. The archetypes in
+ * src/data/roster-config.js are a SECOND catalogue, live at the same time
+ * behind Simulation's `useRosterConfig` flag, with its own ids. Merging them
+ * would put twelve rows in a table whose whole premise is that it holds six.
+ *
+ * Both tables resolve through getEnemyView, so nothing downstream knows or
+ * cares which catalogue an enemy came from.
+ *
+ * ---------------------------------------------------------------------------
+ * THIS TABLE IS WHY THE SWARM USED TO BE WHITE
+ * ---------------------------------------------------------------------------
+ * Before it existed, every roster-config enemy missed its lookup and took
+ * DEFAULT_VIEW: NO_TINT, scale 1. NO_TINT is white, and a Pixi tint multiplies,
+ * so the entire live swarm rendered as untinted pale geometry at one uniform
+ * size, turning on its facing angle — the "rotating white squares" this pass
+ * was opened against. A default that renders *something* is right; a default
+ * that renders something indistinguishable from correct art is how a whole
+ * roster ships unpainted.
+ *
+ * ---------------------------------------------------------------------------
+ * THE TINTS ARE DARKER THAN THE BRIEF ASKED FOR, DELIBERATELY
+ * ---------------------------------------------------------------------------
+ * The acid-green and blood-red the art brief named (0x10ac84, 0xff6b6b, and
+ * the amber 0xfeca57) measure 0.31, 0.33 and 0.64 relative luminance, against
+ * a MAX_ENEMY_LUMINANCE ceiling of 0.25 (src/render/theme.js). That ceiling is
+ * not a style preference — it is what keeps the Drifter the brightest object on
+ * a screen holding two hundred enemies, and tests/theme.test.js enforces it.
+ * So each species keeps the HUE the brief chose and takes it down into the
+ * band: venom green, void indigo, blood red, plated gunmetal, all under 0.25.
+ * Saturated signal colour still exists in this game; it lives on the things
+ * that must be read instantly — telegraphs, the reactor, death sprays — and
+ * none of those are hulls.
+ */
+export const ARCHETYPE_VIEW = {
+  /**
+   * Xeno Larva — venom green, the acid swarm read, and the fastest shimmer on
+   * the field. At 0.55 it is the smallest hull the game draws.
+   */
+  larva_swarm: {
+    name: 'Xeno Larva',
+    class: 'light',
+    scale: 0.55,
+    tint: 0x0e7a5c,
+    bioPulse: { rate: 3.0, amount: 0.12 },
+  },
+  /** Mantis Strider — deep void indigo; the weave is its tell, not its colour. */
+  mantis_weaver: {
+    name: 'Mantis Strider',
+    class: 'medium',
+    scale: 0.75,
+    tint: 0x3d1a8f,
+    bioPulse: { rate: 2.4, amount: 0.1 },
+  },
+  /**
+   * Dart Ravager — blood chitin, and the only aggressive red in the swarm.
+   *
+   * `lockOn` is read by the renderer for exactly as long as the simulation
+   * holds this enemy in its telegraph state, so the warning and the dodge
+   * window are the same object. Its red is NOT this hull's red: a telegraph
+   * that matched the hull it came off would vanish into it.
+   */
+  dart_rammer: {
+    name: 'Dart Ravager',
+    class: 'medium',
+    scale: 0.78,
+    tint: 0xa02334,
+    bioPulse: { rate: 4.2, amount: 0.12 },
+    lockOn: { tint: 0xff2a55, rings: 2 },
+  },
+  /** Spore Scout — venom teal, a colder relative of the Larva's green. */
+  spore_kiter: {
+    name: 'Spore Scout',
+    class: 'medium',
+    scale: 0.8,
+    tint: 0x0f6d75,
+    bioPulse: { rate: 2.2, amount: 0.09 },
+  },
+  /**
+   * Spore Artillery — the Scout's hull, darker and a fifth larger.
+   *
+   * Same silhouette on purpose (roster-config says so and means it): the
+   * player reads "kiter" from the shape and has to notice the three-shot fan.
+   * Size and depth of tint are the only warning that this twin hits harder.
+   */
+  spore_barrage: {
+    name: 'Spore Artillery',
+    class: 'heavy',
+    scale: 0.95,
+    tint: 0x105c63,
+    bioPulse: { rate: 1.8, amount: 0.08 },
+  },
+  /**
+   * Brood Bastion — plated carapace over the Larva's outline at 1.3x.
+   *
+   * The only gunmetal hull in the swarm, and the slowest pulse: it reads as
+   * armour plate rather than as something alive, which is the point of the
+   * species. The brief's amber cockpit highlight is not here — a Pixi tint is
+   * one colour for the whole sprite, so a second accent would need either a
+   * second sprite stacked on this one or a shader, and neither is worth a
+   * per-entity cost on a hull that arrives in packs.
+   */
+  brood_bastion: {
+    name: 'Brood Bastion',
+    class: 'heavy',
+    scale: 1.3,
+    tint: 0x222f3e,
+    bioPulse: { rate: 1.2, amount: 0.07 },
+  },
+};
+
 /** Neutral view for an id with no row — a new enemy renders, it just renders plain. */
 const DEFAULT_VIEW = { name: 'Unknown', scale: 1, tint: NO_TINT, bioPulse: null };
 
 /**
- * @param {string} typeId
+ * Presentation row for an enemy id, from EITHER catalogue.
+ *
+ * @param {string} typeId - Legacy roster typeId, or a roster-config archetype id
  * @returns {Object}
  */
 export function getEnemyView(typeId) {
-  return ENEMY_VIEW[typeId] ?? DEFAULT_VIEW;
+  return ENEMY_VIEW[typeId] ?? ARCHETYPE_VIEW[typeId] ?? DEFAULT_VIEW;
 }
 
 /**
@@ -293,7 +414,12 @@ export function enemyDiameter(typeId) {
  * @returns {number}
  */
 export function enemyFit(typeId) {
-  const radius = ENEMIES[typeId]?.radius;
+  // Both catalogues, for the same reason getEnemyView reads both: an archetype
+  // has a radius too, it just lives in roster-config rather than in ENEMIES.
+  // Missing it here was the second half of the untinted-swarm bug — every
+  // archetype fell to fit 1 and rendered at its hitbox size, which is a third
+  // smaller than its designed footprint.
+  const radius = ENEMIES[typeId]?.radius ?? ENEMY_ARCHETYPES[typeId]?.radius;
   if (!(radius > 0)) return 1;
   return enemyDiameter(typeId) / (radius * 2);
 }
